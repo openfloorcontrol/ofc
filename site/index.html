@@ -558,7 +558,7 @@
                         View on GitHub
                     </a>
                     <a href="#quickstart" class="btn btn-secondary">
-                        pip install ofc
+                        brew install ofc
                     </a>
                 </div>
             </div>
@@ -652,13 +652,11 @@
                     </div>
                     <div class="code-content">
                         <span class="comment"># Install ofc</span><br>
-                        <span class="command">pip install</span> ofc<br><br>
-                        <span class="comment"># Initialize a new project</span><br>
+                        <span class="command">brew tap</span> openfloorcontrol/tap<br>
+                        <span class="command">brew install</span> ofc<br><br>
+                        <span class="comment"># Initialize a blueprint</span><br>
                         <span class="command">ofc</span> init<br><br>
-                        <span class="comment"># Add agents with personas</span><br>
-                        <span class="command">ofc</span> add <span class="flag">@data</span> <span class="string">"skeptical data scientist"</span><br>
-                        <span class="command">ofc</span> add <span class="flag">@code</span> <span class="string">"expert python coder"</span><br><br>
-                        <span class="comment"># Let them collaborate</span><br>
+                        <span class="comment"># Run your multi-agent team</span><br>
                         <span class="command">ofc</span> run <span class="string">"analyze sales.csv and project next week"</span>
                     </div>
                 </div>
@@ -699,10 +697,9 @@
 
     <script>
         function copyCode() {
-            const code = `pip install ofc
+            const code = `brew tap openfloorcontrol/tap
+brew install ofc
 ofc init
-ofc add @data "skeptical data scientist"
-ofc add @code "expert python coder"
 ofc run "analyze sales.csv and project next week"`;
             navigator.clipboard.writeText(code);
             const btn = document.querySelector('.copy-btn');
