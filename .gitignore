@@ -22,6 +22,7 @@ cli/ofc
 *.csv
 !examples/*/workspace/*.csv
 !history/**/*.png
+!site/*.png
 
 # OS
 .DS_Store
