@@ -36,8 +36,8 @@ cd cli && go build -o ofc .
 ### Run the Example
 
 The `data-analysis` example uses [Ollama](https://ollama.com) cloud models. You'll need:
-1. Ollama running locally (`ollama serve`)
-2. Signed in to Ollama (`ollama signin`) - free tier works fine
+1. Signed in to Ollama (`ollama signin`) - free tier works fine
+2. Ollama running locally (`ollama serve`)
 
 ```bash
 cd examples/data-analysis
