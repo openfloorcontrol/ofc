@@ -21,12 +21,27 @@ ofc/
 
 ## Quick Start
 
-### Using the Go CLI (Recommended)
+### Install
 
 ```bash
-cd cli
-go build -o ofc .
-./ofc run -f ../examples/data-analysis/blueprint.yaml "Analyze the sales data"
+brew tap openfloorcontrol/tap
+brew install ofc
+```
+
+Or build from source:
+```bash
+cd cli && go build -o ofc .
+```
+
+### Run the Example
+
+The `data-analysis` example uses [Ollama](https://ollama.com) cloud models. You'll need:
+1. Ollama running locally (`ollama serve`)
+2. Signed in to Ollama (`ollama login`) - free tier works fine
+
+```bash
+cd examples/data-analysis
+ofc run "Analyze the sales data"
 ```
 
 ### Using the Python SDK
