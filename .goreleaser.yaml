@@ -10,7 +10,8 @@ before:
 
 builds:
   - id: ofc
-    main: ./cli
+    dir: ./cli
+    main: .
     binary: ofc
     env:
       - CGO_ENABLED=0
