@@ -38,3 +38,4 @@ dist/
 
 # Old runner (superseded by ofc CLI)
 run.py
+.env
