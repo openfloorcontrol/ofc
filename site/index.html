@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ofc.dev - Open Floor Control</title>
+    <meta name="description" content="The open protocol for multi-agent conversation. Let your AIs talk to each other.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg-dark: #0a0a0f;
+            --bg-card: #12121a;
+            --border: #1e1e2e;
+            --text: #e4e4e7;
+            --text-dim: #71717a;
+            --accent-blue: #3b82f6;
+            --accent-purple: #8b5cf6;
+            --accent-cyan: #06b6d4;
+            --accent-green: #10b981;
+            --accent-yellow: #f59e0b;
+            --accent-pink: #ec4899;
+        }
+
+        body {
+            font-family: 'Space Grotesk', sans-serif;
+            background: var(--bg-dark);
+            color: var(--text);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* Gradient background */
+        .bg-gradient {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: -1;
+            overflow: hidden;
+        }
+
+        .bg-gradient::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: 
+                radial-gradient(ellipse at 20% 20%, rgba(139, 92, 246, 0.15) 0%, transparent 50%),
+                radial-gradient(ellipse at 80% 80%, rgba(6, 182, 212, 0.1) 0%, transparent 50%),
+                radial-gradient(ellipse at 50% 50%, rgba(59, 130, 246, 0.05) 0%, transparent 70%);
+            animation: gradientShift 20s ease-in-out infinite;
+        }
+
+        @keyframes gradientShift {
+            0%, 100% { transform: translate(0, 0) rotate(0deg); }
+            50% { transform: translate(-2%, -2%) rotate(1deg); }
+        }
+
+        /* Noise texture overlay */
+        .bg-gradient::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+            opacity: 0.03;
+            pointer-events: none;
+        }
+
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        /* Header */
+        header {
+            padding: 24px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .header-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--text);
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .logo-dot {
+            color: var(--accent-cyan);
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 32px;
+        }
+
+        .nav-links a {
+            color: var(--text-dim);
+            text-decoration: none;
+            font-size: 0.95rem;
+            transition: color 0.2s;
+        }
+
+        .nav-links a:hover {
+            color: var(--text);
+        }
+
+        /* Hero */
+        .hero {
+            padding: 100px 0 80px;
+            text-align: center;
+        }
+
+        .hero-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 100px;
+            font-size: 0.85rem;
+            color: var(--text-dim);
+            margin-bottom: 32px;
+        }
+
+        .hero-badge .dot {
+            width: 8px;
+            height: 8px;
+            background: var(--accent-green);
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .hero h1 {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: clamp(3rem, 8vw, 5rem);
+            font-weight: 700;
+            margin-bottom: 16px;
+            background: linear-gradient(135deg, var(--text) 0%, var(--accent-cyan) 50%, var(--accent-purple) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .hero-subtitle {
+            font-size: 1.1rem;
+            color: var(--text-dim);
+            margin-bottom: 12px;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+        }
+
+        .hero-tagline {
+            font-size: 1.5rem;
+            color: var(--text);
+            margin-bottom: 48px;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+            line-height: 1.5;
+        }
+
+        .hero-buttons {
+            display: flex;
+            gap: 16px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 14px 28px;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 500;
+            text-decoration: none;
+            transition: all 0.2s;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent-blue) 0%, var(--accent-purple) 100%);
+            color: white;
+            border: none;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 40px rgba(139, 92, 246, 0.3);
+        }
+
+        .btn-secondary {
+            background: var(--bg-card);
+            color: var(--text);
+            border: 1px solid var(--border);
+        }
+
+        .btn-secondary:hover {
+            border-color: var(--accent-cyan);
+            background: rgba(6, 182, 212, 0.1);
+        }
+
+        /* Chat Demo */
+        .demo-section {
+            padding: 60px 0;
+        }
+
+        .chat-window {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            overflow: hidden;
+            max-width: 800px;
+            margin: 0 auto;
+            box-shadow: 
+                0 0 0 1px rgba(255,255,255,0.05),
+                0 20px 50px rgba(0,0,0,0.5);
+        }
+
+        .chat-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            background: rgba(0,0,0,0.3);
+        }
+
+        .chat-dots {
+            display: flex;
+            gap: 8px;
+        }
+
+        .chat-dots span {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: var(--border);
+        }
+
+        .chat-dots span:nth-child(1) { background: #ff5f57; }
+        .chat-dots span:nth-child(2) { background: #ffbd2e; }
+        .chat-dots span:nth-child(3) { background: #28ca42; }
+
+        .chat-title {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            color: var(--text-dim);
+        }
+
+        .chat-messages {
+            padding: 24px;
+            min-height: 350px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.9rem;
+            line-height: 1.8;
+        }
+
+        .chat-message {
+            margin-bottom: 16px;
+            opacity: 0;
+            transform: translateY(10px);
+            animation: messageIn 0.4s forwards;
+        }
+
+        .chat-message:nth-child(1) { animation-delay: 0.5s; }
+        .chat-message:nth-child(2) { animation-delay: 1.5s; }
+        .chat-message:nth-child(3) { animation-delay: 3s; }
+        .chat-message:nth-child(4) { animation-delay: 4.5s; }
+        .chat-message:nth-child(5) { animation-delay: 6s; }
+        .chat-message:nth-child(6) { animation-delay: 7.5s; }
+
+        @keyframes messageIn {
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .agent-user { color: var(--accent-yellow); }
+        .agent-data { color: var(--accent-cyan); }
+        .agent-code { color: var(--accent-purple); }
+
+        .chat-message .content {
+            color: var(--text-dim);
+            padding-left: 20px;
+        }
+
+        .chat-message .content.emphasis {
+            color: var(--accent-green);
+        }
+
+        /* Features */
+        .features {
+            padding: 80px 0;
+        }
+
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 24px;
+        }
+
+        .feature-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 32px;
+            transition: all 0.3s;
+        }
+
+        .feature-card:hover {
+            border-color: var(--accent-purple);
+            transform: translateY(-4px);
+            box-shadow: 0 20px 40px rgba(139, 92, 246, 0.1);
+        }
+
+        .feature-icon {
+            font-size: 2rem;
+            margin-bottom: 16px;
+        }
+
+        .feature-card h3 {
+            font-size: 1.25rem;
+            margin-bottom: 12px;
+            font-weight: 600;
+        }
+
+        .feature-card p {
+            color: var(--text-dim);
+            line-height: 1.6;
+        }
+
+        /* Code Block */
+        .quickstart {
+            padding: 60px 0;
+        }
+
+        .quickstart h2 {
+            text-align: center;
+            font-size: 2rem;
+            margin-bottom: 40px;
+        }
+
+        .code-block {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+            max-width: 700px;
+            margin: 0 auto;
+        }
+
+        .code-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 20px;
+            border-bottom: 1px solid var(--border);
+            background: rgba(0,0,0,0.3);
+        }
+
+        .code-header span {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            color: var(--text-dim);
+        }
+
+        .copy-btn {
+            background: none;
+            border: 1px solid var(--border);
+            color: var(--text-dim);
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .copy-btn:hover {
+            border-color: var(--accent-cyan);
+            color: var(--accent-cyan);
+        }
+
+        .code-content {
+            padding: 24px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.9rem;
+            line-height: 1.8;
+            overflow-x: auto;
+        }
+
+        .code-content .comment { color: var(--text-dim); }
+        .code-content .command { color: var(--accent-cyan); }
+        .code-content .flag { color: var(--accent-purple); }
+        .code-content .string { color: var(--accent-green); }
+
+        /* CTA */
+        .cta {
+            padding: 100px 0;
+            text-align: center;
+        }
+
+        .cta h2 {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 2.5rem;
+            margin-bottom: 16px;
+        }
+
+        .cta p {
+            color: var(--text-dim);
+            font-size: 1.2rem;
+            margin-bottom: 40px;
+        }
+
+        /* Footer */
+        footer {
+            border-top: 1px solid var(--border);
+            padding: 40px 0;
+            text-align: center;
+        }
+
+        .footer-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+
+        .footer-links {
+            display: flex;
+            gap: 32px;
+        }
+
+        .footer-links a {
+            color: var(--text-dim);
+            text-decoration: none;
+            font-size: 0.9rem;
+            transition: color 0.2s;
+        }
+
+        .footer-links a:hover {
+            color: var(--accent-cyan);
+        }
+
+        .footer-tagline {
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--text-dim);
+            font-size: 0.9rem;
+        }
+
+        .mic {
+            display: inline-block;
+            animation: drop 0.5s ease-out;
+        }
+
+        @keyframes drop {
+            0% { transform: translateY(-20px); opacity: 0; }
+            60% { transform: translateY(5px); }
+            100% { transform: translateY(0); opacity: 1; }
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .header-content {
+                flex-direction: column;
+                gap: 16px;
+            }
+
+            .nav-links {
+                gap: 24px;
+            }
+
+            .hero {
+                padding: 60px 0 40px;
+            }
+
+            .hero-buttons {
+                flex-direction: column;
+                align-items: center;
+            }
+
+            .btn {
+                width: 100%;
+                max-width: 280px;
+                justify-content: center;
+            }
+
+            .footer-content {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="bg-gradient"></div>
+
+    <header>
+        <div class="container">
+            <div class="header-content">
+                <a href="/" class="logo">ofc<span class="logo-dot">.dev</span></a>
+                <nav class="nav-links">
+                    <a href="#demo">Demo</a>
+                    <a href="#features">Features</a>
+                    <a href="https://github.com/openfloorcontrol/ofc" target="_blank">GitHub</a>
+                    <a href="/spec">Spec</a>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <section class="hero">
+            <div class="container">
+                <div class="hero-badge">
+                    <span class="dot"></span>
+                    Open Source Protocol
+                </div>
+                <h1>ofc</h1>
+                <p class="hero-subtitle">Open Floor Control</p>
+                <p class="hero-tagline">The open protocol for multi-agent conversation. Let your AIs talk to each other.</p>
+                <div class="hero-buttons">
+                    <a href="https://github.com/openfloorcontrol/ofc" class="btn btn-primary" target="_blank">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+                        View on GitHub
+                    </a>
+                    <a href="#quickstart" class="btn btn-secondary">
+                        pip install ofc
+                    </a>
+                </div>
+            </div>
+        </section>
+
+        <section class="demo-section" id="demo">
+            <div class="container">
+                <div class="chat-window">
+                    <div class="chat-header">
+                        <div class="chat-dots">
+                            <span></span>
+                            <span></span>
+                            <span></span>
+                        </div>
+                        <span class="chat-title">ofc run "analyze sales.csv and project next week"</span>
+                    </div>
+                    <div class="chat-messages">
+                        <div class="chat-message">
+                            <span class="agent-data">[@data]:</span>
+                            <span class="content">Let me think about this... <span class="agent-code">@code</span>, can you load sales.csv and show me basic stats?</span>
+                        </div>
+                        <div class="chat-message">
+                            <span class="agent-code">[@code]:</span>
+                            <span class="content">Loaded. 9 rows, 3 columns. Total sales: $3,920. Mean: $435/day.</span>
+                        </div>
+                        <div class="chat-message">
+                            <span class="agent-data">[@data]:</span>
+                            <span class="content">Only 9 data points. <span class="agent-code">@code</span>, run linear regression but add confidence intervals.</span>
+                        </div>
+                        <div class="chat-message">
+                            <span class="agent-code">[@code]:</span>
+                            <span class="content">Done. Projection: $633 by Jan 30. R² = 0.59. 95% CI: $321 - $944.</span>
+                        </div>
+                        <div class="chat-message">
+                            <span class="agent-data">[@data]:</span>
+                            <span class="content emphasis">⚠️ User, that's a nearly 3x range. R² of 0.59 means 40% is noise. Don't budget based on this—monitoring only.</span>
+                        </div>
+                        <div class="chat-message">
+                            <span class="agent-user">[@user]:</span>
+                            <span class="content" style="color: var(--text);">ofc. 🎤</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="features" id="features">
+            <div class="container">
+                <div class="features-grid">
+                    <div class="feature-card">
+                        <div class="feature-icon">📜</div>
+                        <h3>~80 Lines of Code</h3>
+                        <p>No heavy frameworks. No complex orchestration. Just simple floor control rules that let agents coordinate naturally through conversation.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">🔓</div>
+                        <h3>Open Protocol</h3>
+                        <p>Works with any LLM—OpenAI, Anthropic, Mistral, Llama, or your local models via Ollama. No vendor lock-in. Ever.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">🎭</div>
+                        <h3>Composable Agents</h3>
+                        <p>Define personas with domain expertise. Mix and match. Let a skeptical data scientist drive your coding agent. Your rules, your agents.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">💬</div>
+                        <h3>Conversation IS the Protocol</h3>
+                        <p>No SDKs. No APIs. No schemas. Agents coordinate through @mentions—the most natural integration layer there is.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">🧠</div>
+                        <h3>Emergent Critical Thinking</h3>
+                        <p>Role separation naturally produces skepticism and verification. Agents check each other's work without being told to.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">🏗️</div>
+                        <h3>Wrap, Don't Rebuild</h3>
+                        <p>Don't rebuild Claude Code for data science. Wrap it with a domain expert persona. Same plumbing, new expertise.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="quickstart" id="quickstart">
+            <div class="container">
+                <h2>Quick Start</h2>
+                <div class="code-block">
+                    <div class="code-header">
+                        <span>terminal</span>
+                        <button class="copy-btn" onclick="copyCode()">Copy</button>
+                    </div>
+                    <div class="code-content">
+                        <span class="comment"># Install ofc</span><br>
+                        <span class="command">pip install</span> ofc<br><br>
+                        <span class="comment"># Initialize a new project</span><br>
+                        <span class="command">ofc</span> init<br><br>
+                        <span class="comment"># Add agents with personas</span><br>
+                        <span class="command">ofc</span> add <span class="flag">@data</span> <span class="string">"skeptical data scientist"</span><br>
+                        <span class="command">ofc</span> add <span class="flag">@code</span> <span class="string">"expert python coder"</span><br><br>
+                        <span class="comment"># Let them collaborate</span><br>
+                        <span class="command">ofc</span> run <span class="string">"analyze sales.csv and project next week"</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="cta">
+            <div class="container">
+                <h2>Ready to let your agents talk?</h2>
+                <p>Open source. Open protocol. Open floor.</p>
+                <div class="hero-buttons">
+                    <a href="https://github.com/openfloorcontrol/ofc" class="btn btn-primary" target="_blank">
+                        Get Started
+                    </a>
+                    <a href="/spec" class="btn btn-secondary">
+                        Read the Spec
+                    </a>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-links">
+                    <a href="https://github.com/openfloorcontrol/ofc" target="_blank">GitHub</a>
+                    <a href="/spec">Spec</a>
+                    <a href="/docs">Docs</a>
+                    <a href="https://twitter.com/openfloorctrl" target="_blank">Twitter</a>
+                </div>
+                <div class="footer-tagline">
+                    ofc. <span class="mic">🎤</span>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        function copyCode() {
+            const code = `pip install ofc
+ofc init
+ofc add @data "skeptical data scientist"
+ofc add @code "expert python coder"
+ofc run "analyze sales.csv and project next week"`;
+            navigator.clipboard.writeText(code);
+            const btn = document.querySelector('.copy-btn');
+            btn.textContent = 'Copied!';
+            setTimeout(() => btn.textContent = 'Copy', 2000);
+        }
+
+        // Restart animation when scrolled into view
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    const messages = entry.target.querySelectorAll('.chat-message');
+                    messages.forEach(msg => {
+                        msg.style.animation = 'none';
+                        msg.offsetHeight; // Trigger reflow
+                        msg.style.animation = null;
+                    });
+                }
+            });
+        }, { threshold: 0.5 });
+
+        observer.observe(document.querySelector('.chat-messages'));
+    </script>
+</body>
+</html>

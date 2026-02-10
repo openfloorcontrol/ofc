@@ -1,0 +1,699 @@
+[1m==================================================[0m
+[1mMulti-Agent Chatroom v0.0.1[0m
+Agents: [35m@data[0m, [32m@code[0m
+Type [1m/quit[0m to exit, [1m/clear[0m to reset
+[1m==================================================[0m
+[2m[System]: Dockerfile changed, rebuilding sandbox image...[0m
+[2m[System]: Sandbox image ready[0m
+[2m[System]: Sandbox started (d46c20c151e6)[0m
+
+[1m[36m[@user]:[0m   [debug] next_recipient: from=@user, mentions=[], exclude=set()
+  [debug] should_wake(@data): True
+
+[1m[35m[@data]:[0m [2mthinking...[0m[K[1m[35m[@data]:[0m I'll take a look at that sales.csv file for you!
+  [2m$[0m [1mls -lh sales.csv 2>/dev/null || echo "File not found in current directory"[0m
+  [2m-rw-r--r-- 1 501 dialout 523 Feb  8 19:32 sales.csv[0m
+  [2m...[0m
+
+  [2m$[0m [1mhead -20 sales.csv[0m
+  [2mcustomer_id,date,amount,product
+  C001,2024-01-15,150.00,Widget A
+  C002,2024-01-15,75.50,Widget B
+  C001,2024-01-16,200.00,Widget Pro
+  C003,2024-01-16,50.00,Widget A
+  C002,2024-01-17,125.00,Widget Pro
+  C001,2024-01-18,300.00,Widget Pro
+  C004,2024-01-18,45.00,Widget B
+  C003,2024-01-19,180.00,Widget Pro
+  C001,2024-01-20,250.00,Widget Pro
+  C002,2024-01-20,90.00,Widget A
+  C005,2024-01-21,400.00,Widget Pro
+  C001,2024-01-22,175.00,Widget A
+  C003,2024-01-22,220.00,Widget Pro
+  C004,2024-01-23,85.00,Widget A[0m
+  [2m... (1 more lines)[0m
+  [2m...[0m
+
+  [2m$[0m [1mpython3 -c "
+import pandas as pd
+df = pd.read_csv('sales.csv')
+print('=== DATA OVERVIEW ===')
+print(f'Total records: {len(df)}')
+print(f'Total sales: \${df[\"amount\"].sum():,.2f}')
+print(f'Avg sale: \${df[\"amount\"].mean():,.2f}')
+print(f'Median sale: \${df[\"amount\"].median():,.2f}')
+print(f'Min/Max: \${df[\"amount\"].min():,.2f} / \${df[\"amount\"].max():,.2f}')
+print()
+print('=== BY PRODUCT ===')
+print(df.groupby('product')['amount'].agg(['count', 'sum', 'mean']).round(2))
+print()
+print('=== BY CUSTOMER (Top 5) ===')
+print(df.groupby('customer_id')['amount'].sum().sort_values(ascending=False).head(5))
+print()
+print('=== DATE RANGE ===')
+print(f'From: {df[\"date\"].min()}')
+print(f'To: {df[\"date\"].max()}')
+"[0m
+  [2m=== DATA OVERVIEW ===
+  Total records: 15
+  Total sales: $2,695.50
+  Avg sale: $179.70
+  Median sale: $175.00
+  Min/Max: $45.00 / $400.00
+  
+  === BY PRODUCT ===
+              count     sum    mean
+  product                          
+  Widget A        5   550.0  110.00
+  Widget B        2   120.5   60.25
+  Widget Pro      8  2025.0  253.12
+  
+  === BY CUSTOMER (Top 5) ===[0m
+  [2m... (11 more lines)[0m
+  [2m...[0m
+Here are the key stats from **sales.csv**:
+
+## Overview
+- **Total records:** 15 sales
+- **Total revenue:** $2,695.50
+- **Average sale:** $179.70
+- **Median sale:** $175.00
+- **Range:** $45.00 - $400.00
+
+## By Product
+| Product | Sales Count | Total Revenue | Avg Sale |
+|---------|-------------|---------------|----------|
+| Widget Pro | 8 | $2,025.00 | $253.12 |
+| Widget A | 5 | $550.00 | $110.00 |
+| Widget B | 2 | $120.50 | $60.25 |
+
+**Widget Pro** is the clear revenue driver (75% of total sales).
+
+## Top Customers
+1. **C001:** $1,075.00 (40% of revenue)
+2. **C005:** $750.00
+3. **C003:** $450.00
+4. **C002:** $290.50
+5. **C004:** $130.00
+
+## Time Period
+- **From:** 2024-01-15
+- **To:** 2024-01-23 (9 days)
+
+Want me to dig deeper into anything—like daily trends or customer purchase patterns?
+  [debug] next_recipient: from=@data, mentions=[], exclude=set()
+  [debug] should_wake(@data): False
+  [debug] should_wake(@code): False
+  [debug] → back to user
+
+[1m[36m[@user]:[0m   [debug] next_recipient: from=@user, mentions=[], exclude=set()
+  [debug] should_wake(@data): True
+
+[1m[35m[@data]:[0m [2mthinking...[0m[K[2mreceiving... 1.2kb[0m[K[1m[35m[@data]:[0m 
+  [2m$[0m [1mpython3 -c "
+import pandas as pd
+import numpy as np
+from sklearn.linear_model import LinearRegression
+from datetime import datetime, timedelta
+
+# Load data
+df = pd.read_csv('sales.csv')
+df['date'] = pd.to_datetime(df['date'])
+
+# Aggregate daily sales (in case of multiple sales per day)
+daily = df.groupby('date')['amount'].sum().reset_index()
+
+# Prepare for regression - convert date to numeric (days since start)
+daily['day_num'] = (daily['date'] - daily['date'].min()).dt.days
+
+# Fit linear regression
+X = daily[['day_num']]
+y = daily['amount']
+model = LinearRegression()
+model.fit(X, y)
+
+# Predict for next 7 days
+last_date = daily['date'].max()
+next_week = [last_date + timedelta(days=i+1) for i in range(7)]
+next_week_days = [(d - daily['date'].min()).days for d in next_week]
+predictions = model.predict(np.array(next_week_days).reshape(-1, 1))
+
+print('=== LINEAR REGRESSION RESULTS ===')
+print(f'Slope: {model.coef_[0]:.2f} (daily change)')
+print(f'Intercept: {model.intercept_:.2f}')
+print(f'R² score: {model.score(X, y):.3f}')
+print()
+print('=== NEXT WEEK PREDICTIONS ===')
+for date, pred in zip(next_week, predictions):
+    print(f'{date.strftime(\"%Y-%m-%d (%A)\"):<25} \${pred:>7.2f}')
+"[0m
+  [2m=== LINEAR REGRESSION RESULTS ===
+  Slope: 30.30 (daily change)
+  Intercept: 178.30
+  R² score: 0.586
+  
+  === NEXT WEEK PREDICTIONS ===
+  2024-01-24 (Wednesday)    $ 451.00
+  2024-01-25 (Thursday)     $ 481.30
+  2024-01-26 (Friday)       $ 511.60
+  2024-01-27 (Saturday)     $ 541.90
+  2024-01-28 (Sunday)       $ 572.20
+  2024-01-29 (Monday)       $ 602.50
+  2024-01-30 (Tuesday)      $ 632.80
+  /usr/local/lib/python3.11/site-packages/sklearn/utils/validation.py:2691: UserWarning: X does not have valid feature names, but LinearRegression was fitted with feature names
+    warnings.warn([0m
+  [2m...[0m
+Here's the linear regression analysis for next week's sales:
+
+## Regression Results
+| Metric | Value |
+|--------|-------|
+| **Slope** | +$30.30/day (upward trend) |
+| **Intercept** | $178.30 |
+| **R² Score** | 0.586 |
+
+## Next Week Predictions
+| Date (Day) | Predicted Sales |
+|------------|-----------------|
+| 2024-01-24 (Wed) | $451.00 |
+| 2024-01-25 (Thu) | $481.30 |
+| 2024-01-26 (Fri) | $511.60 |
+| 2024-01-27 (Sat) | $541.90 |
+| 2024-01-28 (Sun) | $572.20 |
+| 2024-01-29 (Mon) | $602.50 |
+| 2024-01-30 (Tue) | $632.80 |
+
+---
+
+## ⚠️ Caveats
+- **Small sample:** Only 9 days of data with 15 total records
+- **Moderate fit:** R² = 0.586 means the model explains ~59% of variance
+- **Linear assumption:** Sales patterns may not be truly linear
+- **No seasonality:** Doesn't account for weekends, holidays, or other factors
+
+The model shows an upward trend, but I'd take these predictions with a grain of salt given the limited data. Want me to try a different approach or add more context (like day-of-week effects)?
+  [debug] next_recipient: from=@data, mentions=[], exclude=set()
+  [debug] should_wake(@data): False
+  [debug] should_wake(@code): False
+  [debug] → back to user
+
+[1m[36m[@user]:[0m   [debug] next_recipient: from=@user, mentions=[], exclude=set()
+  [debug] should_wake(@data): True
+
+[1m[35m[@data]:[0m [2mthinking...[0m[K[1m[35m[@data]:[0m Glad you agree! With only 15 records over 9 days, the model is pretty fragile. 
+
+If you want to improve predictions, we could:
+- **Add more data** (obviously best option)
+- **Try a time series approach** (like moving average)
+- **Incorporate day-of-week effects** (weekends vs weekdays)
+- **Look at product-level trends** separately
+
+Anything else you'd like to explore in the data?
+  [debug] next_recipient: from=@data, mentions=[], exclude=set()
+  [debug] should_wake(@data): False
+  [debug] should_wake(@code): False
+  [debug] → back to user
+
+[1m[36m[@user]:[0m   [debug] next_recipient: from=@user, mentions=[], exclude=set()
+  [debug] should_wake(@data): True
+
+[1m[35m[@data]:[0m [2mthinking...[0m[K[1m[35m[@data]:[0m @code? can you build a visualization of the sales data with:
+1. Actual daily sales as scatter points
+2. The linear regression line
+3. Confidence interval/error bands around the prediction
+
+Use the sales.csv file and the regression we just ran. Thanks!
+  [debug] next_recipient: from=@data, mentions=['@code'], exclude=set()
+  [debug] should_wake(@data): False
+  [debug] should_wake(@code): True
+
+[1m[32m[@code]:[0m [2mthinking...[0m[K[2mreceiving... 2.9kb[0m[K[1m[32m[@code]:[0m 
+  [2m$[0m [1mpython3 << 'EOF'
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.linear_model import LinearRegression
+from datetime import datetime, timedelta
+
+# Set style
+plt.style.use('default')
+fig, ax = plt.subplots(figsize=(12, 6))
+
+# Load data
+df = pd.read_csv('sales.csv')
+df['date'] = pd.to_datetime(df['date'])
+
+# Aggregate daily sales
+daily = df.groupby('date')['amount'].sum().reset_index()
+daily['day_num'] = (daily['date'] - daily['date'].min()).dt.days
+
+# Fit linear regression
+X = daily[['day_num']].values
+y = daily['amount'].values
+model = LinearRegression()
+model.fit(X, y)
+
+# Generate predictions for historical + next week
+all_days = np.arange(X.min(), X.max() + 7).reshape(-1, 1)
+predictions = model.predict(all_days)
+
+# Calculate confidence intervals (95%)
+# Standard error of predictions
+y_pred = model.predict(X)
+residuals = y - y_pred
+mse = np.sum(residuals**2) / (len(X) - 2)
+x_mean = np.mean(X)
+
+# Prediction interval
+se_pred = np.sqrt(mse * (1 + 1/len(X) + (all_days - x_mean)**2 / np.sum((X - x_mean)**2)))
+t_value = 2.306  # t-value for 95% CI with n-2=7 df
+ci_upper = predictions + t_value * se_pred
+ci_lower = predictions - t_value * se_pred
+
+# Plot actual data points
+ax.scatter(daily['day_num'], daily['amount'], 
+           s=100, c='#1f77b4', zorder=5, label='Actual Sales', edgecolors='black', linewidth=1.5)
+
+# Plot regression line
+ax.plot(all_days, predictions, 'r-', linewidth=2.5, label='Linear Regression')
+
+# Plot confidence interval
+ax.fill_between(all_days.flatten(), ci_lower, ci_upper, 
+                alpha=0.2, color='red', label='95% Confidence Interval')
+
+# Extend x-axis for next week predictions
+ax.set_xlim(-0.5, X.max() + 7.5)
+
+# Create date labels
+date_range = pd.date_range(start=daily['date'].min(), periods=len(all_days))
+date_labels = [d.strftime('%m/%d') for d in date_range]
+ax.set_xticks(all_days.flatten())
+ax.set_xticklabels(date_labels, rotation=45, ha='right')
+
+# Add vertical line separating historical from predictions
+ax.axvline(x=X.max() + 0.5, color='gray', linestyle='--', alpha=0.5)
+ax.text(X.max() + 3.5, ax.get_ylim()[1] * 0.9, 'PREDICTIONS', 
+        ha='center', fontsize=10, style='italic', color='gray')
+
+# Labels and title
+ax.set_xlabel('Date', fontsize=12, fontweight='bold')
+ax.set_ylabel('Sales Amount ($)', fontsize=12, fontweight='bold')
+ax.set_title('Sales Trend with Linear Regression & 95% Confidence Interval', 
+             fontsize=14, fontweight='bold', pad=15)
+
+# Grid and legend
+ax.grid(True, alpha=0.3, linestyle='--')
+ax.legend(loc='upper left', fontsize=10)
+
+# Format y-axis as currency
+ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x:,.0f}'))
+
+plt.tight_layout()
+plt.savefig('/workspace/sales_regression_plot.png', dpi=150, bbox_inches='tight')
+print("Plot saved to: /workspace/sales_regression_plot.png")
+plt.show()
+EOF[0m
+  [2mTraceback (most recent call last):
+    File "<stdin>", line 50, in <module>
+    File "/usr/local/lib/python3.11/site-packages/matplotlib/__init__.py", line 1524, in inner
+      return func(
+             ^^^^^
+    File "/usr/local/lib/python3.11/site-packages/matplotlib/axes/_axes.py", line 5722, in fill_between
+      return self._fill_between_x_or_y(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/usr/local/lib/python3.11/site-packages/matplotlib/axes/_axes.py", line 5707, in _fill_between_x_or_y
+      collection = mcoll.FillBetweenPolyCollection(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/usr/local/lib/python3.11/site-packages/matplotlib/collections.py", line 1331, in __init__
+      verts = self._make_verts(t, f1, f2, where)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/usr/local/lib/python3.11/site-packages/matplotlib/collections.py", line 1395, in _make_verts[0m
+  [2m... (4 more lines)[0m
+  [2m...[0m
+
+  [2m$[0m [1mpython3 << 'EOF'
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.linear_model import LinearRegression
+from datetime import datetime, timedelta
+
+# Set style
+plt.style.use('default')
+fig, ax = plt.subplots(figsize=(12, 6))
+
+# Load data
+df = pd.read_csv('sales.csv')
+df['date'] = pd.to_datetime(df['date'])
+
+# Aggregate daily sales
+daily = df.groupby('date')['amount'].sum().reset_index()
+daily['day_num'] = (daily['date'] - daily['date'].min()).dt.days
+
+# Fit linear regression
+X = daily[['day_num']].values
+y = daily['amount'].values
+model = LinearRegression()
+model.fit(X, y)
+
+# Generate predictions for historical + next week
+all_days = np.arange(X.min(), X.max() + 7).reshape(-1, 1)
+all_days_flat = all_days.flatten()
+predictions = model.predict(all_days)
+
+# Calculate confidence intervals (95%)
+y_pred = model.predict(X)
+residuals = y - y_pred
+mse = np.sum(residuals**2) / (len(X) - 2)
+x_mean = np.mean(X)
+
+# Prediction interval
+se_pred = np.sqrt(mse * (1 + 1/len(X) + (all_days - x_mean)**2 / np.sum((X - x_mean)**2)))
+t_value = 2.306  # t-value for 95% CI with n-2=7 df
+ci_upper = predictions + t_value * se_pred
+ci_lower = predictions - t_value * se_pred
+
+# Plot actual data points
+ax.scatter(daily['day_num'], daily['amount'], 
+           s=100, c='#1f77b4', zorder=5, label='Actual Sales', edgecolors='black', linewidth=1.5)
+
+# Plot regression line
+ax.plot(all_days_flat, predictions, 'r-', linewidth=2.5, label='Linear Regression')
+
+# Plot confidence interval
+ax.fill_between(all_days_flat, ci_lower.flatten(), ci_upper.flatten(), 
+                alpha=0.2, color='red', label='95% Confidence Interval')
+
+# Extend x-axis for next week predictions
+ax.set_xlim(-0.5, X.max() + 7.5)
+
+# Create date labels
+date_range = pd.date_range(start=daily['date'].min(), periods=len(all_days))
+date_labels = [d.strftime('%m/%d') for d in date_range]
+ax.set_xticks(all_days_flat)
+ax.set_xticklabels(date_labels, rotation=45, ha='right')
+
+# Add vertical line separating historical from predictions
+ax.axvline(x=X.max() + 0.5, color='gray', linestyle='--', alpha=0.5)
+ax.text(X.max() + 3.5, ax.get_ylim()[1] * 0.9, 'PREDICTIONS', 
+        ha='center', fontsize=10, style='italic', color='gray')
+
+# Labels and title
+ax.set_xlabel('Date', fontsize=12, fontweight='bold')
+ax.set_ylabel('Sales Amount ($)', fontsize=12, fontweight='bold')
+ax.set_title('Sales Trend with Linear Regression & 95% Confidence Interval', 
+             fontsize=14, fontweight='bold', pad=15)
+
+# Grid and legend
+ax.grid(True, alpha=0.3, linestyle='--')
+ax.legend(loc='upper left', fontsize=10)
+
+# Format y-axis as currency
+ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x:,.0f}'))
+
+plt.tight_layout()
+plt.savefig('/workspace/sales_regression_plot.png', dpi=150, bbox_inches='tight')
+print("Plot saved to: /workspace/sales_regression_plot.png")
+plt.show()
+EOF[0m
+  [2mTraceback (most recent call last):
+    File "<stdin>", line 50, in <module>
+    File "/usr/local/lib/python3.11/site-packages/matplotlib/__init__.py", line 1524, in inner
+      return func(
+             ^^^^^
+    File "/usr/local/lib/python3.11/site-packages/matplotlib/axes/_axes.py", line 5722, in fill_between
+      return self._fill_between_x_or_y(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/usr/local/lib/python3.11/site-packages/matplotlib/axes/_axes.py", line 5707, in _fill_between_x_or_y
+      collection = mcoll.FillBetweenPolyCollection(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/usr/local/lib/python3.11/site-packages/matplotlib/collections.py", line 1331, in __init__
+      verts = self._make_verts(t, f1, f2, where)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/usr/local/lib/python3.11/site-packages/matplotlib/collections.py", line 1395, in _make_verts[0m
+  [2m... (4 more lines)[0m
+  [2m...[0m
+
+  [2m$[0m [1mpython3 << 'EOF'
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.linear_model import LinearRegression
+from scipy import stats
+
+# Set style
+plt.style.use('default')
+fig, ax = plt.subplots(figsize=(12, 6))
+
+# Load data
+df = pd.read_csv('sales.csv')
+df['date'] = pd.to_datetime(df['date'])
+
+# Aggregate daily sales
+daily = df.groupby('date')['amount'].sum().reset_index()
+daily['day_num'] = (daily['date'] - daily['date'].min()).dt.days
+
+# Fit linear regression
+X = daily['day_num'].values
+y = daily['amount'].values
+X_reshaped = X.reshape(-1, 1)
+
+model = LinearRegression()
+model.fit(X_reshaped, y)
+
+# Generate predictions for historical + next week
+all_days = np.arange(X.min(), X.max() + 7)
+predictions = model.predict(all_days.reshape(-1, 1))
+
+# Calculate confidence intervals (95%)
+y_pred = model.predict(X_reshaped)
+residuals = y - y_pred
+n = len(X)
+mse = np.sum(residuals**2) / (n - 2)
+x_mean = np.mean(X)
+
+# Standard error for each prediction point
+se = np.sqrt(mse * (1 + 1/n + (all_days - x_mean)**2 / np.sum((X - x_mean)**2)))
+
+# t-value for 95% CI with n-2 degrees of freedom
+t_value = stats.t.ppf(0.975, n - 2)
+
+ci_upper = predictions + t_value * se
+ci_lower = predictions - t_value * se
+
+# Plot actual data points
+ax.scatter(X, y, s=100, c='#1f77b4', zorder=5, 
+           label='Actual Sales', edgecolors='black', linewidth=1.5)
+
+# Plot regression line
+ax.plot(all_days, predictions, 'r-', linewidth=2.5, label='Linear Regression')
+
+# Plot confidence interval
+ax.fill_between(all_days, ci_lower, ci_upper, 
+                alpha=0.2, color='red', label='95% Confidence Interval')
+
+# Extend x-axis for next week predictions
+ax.set_xlim(-0.5, X.max() + 7.5)
+
+# Create date labels
+date_range = pd.date_range(start=daily['date'].min(), periods=len(all_days))
+date_labels = [d.strftime('%m/%d') for d in date_range]
+ax.set_xticks(all_days)
+ax.set_xticklabels(date_labels, rotation=45, ha='right')
+
+# Add vertical line separating historical from predictions
+ax.axvline(x=X.max() + 0.5, color='gray', linestyle='--', alpha=0.5)
+ax.text(X.max() + 3.5, ax.get_ylim()[1] * 0.9, 'PREDICTIONS', 
+        ha='center', fontsize=10, style='italic', color='gray')
+
+# Labels and title
+ax.set_xlabel('Date', fontsize=12, fontweight='bold')
+ax.set_ylabel('Sales Amount ($)', fontsize=12, fontweight='bold')
+ax.set_title('Sales Trend with Linear Regression & 95% Confidence Interval', 
+             fontsize=14, fontweight='bold', pad=15)
+
+# Grid and legend
+ax.grid(True, alpha=0.3, linestyle='--')
+ax.legend(loc='upper left', fontsize=10)
+
+# Format y-axis as currency
+ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x:,.0f}'))
+
+plt.tight_layout()
+plt.savefig('/workspace/sales_regression_plot.png', dpi=150, bbox_inches='tight')
+print("Plot saved to: /workspace/sales_regression_plot.png")
+plt.show()
+EOF[0m
+  [2mPlot saved to: /workspace/sales_regression_plot.png[0m
+  [2m...[0m
+
+  [2m$[0m [1mcat /workspace/sales_regression_plot.png | base64 | head -c 100[0m
+  [2miVBORw0KGgoAAAANSUhEUgAABvYAAANwCAYAAAD0pl3TAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90
+  bGliIHZlcnNpb24zLjEwLjg[0m
+  [2m...[0m
+
+  [2m$[0m [1mls -lh /workspace/sales_regression_plot.png && file /workspace/sales_regression_plot.png[0m
+  [2m-rw-r--r-- 1 root root 114K Feb  9 10:32 /workspace/sales_regression_plot.png
+  bash: line 1: file: command not found[0m
+  [2m...[0m
+
+  [2m$[0m [1mpython3 << 'EOF'
+import pandas as pd
+import numpy as np
+from sklearn.linear_model import LinearRegression
+from scipy import stats
+
+# Load data
+df = pd.read_csv('sales.csv')
+df['date'] = pd.to_datetime(df['date'])
+
+# Aggregate daily sales
+daily = df.groupby('date')['amount'].sum().reset_index()
+daily['day_num'] = (daily['date'] - daily['date'].min()).dt.days
+
+# Fit linear regression
+X = daily['day_num'].values
+y = daily['amount'].values
+X_reshaped = X.reshape(-1, 1)
+
+model = LinearRegression()
+model.fit(X_reshaped, y)
+
+# Generate predictions for historical + next week
+all_days = np.arange(X.min(), X.max() + 7)
+predictions = model.predict(all_days.reshape(-1, 1))
+
+# Calculate confidence intervals (95%)
+y_pred = model.predict(X_reshaped)
+residuals = y - y_pred
+n = len(X)
+mse = np.sum(residuals**2) / (n - 2)
+x_mean = np.mean(X)
+
+# Standard error for each prediction point
+se = np.sqrt(mse * (1 + 1/n + (all_days - x_mean)**2 / np.sum((X - x_mean)**2)))
+
+# t-value for 95% CI with n-2 degrees of freedom
+t_value = stats.t.ppf(0.975, n - 2)
+
+ci_upper = predictions + t_value * se
+ci_lower = predictions - t_value * se
+
+# Create date labels
+date_range = pd.date_range(start=daily['date'].min(), periods=len(all_days))
+
+print("=== PREDICTION TABLE WITH CONFIDENCE INTERVALS ===")
+print()
+print(f"{'Date':<12} {'Type':<12} {'Predicted':>12} {'Lower 95%':>12} {'Upper 95%':>12}")
+print("-" * 62)
+
+for i, (day, pred, lower, upper) in enumerate(zip(all_days, predictions, ci_lower, ci_upper)):
+    date_str = date_range[i].strftime('%Y-%m-%d')
+    if day <= X.max():
+        pred_type = "Historical"
+    else:
+        pred_type = "Forecast"
+    print(f"{date_str:<12} {pred_type:<12} ${pred:>10.2f}  ${lower:>10.2f}  ${upper:>10.2f}")
+
+print()
+print("=== MODEL STATISTICS ===")
+print(f"Slope: ${model.coef_[0]:.2f} per day")
+print(f"Intercept: ${model.intercept_:.2f}")
+print(f"R²: {model.score(X_reshaped, y):.3f}")
+print(f"Degrees of freedom: {n-2}")
+print(f"t-value (95% CI): {t_value:.3f}")
+EOF[0m
+  [2m=== PREDICTION TABLE WITH CONFIDENCE INTERVALS ===
+  
+  Date         Type            Predicted    Lower 95%    Upper 95%
+  --------------------------------------------------------------
+  2024-01-15   Historical   $    178.30  $    -28.51  $    385.11
+  2024-01-16   Historical   $    208.60  $     10.74  $    406.46
+  2024-01-17   Historical   $    238.90  $     47.69  $    430.11
+  2024-01-18   Historical   $    269.20  $     82.09  $    456.31
+  2024-01-19   Historical   $    299.50  $    113.78  $    485.22
+  2024-01-20   Historical   $    329.80  $    142.69  $    516.91
+  2024-01-21   Historical   $    360.10  $    168.89  $    551.31
+  2024-01-22   Historical   $    390.40  $    192.54  $    588.26
+  2024-01-23   Historical   $    420.70  $    213.89  $    627.51
+  2024-01-24   Forecast     $    451.00  $    233.22  $    668.78
+  2024-01-25   Forecast     $    481.30  $    250.83  $    711.77[0m
+  [2m... (11 more lines)[0m
+  [2m...[0m
+
+  [2m$[0m [1mpython3 << 'EOF'
+from IPython.display import Image, display
+display(Image(filename='/workspace/sales_regression_plot.png'))
+EOF[0m
+  [2mTraceback (most recent call last):
+    File "<stdin>", line 1, in <module>
+  ModuleNotFoundError: No module named 'IPython'[0m
+  [2m...[0m
+
+  [2m$[0m [1mpython3 << 'EOF'
+import matplotlib.pyplot as plt
+import matplotlib.image as mpimg
+
+img = mpimg.imread('/workspace/sales_regression_plot.png')
+plt.figure(figsize=(12, 6))
+plt.imshow(img)
+plt.axis('off')
+plt.tight_layout()
+plt.show()
+EOF[0m
+  [2m[no output][0m
+  [2m...[0m
+
+  [2m$[0m [1mpython3 << 'EOF'
+import base64
+
+with open('/workspace/sales_regression_plot.png', 'rb') as f:
+    img_data = f.read()
+    b64_data = base64.b64encode(img_data).decode()
+
+print(f'<img src="data:image/png;base64,{b64_data[:100]}..." width="800">')
+print(f"\nImage size: {len(img_data)} bytes")
+EOF[0m
+  [2m<img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABvYAAANwCAYAAAD0pl3TAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjEwLjgs..." width="800">
+  
+  Image size: 115753 bytes[0m
+  [2m...[0m
+Done! Here's the plot with the regression line and 95% confidence intervals:
+
+![Sales Regression Plot](/workspace/sales_regression_plot.png)
+
+## Key Observations from the Plot
+
+**The red shaded area** represents the 95% confidence interval - it widens as we move further from the data, showing increasing uncertainty in predictions.
+
+**The gray dashed line** separates historical data from next week's forecasts.
+
+## Prediction Table with Confidence Intervals
+
+| Date | Type | Predicted | Lower 95% | Upper 95% |
+|------|------|-----------|-----------|-----------|
+| 2024-01-24 | Forecast | $451.00 | $233.22 | $668.78 |
+| 2024-01-25 | Forecast | $481.30 | $250.83 | $711.77 |
+| 2024-01-26 | Forecast | $511.60 | $266.97 | $756.23 |
+| 2024-01-27 | Forecast | $541.90 | $281.89 | $801.91 |
+| 2024-01-28 | Forecast | $572.20 | $295.80 | $848.60 |
+| 2024-01-29 | Forecast | $602.50 | $308.85 | $896.15 |
+
+Notice how the confidence bands get **much wider** for the forecasts - by day 6 of predictions, the range is nearly $600 wide! This visually shows why predictions from small datasets should be taken with caution.[31m[1m[Error]: Max iterations (10) reached[0m
+
+  [debug] next_recipient: from=@code, mentions=[], exclude=set()
+  [debug] → initiator: @data
+
+[1m[35m[@data]:[0m [2mthinking...[0m[K[1m[35m[@data]:[0m Nice! The visualization really drives home the uncertainty issue. Look at how those red confidence bands explode outward for the forecasts - by day 6, the 95% CI spans nearly $600 (from ~$309 to ~$896)!
+
+The widening bands are a direct result of having only 9 days of training data. Each day we extrapolate adds more uncertainty.
+
+Anything else you'd like to explore - maybe look at individual customer trends, product-specific forecasts, or try a different modeling approach?
+  [debug] next_recipient: from=@data, mentions=[], exclude=set()
+  [debug] should_wake(@data): False
+  [debug] should_wake(@code): False
+  [debug] → back to user
+
+[1m[36m[@user]:[0m [2m[System]: Interrupted[0m
+
+[2mGoodbye! 👋[0m
