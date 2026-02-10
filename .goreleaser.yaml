@@ -1,0 +1,70 @@
+# GoReleaser configuration for OFC
+# Run: goreleaser release --clean
+# Docs: https://goreleaser.com
+
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: ofc
+    main: ./cli
+    binary: ofc
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/openfloorcontrol/ofc/cmd.Version={{.Version}}
+      - -X github.com/openfloorcontrol/ofc/cmd.Commit={{.Commit}}
+      - -X github.com/openfloorcontrol/ofc/cmd.Date={{.Date}}
+
+archives:
+  - id: default
+    format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+brews:
+  - repository:
+      owner: openfloorcontrol
+      name: homebrew-tap
+    directory: Formula
+    homepage: "https://ofc.dev"
+    description: "Open Floor Control - multi-agent conversation protocol"
+    license: "MIT"
+    install: |
+      bin.install "ofc"
+    test: |
+      system "#{bin}/ofc", "--version"
+
+release:
+  github:
+    owner: openfloorcontrol
+    name: ofc
+  draft: false
+  prerelease: auto
