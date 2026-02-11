@@ -3,35 +3,111 @@ package sandbox
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
 const (
-	DefaultImage   = "mac-sandbox:latest"
+	DefaultImage   = "python:3.11-slim"
 	DefaultTimeout = 30 * time.Second
 )
 
 // Sandbox manages a Docker container for code execution
 type Sandbox struct {
-	ContainerID  string
-	Image        string
-	WorkspaceDir string
-	Timeout      time.Duration
+	ContainerID    string
+	Image          string
+	DockerfileDir  string // directory containing Dockerfile (empty = use Image directly)
+	WorkspaceDir   string
+	Timeout        time.Duration
 }
 
 // New creates a new sandbox
-func New(workspaceDir string) *Sandbox {
-	return &Sandbox{
-		Image:        DefaultImage,
-		WorkspaceDir: workspaceDir,
-		Timeout:      DefaultTimeout,
+func New(workspaceDir, image, dockerfile string) *Sandbox {
+	if image == "" {
+		image = DefaultImage
 	}
+	return &Sandbox{
+		Image:         image,
+		DockerfileDir: dockerfile,
+		WorkspaceDir:  workspaceDir,
+		Timeout:       DefaultTimeout,
+	}
+}
+
+// ensureImage builds the Docker image from Dockerfile if needed
+func (s *Sandbox) ensureImage() error {
+	if s.DockerfileDir == "" {
+		return nil
+	}
+
+	// Resolve to directory containing the Dockerfile
+	dockerfileDir := s.DockerfileDir
+	info, err := os.Stat(dockerfileDir)
+	if err != nil {
+		return fmt.Errorf("dockerfile path not found: %s", dockerfileDir)
+	}
+	// If it points to a file, use its directory
+	if !info.IsDir() {
+		dockerfileDir = filepath.Dir(dockerfileDir)
+	}
+
+	dockerfilePath := filepath.Join(dockerfileDir, "Dockerfile")
+	if _, err := os.Stat(dockerfilePath); err != nil {
+		return fmt.Errorf("Dockerfile not found: %s", dockerfilePath)
+	}
+
+	// Check if image exists and if Dockerfile is newer
+	needsBuild := false
+	imageTime := getImageCreatedTime(s.Image)
+	if imageTime.IsZero() {
+		needsBuild = true
+	} else {
+		dfInfo, err := os.Stat(dockerfilePath)
+		if err == nil && dfInfo.ModTime().After(imageTime) {
+			needsBuild = true
+		}
+	}
+
+	if !needsBuild {
+		return nil
+	}
+
+	fmt.Printf("\033[2m[System]: Building sandbox image (%s)...\033[0m\n", s.Image)
+	cmd := exec.Command("docker", "build", "-t", s.Image, dockerfileDir)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to build image: %w", err)
+	}
+	fmt.Printf("\033[2m[System]: Sandbox image ready\033[0m\n")
+	return nil
+}
+
+// getImageCreatedTime returns the creation time of a Docker image, or zero time if not found
+func getImageCreatedTime(image string) time.Time {
+	cmd := exec.Command("docker", "inspect", "-f", "{{.Created}}", image)
+	output, err := cmd.Output()
+	if err != nil {
+		return time.Time{}
+	}
+	created := strings.TrimSpace(string(output))
+	t, err := time.Parse(time.RFC3339Nano, created)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }
 
 // Start launches the sandbox container
 func (s *Sandbox) Start() error {
+	// Build image from Dockerfile if configured
+	if err := s.ensureImage(); err != nil {
+		return err
+	}
+
 	// Start container
 	cmd := exec.Command("docker", "run", "-d", "--rm",
 		"-w", "/workspace",
@@ -41,7 +117,7 @@ func (s *Sandbox) Start() error {
 
 	output, err := cmd.Output()
 	if err != nil {
-		return fmt.Errorf("failed to start container: %w", err)
+		return fmt.Errorf("failed to start container (image: %s): %w", s.Image, err)
 	}
 
 	s.ContainerID = strings.TrimSpace(string(output))

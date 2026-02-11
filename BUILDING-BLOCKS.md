@@ -63,18 +63,74 @@ The OFC floor server acts as an **ACP client**. Instead of defining custom agent
 | `POST /ofc/mcp/grant` | MCP servers in `session/new` |
 | `GET /ofc/mcp/provides` | Agent capabilities in `initialize` |
 
-OFC-specific concepts can ride on ACP's extension mechanism:
+### Minimal ACP subset for v1
+
+Not everything in ACP is needed to get started. The floor server needs:
+
+**Core (the turn-taking loop):**
+
+| Method | Direction | Purpose |
+|--------|-----------|---------|
+| `initialize` | floor → agent | Connect, negotiate capabilities |
+| `session/new` | floor → agent | Start session, pass MCP workstations |
+| `session/prompt` | floor → agent | Send conversation context, get response |
+| `session/update` | agent → floor | Stream back response (notification) |
+| `session/cancel` | floor → agent | Cancel on user interrupt |
+
+**Agent → floor callbacks (proxied to MCP workstations):**
+
+| Method | Proxied to |
+|--------|------------|
+| `fs/read_text_file` | Filesystem workstation (MCP) |
+| `fs/write_text_file` | Filesystem workstation (MCP) |
+| `terminal/create` | Sandbox workstation (MCP) |
+| `terminal/output` | Sandbox workstation (MCP) |
+| `terminal/wait_for_exit` | Sandbox workstation (MCP) |
+| `terminal/kill` | Sandbox workstation (MCP) |
+| `terminal/release` | Sandbox workstation (MCP) |
+
+The ACP callbacks are the **access-controlled frontend**. MCP workstations are the
+**backend**. This means agents transparently get file/terminal access through familiar
+ACP methods, while the floor server mediates permissions and the actual implementation
+can be anything (local disk, S3, Docker, remote sandbox, etc.):
 
 ```
-_ofc/should-wake    → lightweight wake check (custom extension)
-_ofc/floor-context  → multi-party context injection (custom extension)
-_ofc/pass           → agent declining to respond (custom extension)
+Agent calls fs/read_text_file("data.csv")
+  → Floor server receives ACP callback
+  → Checks: does this agent have filesystem access? (policy)
+  → Proxies to filesystem MCP workstation
+  → Returns result via ACP
 ```
+
+This design means existing ACP agents (Claude Code, Gemini, Goose) work on an
+OFC floor without modification — they use fs/terminal as they normally would.
+
+**Not needed for v1:**
+
+| Method | Why skip |
+|--------|----------|
+| `authenticate` | Local-first, auth comes later |
+| `session/load` | Session resume, nice to have |
+| `session/set_mode` | Coding-specific (`ask/architect/code`) |
+| `session/set_config_option` | Agent config, not needed for coordination |
+| `session/request_permission` | Map to @floor-manager conversation instead |
+
+**Future extensions (not v1):**
+
+OFC-specific concepts can ride on ACP's extension mechanism later:
+
+```
+_ofc/should-wake    → lightweight wake check (wake words, SLM, etc.)
+_ofc/floor-context  → multi-party context injection
+```
+
+Note: `should-wake` is a future optimization for "always listening" agents that need
+a cheaper way to decide whether to engage. For v1, turn-taking is based strictly on
+`@mention?` triggers and `activation: always/mention` from the blueprint.
 
 ### What ACP doesn't cover (OFC's unique value)
 
 - **Turn-taking** — who speaks next, @mention routing, delegation chains
-- **should-wake** — lightweight "do you want to respond?" polling
 - **Multi-party awareness** — ACP is 1:1; OFC stitches multi-agent context
 - **[PASS] behavior** — agent declining to respond
 - **Floor/blueprint abstractions** — team composition and workstation setup
@@ -274,10 +330,18 @@ Given these building blocks, OFC's unique implementation scope is:
 ### Core (the protocol)
 - Turn-taking engine (who speaks next)
 - `@mention` parsing and routing (`@name?` triggers, `@name` references)
-- `should-wake` polling logic
 - `[PASS]` handling and exclusion sets
 - Delegation chains (initiator tracking, return-to-sender)
 - Floor lifecycle (create, add/remove agents, teardown)
+
+### ACP bridge (floor server as ACP client)
+- ACP client managing one session per agent on the floor
+- `initialize` + `session/new` with MCP workstation configs
+- `session/prompt` with multi-agent conversation context
+- ACP callback handlers for `fs/*` and `terminal/*`
+  - Proxy to MCP workstations (filesystem, sandbox)
+  - Access control enforcement (check policies, ask @floor-manager)
+- Stream `session/update` notifications back to TUI
 
 ### @floor-manager
 - Conversational workstation setup ("add a sandbox")
@@ -301,10 +365,10 @@ Given these building blocks, OFC's unique implementation scope is:
 - `ofc run` — run a blueprint
 - `ofc init` — create a new blueprint
 
-### Integration glue
-- ACP client (via acp-go-sdk) — talk to agents
-- MCP server/client (via mcp go-sdk) — provide and consume workstations
-- Blueprint → ACP session setup (pass MCP servers to agents)
+### Future (not v1)
+- `should-wake` polling (ACP extension for always-listening agents)
+- `session/load` (resume previous floor sessions)
+- Agent hub discovery and pull
 
 ---
 
