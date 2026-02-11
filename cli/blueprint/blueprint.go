@@ -8,15 +8,19 @@ import (
 
 // Agent configuration
 type Agent struct {
-	ID          string  `yaml:"id"`
-	Name        string  `yaml:"name"`
-	Model       string  `yaml:"model"`
-	Endpoint    string  `yaml:"endpoint"`
-	Prompt      string  `yaml:"prompt"`
-	Activation  string  `yaml:"activation"`
-	CanUseTools bool    `yaml:"can_use_tools"`
-	Temperature float64 `yaml:"temperature"`
-	ToolContext string  `yaml:"tool_context"`
+	ID          string            `yaml:"id"`
+	Name        string            `yaml:"name"`
+	Type        string            `yaml:"type"`    // "llm" (default) or "acp"
+	Model       string            `yaml:"model"`
+	Endpoint    string            `yaml:"endpoint"`
+	Command     string            `yaml:"command"` // ACP: command to launch agent
+	Args        []string          `yaml:"args"`    // ACP: args for the command
+	Env         map[string]string `yaml:"env"`     // ACP: env vars for agent process
+	Prompt      string            `yaml:"prompt"`
+	Activation  string            `yaml:"activation"`
+	CanUseTools bool              `yaml:"can_use_tools"`
+	Temperature float64           `yaml:"temperature"`
+	ToolContext string            `yaml:"tool_context"`
 }
 
 // Workstation configuration
@@ -71,6 +75,9 @@ func Load(path string) (*Blueprint, error) {
 		}
 		if bp.Agents[i].ToolContext == "" {
 			bp.Agents[i].ToolContext = "full"
+		}
+		if bp.Agents[i].Type == "" {
+			bp.Agents[i].Type = "llm"
 		}
 	}
 

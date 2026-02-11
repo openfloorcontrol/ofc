@@ -54,7 +54,7 @@ ofc run -f ../examples/data-analysis/blueprint.yaml "Analyze the sales data"
 
 ## Blueprint.yaml
 
-The core abstraction is the `blueprint.yaml` - like `docker-compose.yaml` for AI teams:
+The core abstraction is the `blueprint.yaml` — like `docker-compose.yaml` for AI teams:
 
 ```yaml
 name: data-analysis
@@ -69,6 +69,8 @@ workstations:
   - type: sandbox
     image: python:3.11-slim
 ```
+
+See [BLUEPRINT.md](BLUEPRINT.md) for the full reference.
 
 ## Key Concepts
 

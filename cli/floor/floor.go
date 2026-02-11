@@ -2,12 +2,14 @@ package floor
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
 	"strings"
 
+	acpclient "github.com/openfloorcontrol/ofc/acp"
 	"github.com/openfloorcontrol/ofc/blueprint"
 	"github.com/openfloorcontrol/ofc/llm"
 	"github.com/openfloorcontrol/ofc/sandbox"
@@ -45,11 +47,12 @@ type Frame struct {
 
 // Floor is a running floor instance
 type Floor struct {
-	Blueprint *blueprint.Blueprint
-	Messages  []FloorMessage
-	CallStack []Frame
-	Debug     bool
-	Sandbox   *sandbox.Sandbox
+	Blueprint   *blueprint.Blueprint
+	Messages    []FloorMessage
+	CallStack   []Frame
+	Debug       bool
+	Sandbox     *sandbox.Sandbox
+	ACPSessions map[string]*acpclient.AgentSession // agent ID → ACP session
 }
 
 // New creates a new floor
@@ -90,11 +93,50 @@ func (f *Floor) Start() error {
 		fmt.Printf("%s[System]: Sandbox ready (%s)%s\n", Dim, f.Sandbox.ContainerID[:12], Reset)
 	}
 
+	// Launch ACP agent sessions
+	for _, agent := range f.Blueprint.Agents {
+		if agent.Type != "acp" {
+			continue
+		}
+		if agent.Command == "" {
+			return fmt.Errorf("ACP agent %s has no command configured", agent.ID)
+		}
+
+		fmt.Printf("%s[System]: Starting ACP agent %s (%s)...%s\n", Dim, agent.ID, agent.Command, Reset)
+
+		cwd, _ := os.Getwd()
+		client := acpclient.NewFloorClient(f.Sandbox, cwd, f.Debug)
+		session, err := acpclient.NewAgentSession(agent.Command, agent.Args, agent.Env, client)
+		if err != nil {
+			return fmt.Errorf("failed to start ACP agent %s: %w", agent.ID, err)
+		}
+
+		ctx := context.Background()
+		if err := session.Initialize(ctx); err != nil {
+			session.Close()
+			return fmt.Errorf("failed to initialize ACP agent %s: %w", agent.ID, err)
+		}
+		if err := session.StartSession(ctx, cwd); err != nil {
+			session.Close()
+			return fmt.Errorf("failed to create session for ACP agent %s: %w", agent.ID, err)
+		}
+
+		if f.ACPSessions == nil {
+			f.ACPSessions = make(map[string]*acpclient.AgentSession)
+		}
+		f.ACPSessions[agent.ID] = session
+		fmt.Printf("%s[System]: ACP agent %s ready%s\n", Dim, agent.ID, Reset)
+	}
+
 	return nil
 }
 
 // Stop cleans up the floor
 func (f *Floor) Stop() {
+	for id, session := range f.ACPSessions {
+		f.debug(fmt.Sprintf("closing ACP session for %s", id))
+		session.Close()
+	}
 	if f.Sandbox != nil {
 		f.Sandbox.Stop()
 	}
@@ -345,6 +387,96 @@ func mentionsUser(content string) bool {
 	return false
 }
 
+// buildACPContext flattens floor messages into a text prompt for ACP agents.
+func (f *Floor) buildACPContext(agent *blueprint.Agent) string {
+	var sb strings.Builder
+
+	// System prompt
+	if agent.Prompt != "" {
+		sb.WriteString("[System] ")
+		sb.WriteString(agent.Prompt)
+		sb.WriteString("\n\n")
+	}
+
+	// Conversation history
+	for _, msg := range f.Messages {
+		sb.WriteString(msg.FromID)
+		sb.WriteString(": ")
+		sb.WriteString(msg.Content)
+		sb.WriteString("\n")
+
+		// Include tool interactions at the configured detail level
+		if len(msg.ToolInteractions) > 0 {
+			level := agent.ToolContext
+			if msg.FromID == agent.ID {
+				level = "full" // own tool use always full
+			}
+			summary := formatToolInteractions(msg.ToolInteractions, level)
+			if summary != "" {
+				sb.WriteString(summary)
+				sb.WriteString("\n")
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("Your turn to respond.\n")
+	return sb.String()
+}
+
+// getACPAgentResponse sends a prompt to an ACP agent and collects the response.
+func (f *Floor) getACPAgentResponse(agent *blueprint.Agent) (*FloorMessage, error) {
+	session, ok := f.ACPSessions[agent.ID]
+	if !ok {
+		return nil, fmt.Errorf("no ACP session for agent %s", agent.ID)
+	}
+
+	// Build context as text
+	contextText := f.buildACPContext(agent)
+	f.debug(fmt.Sprintf("ACP prompt for %s (%d chars)", agent.ID, len(contextText)))
+
+	// Set up streaming callback
+	client := session.Client
+	client.Reset()
+
+	client.OnToken = func(token string) {
+		fmt.Print(token)
+	}
+
+	// Clear the "thinking..." line and print label
+	fmt.Printf("\r\033[K")
+	printAgentLabel(agent.ID)
+
+	// Send prompt (blocks until agent finishes)
+	ctx := context.Background()
+	stopReason, err := session.Prompt(ctx, contextText)
+	if err != nil {
+		return &FloorMessage{
+			FromID:  agent.ID,
+			Content: client.ResponseText.String(),
+		}, fmt.Errorf("ACP prompt failed: %w", err)
+	}
+
+	fmt.Println() // newline after streaming
+
+	f.debug(fmt.Sprintf("ACP response done: stopReason=%s, interactions=%d", stopReason, len(client.Interactions)))
+
+	// Convert ACP tool interactions to floor tool interactions
+	var interactions []ToolInteraction
+	for _, ti := range client.Interactions {
+		interactions = append(interactions, ToolInteraction{
+			Command: ti.Command,
+			Output:  ti.Output,
+		})
+	}
+
+	return &FloorMessage{
+		FromID:           agent.ID,
+		Content:          client.ResponseText.String(),
+		ToolInteractions: interactions,
+	}, nil
+}
+
 // getAgentResponse calls the LLM for an agent, handling tool calls
 func (f *Floor) getAgentResponse(agent *blueprint.Agent) (*FloorMessage, error) {
 	client := llm.NewClient(agent.Endpoint, "")
@@ -536,7 +668,13 @@ func (f *Floor) Run(initialPrompt string) error {
 			printAgentLabel(nextAgent.ID)
 			fmt.Printf("%sthinking...%s", Dim, Reset)
 
-			response, err := f.getAgentResponse(nextAgent)
+			var response *FloorMessage
+			var err error
+			if nextAgent.Type == "acp" {
+				response, err = f.getACPAgentResponse(nextAgent)
+			} else {
+				response, err = f.getAgentResponse(nextAgent)
+			}
 			if err != nil {
 				fmt.Printf("\r\033[K") // Clear line
 				printAgentLabel(nextAgent.ID)
