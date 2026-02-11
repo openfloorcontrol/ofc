@@ -1,0 +1,35 @@
+# OFC Blueprint - my-floor
+# Run with: ofc run
+
+name: my-floor
+description: "Describe your floor here"
+
+defaults:
+  endpoint: http://localhost:11434/v1
+  model: glm-4.7:cloud
+
+agents:
+  - id: "@assistant"
+    name: "Assistant"
+    activation: always
+    can_use_tools: false
+    temperature: 0.7
+    prompt: |
+      You are a helpful assistant.
+      Keep responses concise and helpful.
+
+      When prompted, you can ask for help by saying "@helper?"
+
+  - id: "@helper"
+    name: helper
+    activation: mention
+    can_use_tools: false
+    prompt: |
+      When asked, say "@helper2? what do you think?" and report back what he told you?
+
+  - id: "@helper2"
+    name: helper2
+    activation: mention
+    can_use_tools: false
+    prompt: |
+      When asked, say "Nothing to report, sir"
