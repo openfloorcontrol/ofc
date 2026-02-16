@@ -12,6 +12,7 @@ import (
 var (
 	blueprintFile string
 	debug         bool
+	logFile       string
 )
 
 var runCmd = &cobra.Command{
@@ -35,7 +36,7 @@ var runCmd = &cobra.Command{
 		}
 
 		// Run the floor
-		f := floor.New(bp, debug)
+		f := floor.New(bp, debug, logFile)
 		if err := f.Run(initialPrompt); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -46,4 +47,5 @@ var runCmd = &cobra.Command{
 func init() {
 	runCmd.Flags().StringVarP(&blueprintFile, "file", "f", "blueprint.yaml", "Blueprint file")
 	runCmd.Flags().BoolVar(&debug, "debug", false, "Enable debug output")
+	runCmd.Flags().StringVar(&logFile, "log", "", "Log output to file (plain text, no colors)")
 }

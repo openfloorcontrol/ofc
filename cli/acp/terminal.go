@@ -10,26 +10,28 @@ import (
 	"github.com/openfloorcontrol/ofc/sandbox"
 )
 
-// Terminal tracks a single terminal session backed by a docker exec process.
+// Terminal tracks a single terminal session.
 type Terminal struct {
 	ID     string
 	Cmd    string
-	Args   []string
 	Output bytes.Buffer
 	Done   chan struct{}
 	Exit   int
 	mu     sync.Mutex
 }
 
-// TerminalManager maps ACP's async terminal model to sandbox docker exec processes.
+// TerminalManager maps ACP's async terminal model to command execution.
+// If a sandbox is provided, commands run inside the Docker container.
+// Otherwise, commands run directly on the host.
 type TerminalManager struct {
-	sandbox   *sandbox.Sandbox
+	sandbox   *sandbox.Sandbox // nil = run on host
 	terminals map[string]*Terminal
 	nextID    atomic.Uint64
 	mu        sync.Mutex
 }
 
-// NewTerminalManager creates a terminal manager backed by the given sandbox.
+// NewTerminalManager creates a terminal manager.
+// If sandbox is nil, commands execute directly on the host.
 func NewTerminalManager(s *sandbox.Sandbox) *TerminalManager {
 	return &TerminalManager{
 		sandbox:   s,
@@ -37,17 +39,14 @@ func NewTerminalManager(s *sandbox.Sandbox) *TerminalManager {
 	}
 }
 
-// Create runs a command in the sandbox and returns a terminal ID.
+// Create runs a command and returns a terminal ID.
 func (tm *TerminalManager) Create(command string, args []string, cwd *string) (string, error) {
 	id := fmt.Sprintf("term-%d", tm.nextID.Add(1))
 
-	// Build the full command string for docker exec
+	// Build the full command string
 	fullCmd := command
 	for _, a := range args {
 		fullCmd += " " + a
-	}
-	if cwd != nil && *cwd != "" {
-		fullCmd = fmt.Sprintf("cd %s && %s", *cwd, fullCmd)
 	}
 
 	term := &Terminal{
@@ -60,21 +59,52 @@ func (tm *TerminalManager) Create(command string, args []string, cwd *string) (s
 	tm.terminals[id] = term
 	tm.mu.Unlock()
 
-	// Run asynchronously in the sandbox
-	go func() {
-		output, err := tm.sandbox.Execute(fullCmd)
-		term.mu.Lock()
-		term.Output.WriteString(output)
-		if err != nil {
-			if exitErr, ok := err.(*exec.ExitError); ok {
-				term.Exit = exitErr.ExitCode()
-			} else {
-				term.Exit = 1
-			}
+	if tm.sandbox != nil {
+		// Run in Docker sandbox
+		sandboxCmd := fullCmd
+		if cwd != nil && *cwd != "" {
+			sandboxCmd = fmt.Sprintf("cd %s && %s", *cwd, fullCmd)
 		}
-		term.mu.Unlock()
-		close(term.Done)
-	}()
+		go func() {
+			output, err := tm.sandbox.Execute(sandboxCmd)
+			term.mu.Lock()
+			term.Output.WriteString(output)
+			if err != nil {
+				if exitErr, ok := err.(*exec.ExitError); ok {
+					term.Exit = exitErr.ExitCode()
+				} else {
+					term.Exit = 1
+				}
+			}
+			term.mu.Unlock()
+			close(term.Done)
+		}()
+	} else {
+		// Run directly on host
+		go func() {
+			cmd := exec.Command("bash", "-c", fullCmd)
+			if cwd != nil && *cwd != "" {
+				cmd.Dir = *cwd
+			}
+			var stdout, stderr bytes.Buffer
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+
+			err := cmd.Run()
+			term.mu.Lock()
+			term.Output.WriteString(stdout.String())
+			term.Output.WriteString(stderr.String())
+			if err != nil {
+				if exitErr, ok := err.(*exec.ExitError); ok {
+					term.Exit = exitErr.ExitCode()
+				} else {
+					term.Exit = 1
+				}
+			}
+			term.mu.Unlock()
+			close(term.Done)
+		}()
+	}
 
 	return id, nil
 }
@@ -111,7 +141,7 @@ func (tm *TerminalManager) WaitForExit(id string) (int, error) {
 	return exit, nil
 }
 
-// Kill attempts to kill a terminal's process (best-effort via sandbox timeout).
+// Kill attempts to kill a terminal's process.
 func (tm *TerminalManager) Kill(id string) error {
 	tm.mu.Lock()
 	_, ok := tm.terminals[id]
@@ -119,8 +149,6 @@ func (tm *TerminalManager) Kill(id string) error {
 	if !ok {
 		return fmt.Errorf("terminal %s not found", id)
 	}
-	// Sandbox.Execute is blocking and has its own timeout; nothing to kill here
-	// In future, we could track the actual docker exec PID
 	return nil
 }
 

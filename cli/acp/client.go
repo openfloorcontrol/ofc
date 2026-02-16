@@ -3,6 +3,7 @@ package acp
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,11 +26,13 @@ type FloorClient struct {
 	WorkspaceDir string
 	Terminals    *TerminalManager
 	Debug        bool
+	LogWriter    io.Writer // optional log file writer (plain text, no ANSI)
 
 	// Per-prompt state (set before each Prompt call, reset after)
 	OnToken      func(string)
 	ResponseText strings.Builder
 	Interactions []ToolInteraction
+	toolCalls    map[string]string // toolCallId → title, for tracking in-flight calls
 
 	mu sync.Mutex
 }
@@ -37,14 +40,14 @@ type FloorClient struct {
 var _ acpsdk.Client = (*FloorClient)(nil)
 
 // NewFloorClient creates a new floor client that handles ACP callbacks.
+// TerminalManager is always created — it supports both sandbox and host execution.
 func NewFloorClient(sb *sandbox.Sandbox, workspaceDir string, debug bool) *FloorClient {
 	fc := &FloorClient{
 		Sandbox:      sb,
 		WorkspaceDir: workspaceDir,
 		Debug:        debug,
-	}
-	if sb != nil {
-		fc.Terminals = NewTerminalManager(sb)
+		Terminals:    NewTerminalManager(sb),
+		toolCalls:    make(map[string]string),
 	}
 	return fc
 }
@@ -55,11 +58,15 @@ func (c *FloorClient) Reset() {
 	defer c.mu.Unlock()
 	c.ResponseText.Reset()
 	c.Interactions = nil
+	c.toolCalls = make(map[string]string)
 }
 
 func (c *FloorClient) debug(msg string) {
 	if c.Debug {
-		fmt.Printf("  [acp-debug] %s\n", msg)
+		fmt.Printf("  \033[90m[acp-debug] %s\033[0m\n", msg)
+		if c.LogWriter != nil {
+			fmt.Fprintf(c.LogWriter, "  [acp-debug] %s\n", msg)
+		}
 	}
 }
 
@@ -83,6 +90,10 @@ func (c *FloorClient) SessionUpdate(ctx context.Context, params acpsdk.SessionNo
 
 	case u.ToolCall != nil:
 		c.debug(fmt.Sprintf("tool_call: %s (%s)", u.ToolCall.Title, u.ToolCall.Status))
+		// Track the tool call start so we can pair it with output later
+		c.mu.Lock()
+		c.toolCalls[string(u.ToolCall.ToolCallId)] = u.ToolCall.Title
+		c.mu.Unlock()
 
 	case u.ToolCallUpdate != nil:
 		status := ""
@@ -90,6 +101,19 @@ func (c *FloorClient) SessionUpdate(ctx context.Context, params acpsdk.SessionNo
 			status = string(*u.ToolCallUpdate.Status)
 		}
 		c.debug(fmt.Sprintf("tool_call_update: %s status=%s", u.ToolCallUpdate.ToolCallId, status))
+		// When a tool call completes, record it as an interaction
+		if u.ToolCallUpdate.Status != nil && *u.ToolCallUpdate.Status == acpsdk.ToolCallStatusCompleted {
+			c.mu.Lock()
+			tcID := string(u.ToolCallUpdate.ToolCallId)
+			title := c.toolCalls[tcID]
+			output := extractToolCallText(u.ToolCallUpdate.Content)
+			c.Interactions = append(c.Interactions, ToolInteraction{
+				Command: title,
+				Output:  output,
+			})
+			delete(c.toolCalls, tcID)
+			c.mu.Unlock()
+		}
 
 	case u.AgentThoughtChunk != nil:
 		// Silently consume thoughts
@@ -189,9 +213,6 @@ func (c *FloorClient) WriteTextFile(ctx context.Context, params acpsdk.WriteText
 // --- Terminal callbacks ---
 
 func (c *FloorClient) CreateTerminal(ctx context.Context, params acpsdk.CreateTerminalRequest) (acpsdk.CreateTerminalResponse, error) {
-	if c.Terminals == nil {
-		return acpsdk.CreateTerminalResponse{}, fmt.Errorf("no sandbox available for terminal")
-	}
 	c.debug(fmt.Sprintf("terminal/create: %s %v", params.Command, params.Args))
 
 	id, err := c.Terminals.Create(params.Command, params.Args, params.Cwd)
@@ -203,25 +224,10 @@ func (c *FloorClient) CreateTerminal(ctx context.Context, params acpsdk.CreateTe
 }
 
 func (c *FloorClient) TerminalOutput(ctx context.Context, params acpsdk.TerminalOutputRequest) (acpsdk.TerminalOutputResponse, error) {
-	if c.Terminals == nil {
-		return acpsdk.TerminalOutputResponse{}, fmt.Errorf("no sandbox available")
-	}
-
 	output, truncated, err := c.Terminals.GetOutput(params.TerminalId)
 	if err != nil {
 		return acpsdk.TerminalOutputResponse{}, err
 	}
-
-	// Record as tool interaction for floor message tracking
-	c.mu.Lock()
-	// Only record if we have new output
-	if output != "" {
-		c.Interactions = append(c.Interactions, ToolInteraction{
-			Command: params.TerminalId,
-			Output:  output,
-		})
-	}
-	c.mu.Unlock()
 
 	return acpsdk.TerminalOutputResponse{
 		Output:    output,
@@ -230,10 +236,6 @@ func (c *FloorClient) TerminalOutput(ctx context.Context, params acpsdk.Terminal
 }
 
 func (c *FloorClient) WaitForTerminalExit(ctx context.Context, params acpsdk.WaitForTerminalExitRequest) (acpsdk.WaitForTerminalExitResponse, error) {
-	if c.Terminals == nil {
-		return acpsdk.WaitForTerminalExitResponse{}, fmt.Errorf("no sandbox available")
-	}
-
 	exitCode, err := c.Terminals.WaitForExit(params.TerminalId)
 	if err != nil {
 		return acpsdk.WaitForTerminalExitResponse{}, err
@@ -245,17 +247,22 @@ func (c *FloorClient) WaitForTerminalExit(ctx context.Context, params acpsdk.Wai
 }
 
 func (c *FloorClient) KillTerminalCommand(ctx context.Context, params acpsdk.KillTerminalCommandRequest) (acpsdk.KillTerminalCommandResponse, error) {
-	if c.Terminals == nil {
-		return acpsdk.KillTerminalCommandResponse{}, fmt.Errorf("no sandbox available")
-	}
 	_ = c.Terminals.Kill(params.TerminalId)
 	return acpsdk.KillTerminalCommandResponse{}, nil
 }
 
 func (c *FloorClient) ReleaseTerminal(ctx context.Context, params acpsdk.ReleaseTerminalRequest) (acpsdk.ReleaseTerminalResponse, error) {
-	if c.Terminals == nil {
-		return acpsdk.ReleaseTerminalResponse{}, fmt.Errorf("no sandbox available")
-	}
 	c.Terminals.Release(params.TerminalId)
 	return acpsdk.ReleaseTerminalResponse{}, nil
+}
+
+// extractToolCallText extracts text content from a ToolCallContent slice.
+func extractToolCallText(content []acpsdk.ToolCallContent) string {
+	var sb strings.Builder
+	for _, c := range content {
+		if c.Content != nil && c.Content.Content.Text != nil {
+			sb.WriteString(c.Content.Content.Text.Text)
+		}
+	}
+	return sb.String()
 }

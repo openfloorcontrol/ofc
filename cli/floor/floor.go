@@ -23,6 +23,7 @@ const (
 	Cyan   = "\033[36m"
 	Green  = "\033[32m"
 	Purple = "\033[35m"
+	Gray   = "\033[90m"
 )
 
 // ToolInteraction stores one tool call and its result
@@ -50,17 +51,17 @@ type Floor struct {
 	Blueprint   *blueprint.Blueprint
 	Messages    []FloorMessage
 	CallStack   []Frame
-	Debug       bool
 	Sandbox     *sandbox.Sandbox
 	ACPSessions map[string]*acpclient.AgentSession // agent ID → ACP session
+	out         *Output
 }
 
 // New creates a new floor
-func New(bp *blueprint.Blueprint, debug bool) *Floor {
+func New(bp *blueprint.Blueprint, debug bool, logPath string) *Floor {
 	return &Floor{
 		Blueprint: bp,
 		Messages:  []FloorMessage{},
-		Debug:     debug,
+		out:       NewOutput(logPath, debug),
 	}
 }
 
@@ -86,11 +87,11 @@ func (f *Floor) Start() error {
 			}
 		}
 		f.Sandbox = sandbox.New("./workspace", image, dockerfile)
-		fmt.Printf("%s[System]: Starting sandbox...%s\n", Dim, Reset)
+		f.out.Print("%s[System]: Starting sandbox...%s\n", Dim, Reset)
 		if err := f.Sandbox.Start(); err != nil {
 			return fmt.Errorf("failed to start sandbox: %w", err)
 		}
-		fmt.Printf("%s[System]: Sandbox ready (%s)%s\n", Dim, f.Sandbox.ContainerID[:12], Reset)
+		f.out.Print("%s[System]: Sandbox ready (%s)%s\n", Dim, f.Sandbox.ContainerID[:12], Reset)
 	}
 
 	// Launch ACP agent sessions
@@ -102,10 +103,11 @@ func (f *Floor) Start() error {
 			return fmt.Errorf("ACP agent %s has no command configured", agent.ID)
 		}
 
-		fmt.Printf("%s[System]: Starting ACP agent %s (%s)...%s\n", Dim, agent.ID, agent.Command, Reset)
+		f.out.Print("%s[System]: Starting ACP agent %s (%s)...%s\n", Dim, agent.ID, agent.Command, Reset)
 
 		cwd, _ := os.Getwd()
-		client := acpclient.NewFloorClient(f.Sandbox, cwd, f.Debug)
+		client := acpclient.NewFloorClient(f.Sandbox, cwd, f.out.debug)
+		client.LogWriter = f.out.LogWriter()
 		session, err := acpclient.NewAgentSession(agent.Command, agent.Args, agent.Env, client)
 		if err != nil {
 			return fmt.Errorf("failed to start ACP agent %s: %w", agent.ID, err)
@@ -125,7 +127,7 @@ func (f *Floor) Start() error {
 			f.ACPSessions = make(map[string]*acpclient.AgentSession)
 		}
 		f.ACPSessions[agent.ID] = session
-		fmt.Printf("%s[System]: ACP agent %s ready%s\n", Dim, agent.ID, Reset)
+		f.out.Print("%s[System]: ACP agent %s ready%s\n", Dim, agent.ID, Reset)
 	}
 
 	return nil
@@ -134,7 +136,7 @@ func (f *Floor) Start() error {
 // Stop cleans up the floor
 func (f *Floor) Stop() {
 	for id, session := range f.ACPSessions {
-		f.debug(fmt.Sprintf("closing ACP session for %s", id))
+		f.out.Debug(fmt.Sprintf("closing ACP session for %s", id))
 		session.Close()
 	}
 	if f.Sandbox != nil {
@@ -142,11 +144,6 @@ func (f *Floor) Stop() {
 	}
 }
 
-func (f *Floor) debug(msg string) {
-	if f.Debug {
-		fmt.Printf("  [debug] %s\n", msg)
-	}
-}
 
 func agentColor(id string) string {
 	switch id {
@@ -159,10 +156,6 @@ func agentColor(id string) string {
 	default:
 		return Cyan
 	}
-}
-
-func printAgentLabel(id string) {
-	fmt.Printf("%s%s[%s]:%s ", Bold, agentColor(id), id, Reset)
 }
 
 // summarizeLines returns the first N lines of text with a count of remaining lines
@@ -304,13 +297,13 @@ func (f *Floor) nextRecipient(excluded map[string]bool) *blueprint.Agent {
 
 	// Extract @mentions with ?
 	mentions := extractMentions(lastMsg.Content)
-	f.debug(fmt.Sprintf("next_recipient: from=%s, mentions=%v, exclude=%v, stack=%d", lastMsg.FromID, mentions, excluded, len(f.CallStack)))
+	f.out.Debug(fmt.Sprintf("next_recipient: from=%s, mentions=%v, exclude=%v, stack=%d", lastMsg.FromID, mentions, excluded, len(f.CallStack)))
 
 	// 0. If mentions @user (and not from @user), pause for user
 	if lastMsg.FromID != "@user" {
 		for _, m := range mentions {
 			if m == "@user" {
-				f.debug("→ pausing for @user")
+				f.out.Debug("→ pausing for @user")
 				return nil
 			}
 		}
@@ -327,7 +320,7 @@ func (f *Floor) nextRecipient(excluded map[string]bool) *blueprint.Agent {
 					Caller: lastMsg.FromID,
 					Callee: agent.ID,
 				})
-				f.debug(fmt.Sprintf("→ mentioned: %s (pushed frame, stack=%d)", agent.ID, len(f.CallStack)))
+				f.out.Debug(fmt.Sprintf("→ mentioned: %s (pushed frame, stack=%d)", agent.ID, len(f.CallStack)))
 				return &agent
 			}
 		}
@@ -337,10 +330,10 @@ func (f *Floor) nextRecipient(excluded map[string]bool) *blueprint.Agent {
 	if len(f.CallStack) > 0 {
 		frame := f.CallStack[len(f.CallStack)-1]
 		f.CallStack = f.CallStack[:len(f.CallStack)-1]
-		f.debug(fmt.Sprintf("→ pop stack: caller=%s, callee=%s (stack=%d)", frame.Caller, frame.Callee, len(f.CallStack)))
+		f.out.Debug(fmt.Sprintf("→ pop stack: caller=%s, callee=%s (stack=%d)", frame.Caller, frame.Callee, len(f.CallStack)))
 
 		if frame.Caller == "@user" {
-			f.debug("→ caller is @user, back to user")
+			f.out.Debug("→ caller is @user, back to user")
 			return nil
 		}
 
@@ -353,18 +346,18 @@ func (f *Floor) nextRecipient(excluded map[string]bool) *blueprint.Agent {
 	// 3. Poll shouldWake
 	for _, agent := range f.Blueprint.Agents {
 		if excluded[agent.ID] {
-			f.debug(fmt.Sprintf("should_wake(%s): skipped (passed)", agent.ID))
+			f.out.Debug(fmt.Sprintf("should_wake(%s): skipped (passed)", agent.ID))
 			continue
 		}
 		wake := f.shouldWake(&agent, &lastMsg)
-		f.debug(fmt.Sprintf("should_wake(%s): %v", agent.ID, wake))
+		f.out.Debug(fmt.Sprintf("should_wake(%s): %v", agent.ID, wake))
 		if wake {
 			return &agent
 		}
 	}
 
 	// 4. Nobody → back to user
-	f.debug("→ back to user")
+	f.out.Debug("→ back to user")
 	return nil
 }
 
@@ -433,19 +426,19 @@ func (f *Floor) getACPAgentResponse(agent *blueprint.Agent) (*FloorMessage, erro
 
 	// Build context as text
 	contextText := f.buildACPContext(agent)
-	f.debug(fmt.Sprintf("ACP prompt for %s (%d chars)", agent.ID, len(contextText)))
+	f.out.Debug(fmt.Sprintf("ACP prompt for %s (%d chars)", agent.ID, len(contextText)))
 
 	// Set up streaming callback
 	client := session.Client
 	client.Reset()
 
 	client.OnToken = func(token string) {
-		fmt.Print(token)
+		f.out.Print("%s", token)
 	}
 
 	// Clear the "thinking..." line and print label
-	fmt.Printf("\r\033[K")
-	printAgentLabel(agent.ID)
+	f.out.Terminal("\r\033[K")
+	f.out.AgentLabel(agent.ID)
 
 	// Send prompt (blocks until agent finishes)
 	ctx := context.Background()
@@ -457,9 +450,9 @@ func (f *Floor) getACPAgentResponse(agent *blueprint.Agent) (*FloorMessage, erro
 		}, fmt.Errorf("ACP prompt failed: %w", err)
 	}
 
-	fmt.Println() // newline after streaming
+	f.out.Print("\n") // newline after streaming
 
-	f.debug(fmt.Sprintf("ACP response done: stopReason=%s, interactions=%d", stopReason, len(client.Interactions)))
+	f.out.Debug(fmt.Sprintf("ACP response done: stopReason=%s, interactions=%d", stopReason, len(client.Interactions)))
 
 	// Convert ACP tool interactions to floor tool interactions
 	var interactions []ToolInteraction
@@ -496,11 +489,11 @@ func (f *Floor) getAgentResponse(agent *blueprint.Agent) (*FloorMessage, error) 
 
 	for i := 0; i < maxIterations; i++ {
 		// Clear the "thinking..." and print streaming response
-		fmt.Printf("\r\033[K") // Clear line
-		printAgentLabel(agent.ID)
+		f.out.Terminal("\r\033[K") // Clear line
+		f.out.AgentLabel(agent.ID)
 
 		result, err := client.ChatStream(agent.Model, messages, agent.Temperature, tools, func(token string) {
-			fmt.Print(token)
+			f.out.Print("%s", token)
 		})
 		if err != nil {
 			return &FloorMessage{
@@ -514,11 +507,11 @@ func (f *Floor) getAgentResponse(agent *blueprint.Agent) (*FloorMessage, error) 
 
 		// No tool calls - we're done
 		if len(result.ToolCalls) == 0 {
-			fmt.Println() // Newline after streaming
+			f.out.Print("\n") // Newline after streaming
 			break
 		}
 
-		fmt.Println() // Newline after streaming
+		f.out.Print("\n") // Newline after streaming
 
 		// Execute tool calls
 		for _, tc := range result.ToolCalls {
@@ -531,7 +524,7 @@ func (f *Floor) getAgentResponse(agent *blueprint.Agent) (*FloorMessage, error) 
 				}
 
 				// Print the command
-				fmt.Printf("%s$ %s%s\n", Dim, args.Cmd, Reset)
+				f.out.Print("%s$ %s%s\n", Dim, args.Cmd, Reset)
 
 				// Execute
 				output, err := f.Sandbox.Execute(args.Cmd)
@@ -544,7 +537,7 @@ func (f *Floor) getAgentResponse(agent *blueprint.Agent) (*FloorMessage, error) 
 				if len(displayOutput) > 500 {
 					displayOutput = displayOutput[:500] + "..."
 				}
-				fmt.Printf("%s%s%s\n", Dim, displayOutput, Reset)
+				f.out.Print("%s%s%s\n", Dim, displayOutput, Reset)
 
 				// Collect tool interaction for floor message
 				interactions = append(interactions, ToolInteraction{
@@ -566,7 +559,7 @@ func (f *Floor) getAgentResponse(agent *blueprint.Agent) (*FloorMessage, error) 
 		}
 
 		// Show continuation
-		fmt.Printf("  %s...%s\n", Dim, Reset)
+		f.out.Print("  %s...%s\n", Dim, Reset)
 	}
 
 	return &FloorMessage{
@@ -585,12 +578,13 @@ func (f *Floor) Run(initialPrompt string) error {
 		return err
 	}
 	defer f.Stop()
+	defer f.out.Close()
 
 	// Print header
-	fmt.Printf("%s%s%s\n", Bold, strings.Repeat("=", 50), Reset)
-	fmt.Printf("%sOFC - %s%s\n", Bold, bp.Name, Reset)
+	f.out.Print("%s%s%s\n", Bold, strings.Repeat("=", 50), Reset)
+	f.out.Print("%sOFC - %s%s\n", Bold, bp.Name, Reset)
 	if bp.Description != "" {
-		fmt.Printf("%s%s%s\n", Dim, bp.Description, Reset)
+		f.out.Print("%s%s%s\n", Dim, bp.Description, Reset)
 	}
 
 	// Print agents
@@ -598,9 +592,9 @@ func (f *Floor) Run(initialPrompt string) error {
 	for _, a := range bp.Agents {
 		agentList = append(agentList, agentColor(a.ID)+a.ID+Reset)
 	}
-	fmt.Printf("Agents: %s\n", strings.Join(agentList, ", "))
-	fmt.Printf("Type %s/quit%s to exit, %s/clear%s to reset\n", Bold, Reset, Bold, Reset)
-	fmt.Printf("%s%s%s\n", Bold, strings.Repeat("=", 50), Reset)
+	f.out.Print("Agents: %s\n", strings.Join(agentList, ", "))
+	f.out.Print("Type %s/quit%s to exit, %s/clear%s to reset\n", Bold, Reset, Bold, Reset)
+	f.out.Print("%s%s%s\n", Bold, strings.Repeat("=", 50), Reset)
 
 	oneShot := initialPrompt != ""
 	firstIteration := true
@@ -611,24 +605,25 @@ func (f *Floor) Run(initialPrompt string) error {
 
 		if firstIteration && initialPrompt != "" {
 			userInput = initialPrompt
-			fmt.Println()
-			printAgentLabel("@user")
-			fmt.Println(userInput)
+			f.out.Print("\n")
+			f.out.AgentLabel("@user")
+			f.out.Print("%s\n", userInput)
 			firstIteration = false
 		} else {
 			if oneShot {
 				break
 			}
 
-			fmt.Println()
-			printAgentLabel("@user")
+			f.out.Print("\n")
+			f.out.AgentLabel("@user")
 
 			input, err := reader.ReadString('\n')
 			if err != nil {
-				fmt.Printf("%s[Interrupted]%s\n", Dim, Reset)
+				f.out.Print("%s[Interrupted]%s\n", Dim, Reset)
 				break
 			}
 			userInput = strings.TrimSpace(input)
+			f.out.Log("%s\n", userInput) // log user's typed input
 		}
 
 		if userInput == "" {
@@ -642,7 +637,7 @@ func (f *Floor) Run(initialPrompt string) error {
 		if userInput == "/clear" {
 			f.Messages = []FloorMessage{}
 			f.CallStack = nil
-			fmt.Printf("%s[Conversation cleared]%s\n", Dim, Reset)
+			f.out.Print("%s[Conversation cleared]%s\n", Dim, Reset)
 			continue
 		}
 
@@ -664,9 +659,9 @@ func (f *Floor) Run(initialPrompt string) error {
 				break
 			}
 
-			fmt.Println()
-			printAgentLabel(nextAgent.ID)
-			fmt.Printf("%sthinking...%s", Dim, Reset)
+			f.out.Print("\n")
+			// "thinking..." is ephemeral — terminal only, overwritten by actual response
+			f.out.Terminal("%s%s[%s]:%s %sthinking...%s", Bold, agentColor(nextAgent.ID), nextAgent.ID, Reset, Dim, Reset)
 
 			var response *FloorMessage
 			var err error
@@ -676,17 +671,18 @@ func (f *Floor) Run(initialPrompt string) error {
 				response, err = f.getAgentResponse(nextAgent)
 			}
 			if err != nil {
-				fmt.Printf("\r\033[K") // Clear line
-				printAgentLabel(nextAgent.ID)
-				fmt.Printf("[ERROR: %v]\n", err)
+				// Response function already logged the label; just fix terminal
+				f.out.Terminal("\r\033[K")
+				f.out.AgentLabel(nextAgent.ID)
+				f.out.Print("[ERROR: %v]\n", err)
 				break
 			}
 
 			// Check for [PASS]
 			if strings.Contains(strings.ToLower(response.Content), "[pass]") {
-				fmt.Printf("\r\033[K") // Clear line
-				printAgentLabel(nextAgent.ID)
-				fmt.Println("[PASS]")
+				// Response was already streamed+logged; just clean up terminal display
+				f.out.Terminal("\r\033[K")
+				f.out.Terminal("%s%s[%s]:%s [PASS]\n", Bold, agentColor(nextAgent.ID), nextAgent.ID, Reset)
 				// Pop frame if this agent was the callee on top of stack
 				if len(f.CallStack) > 0 && f.CallStack[len(f.CallStack)-1].Callee == nextAgent.ID {
 					f.CallStack = f.CallStack[:len(f.CallStack)-1]
@@ -703,6 +699,6 @@ func (f *Floor) Run(initialPrompt string) error {
 		}
 	}
 
-	fmt.Printf("\n%sGoodbye! ofc. 🎤%s\n", Dim, Reset)
+	f.out.Print("\n%sGoodbye! ofc. 🎤%s\n", Dim, Reset)
 	return nil
 }

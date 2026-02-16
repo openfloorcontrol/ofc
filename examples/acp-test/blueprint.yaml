@@ -1,0 +1,22 @@
+# OFC Blueprint - ACP Test
+# Tests connecting to Claude Code via claude-code-acp adapter
+
+name: acp-test
+description: "Test ACP integration with Claude Code"
+
+agents:
+  - id: "@claude"
+    name: "Claude Code"
+    type: acp
+    command: claude-code-acp
+    activation: always
+    prompt: |
+      You are @claude on an OFC floor. Keep responses short.
+      When asked something, respond concisely.
+
+workstations:
+  - type: sandbox
+    name: python-sandbox
+    image: python:3.11-slim
+    dockerfile: ./sandbox/Dockerfile
+    mount: ./workspace:/workspace
