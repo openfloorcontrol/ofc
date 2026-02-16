@@ -429,6 +429,18 @@ func (f *Floor) getACPAgentResponse(agent *blueprint.Agent) (*FloorMessage, erro
 	client.OnToken = func(token string) {
 		f.out.Print("%s", token)
 	}
+	client.OnToolCall = func(title string) {
+		f.out.Print("\n%s  ▶ %s%s\n", Dim, title, Reset)
+	}
+	client.OnToolResult = func(title, output string) {
+		if output != "" {
+			display := output
+			if len(display) > 500 {
+				display = display[:500] + "..."
+			}
+			f.out.Print("%s  %s%s\n", Dim, display, Reset)
+		}
+	}
 
 	// Clear the "thinking..." line and print label
 	f.out.Terminal("\r\033[K")

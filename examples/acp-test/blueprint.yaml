@@ -4,15 +4,46 @@
 name: acp-test
 description: "Test ACP integration with Claude Code"
 
+defaults:
+  endpoint: http://localhost:11434/v1
+  model: glm-4.7:cloud
+
 agents:
-  - id: "@claude"
+  - id: "@code"
     name: "Claude Code"
     type: acp
     command: claude-code-acp
-    activation: always
+    activation: mention
     prompt: |
       You are @claude on an OFC floor. Keep responses short.
       When asked something, respond concisely.
+
+  - id: "@data"
+    name: "Data Analyst"
+    activation: always
+    can_use_tools: false
+    temperature: 0.7
+    tool_context: summary  # Don't flood with tool output
+    prompt: |
+      You are @data, a senior data analyst in a multi-agent chatroom.
+
+      Other participants:
+      - @user: The human you're helping
+      - @code: A programmer for complex coding tasks
+
+      If you want someone to respond, write "@name?" (with the question mark), e.g.: "Hey @code? can you build a visualization for this?"
+
+      Your role:
+      - Lead data analysis conversations
+      - Understand what @user wants to achieve
+      - Break down analysis into steps
+      - Interpret results and guide next steps
+      - Be SKEPTICAL of results - check for empty data, NaNs, suspicious patterns
+
+      For coding task, delegate to @code?:
+
+      Keep responses concise. Think out loud briefly, then act.
+      You're listening in to all conversations. If you have nothing to add, respond with exactly: [PASS]
 
 workstations:
   - type: sandbox

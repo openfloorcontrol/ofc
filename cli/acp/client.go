@@ -30,6 +30,8 @@ type FloorClient struct {
 
 	// Per-prompt state (set before each Prompt call, reset after)
 	OnToken      func(string)
+	OnToolCall   func(title string)
+	OnToolResult func(title, output string)
 	ResponseText strings.Builder
 	Interactions []ToolInteraction
 	toolCalls    map[string]string // toolCallId → title, for tracking in-flight calls
@@ -94,6 +96,10 @@ func (c *FloorClient) SessionUpdate(ctx context.Context, params acpsdk.SessionNo
 		c.mu.Lock()
 		c.toolCalls[string(u.ToolCall.ToolCallId)] = u.ToolCall.Title
 		c.mu.Unlock()
+		// Print tool call title to output
+		if c.OnToolCall != nil {
+			c.OnToolCall(u.ToolCall.Title)
+		}
 
 	case u.ToolCallUpdate != nil:
 		status := ""
@@ -101,7 +107,7 @@ func (c *FloorClient) SessionUpdate(ctx context.Context, params acpsdk.SessionNo
 			status = string(*u.ToolCallUpdate.Status)
 		}
 		c.debug(fmt.Sprintf("tool_call_update: %s status=%s", u.ToolCallUpdate.ToolCallId, status))
-		// When a tool call completes, record it as an interaction
+		// When a tool call completes, record it as an interaction and print result
 		if u.ToolCallUpdate.Status != nil && *u.ToolCallUpdate.Status == acpsdk.ToolCallStatusCompleted {
 			c.mu.Lock()
 			tcID := string(u.ToolCallUpdate.ToolCallId)
@@ -113,6 +119,9 @@ func (c *FloorClient) SessionUpdate(ctx context.Context, params acpsdk.SessionNo
 			})
 			delete(c.toolCalls, tcID)
 			c.mu.Unlock()
+			if c.OnToolResult != nil {
+				c.OnToolResult(title, output)
+			}
 		}
 
 	case u.AgentThoughtChunk != nil:
