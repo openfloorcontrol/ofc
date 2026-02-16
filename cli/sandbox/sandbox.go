@@ -108,12 +108,25 @@ func (s *Sandbox) Start() error {
 		return err
 	}
 
-	// Start container
-	cmd := exec.Command("docker", "run", "-d", "--rm",
-		"-w", "/workspace",
-		s.Image,
-		"sleep", "infinity",
-	)
+	// Resolve workspace to absolute path for bind mount
+	wsAbs := s.WorkspaceDir
+	if wsAbs != "" {
+		abs, err := filepath.Abs(wsAbs)
+		if err == nil {
+			wsAbs = abs
+		}
+		// Ensure the directory exists on host
+		os.MkdirAll(wsAbs, 0o755)
+	}
+
+	// Start container with workspace bind-mounted at the same absolute path
+	// so the agent can use real host paths and writes go through naturally.
+	args := []string{"run", "-d", "--rm", "-w", wsAbs}
+	if wsAbs != "" {
+		args = append(args, "-v", wsAbs+":"+wsAbs)
+	}
+	args = append(args, s.Image, "sleep", "infinity")
+	cmd := exec.Command("docker", args...)
 
 	output, err := cmd.Output()
 	if err != nil {
@@ -121,17 +134,6 @@ func (s *Sandbox) Start() error {
 	}
 
 	s.ContainerID = strings.TrimSpace(string(output))
-
-	// Copy workspace if provided
-	if s.WorkspaceDir != "" {
-		copyCmd := exec.Command("docker", "cp",
-			s.WorkspaceDir+"/.",
-			s.ContainerID+":/workspace/",
-		)
-		if err := copyCmd.Run(); err != nil {
-			// Non-fatal, workspace might not exist
-		}
-	}
 
 	return nil
 }

@@ -163,12 +163,21 @@ func (c *FloorClient) ReadTextFile(ctx context.Context, params acpsdk.ReadTextFi
 	}
 	c.debug(fmt.Sprintf("fs/read: %s", path))
 
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return acpsdk.ReadTextFileResponse{}, fmt.Errorf("read %s: %w", path, err)
+	var content string
+	if c.Sandbox != nil {
+		// Read from sandbox container
+		output, err := c.Sandbox.Execute(fmt.Sprintf("cat %q", path))
+		if err != nil {
+			return acpsdk.ReadTextFileResponse{}, fmt.Errorf("read %s in sandbox: %w", path, err)
+		}
+		content = output
+	} else {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return acpsdk.ReadTextFileResponse{}, fmt.Errorf("read %s: %w", path, err)
+		}
+		content = string(data)
 	}
-
-	content := string(data)
 
 	// Apply line/limit if specified
 	if params.Line != nil || params.Limit != nil {
@@ -199,12 +208,24 @@ func (c *FloorClient) WriteTextFile(ctx context.Context, params acpsdk.WriteText
 	}
 	c.debug(fmt.Sprintf("fs/write: %s (%d bytes)", path, len(params.Content)))
 
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return acpsdk.WriteTextFileResponse{}, fmt.Errorf("mkdir %s: %w", dir, err)
-	}
-	if err := os.WriteFile(path, []byte(params.Content), 0o644); err != nil {
-		return acpsdk.WriteTextFileResponse{}, fmt.Errorf("write %s: %w", path, err)
+	if c.Sandbox != nil {
+		// Write into sandbox container
+		dir := filepath.Dir(path)
+		_, _ = c.Sandbox.Execute(fmt.Sprintf("mkdir -p %q", dir))
+		// Use heredoc to avoid shell escaping issues with content
+		cmd := fmt.Sprintf("cat > %q << 'OFC_EOF'\n%s\nOFC_EOF", path, params.Content)
+		_, err := c.Sandbox.Execute(cmd)
+		if err != nil {
+			return acpsdk.WriteTextFileResponse{}, fmt.Errorf("write %s in sandbox: %w", path, err)
+		}
+	} else {
+		dir := filepath.Dir(path)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return acpsdk.WriteTextFileResponse{}, fmt.Errorf("mkdir %s: %w", dir, err)
+		}
+		if err := os.WriteFile(path, []byte(params.Content), 0o644); err != nil {
+			return acpsdk.WriteTextFileResponse{}, fmt.Errorf("write %s: %w", path, err)
+		}
 	}
 
 	return acpsdk.WriteTextFileResponse{}, nil

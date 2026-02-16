@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -67,26 +68,17 @@ func New(bp *blueprint.Blueprint, debug bool, logPath string) *Floor {
 
 // Start initializes the floor (sandbox, etc.)
 func (f *Floor) Start() error {
-	// Check if any agent needs tools
-	needsSandbox := false
-	for _, agent := range f.Blueprint.Agents {
-		if agent.CanUseTools {
-			needsSandbox = true
+	// Start sandbox if one is defined in the blueprint
+	var sandboxWS *blueprint.Workstation
+	for i := range f.Blueprint.Workstations {
+		if f.Blueprint.Workstations[i].Type == "sandbox" {
+			sandboxWS = &f.Blueprint.Workstations[i]
 			break
 		}
 	}
 
-	if needsSandbox {
-		// Find sandbox workstation config from blueprint
-		var image, dockerfile string
-		for _, ws := range f.Blueprint.Workstations {
-			if ws.Type == "sandbox" {
-				image = ws.Image
-				dockerfile = ws.Dockerfile
-				break
-			}
-		}
-		f.Sandbox = sandbox.New("./workspace", image, dockerfile)
+	if sandboxWS != nil {
+		f.Sandbox = sandbox.New("./workspace", sandboxWS.Image, sandboxWS.Dockerfile)
 		f.out.Print("%s[System]: Starting sandbox...%s\n", Dim, Reset)
 		if err := f.Sandbox.Start(); err != nil {
 			return fmt.Errorf("failed to start sandbox: %w", err)
@@ -106,7 +98,9 @@ func (f *Floor) Start() error {
 		f.out.Print("%s[System]: Starting ACP agent %s (%s)...%s\n", Dim, agent.ID, agent.Command, Reset)
 
 		cwd, _ := os.Getwd()
-		client := acpclient.NewFloorClient(f.Sandbox, cwd, f.out.debug)
+		workDir := filepath.Join(cwd, "workspace")
+		os.MkdirAll(workDir, 0o755)
+		client := acpclient.NewFloorClient(f.Sandbox, workDir, f.out.debug)
 		client.LogWriter = f.out.LogWriter()
 		session, err := acpclient.NewAgentSession(agent.Command, agent.Args, agent.Env, client)
 		if err != nil {
@@ -118,7 +112,7 @@ func (f *Floor) Start() error {
 			session.Close()
 			return fmt.Errorf("failed to initialize ACP agent %s: %w", agent.ID, err)
 		}
-		if err := session.StartSession(ctx, cwd); err != nil {
+		if err := session.StartSession(ctx, workDir); err != nil {
 			session.Close()
 			return fmt.Errorf("failed to create session for ACP agent %s: %w", agent.ID, err)
 		}
