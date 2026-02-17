@@ -91,13 +91,13 @@ func (s *AgentSession) StartSession(ctx context.Context, cwd string) error {
 	return nil
 }
 
-// Prompt sends a text prompt to the agent and blocks until it finishes.
+// Prompt sends content blocks to the agent and blocks until it finishes.
 // Streaming happens via the Client's SessionUpdate callback.
 // Returns the stop reason.
-func (s *AgentSession) Prompt(ctx context.Context, text string) (acpsdk.StopReason, error) {
+func (s *AgentSession) Prompt(ctx context.Context, blocks []acpsdk.ContentBlock) (acpsdk.StopReason, error) {
 	resp, err := s.Conn.Prompt(ctx, acpsdk.PromptRequest{
 		SessionId: s.SessionID,
-		Prompt:    []acpsdk.ContentBlock{acpsdk.TextBlock(text)},
+		Prompt:    blocks,
 	})
 	if err != nil {
 		return "", fmt.Errorf("prompt: %w", err)

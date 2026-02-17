@@ -57,8 +57,8 @@ func (o *Output) Terminal(format string, args ...any) {
 }
 
 // AgentLabel prints a colored agent label.
-func (o *Output) AgentLabel(id string) {
-	o.Print("%s%s[%s]:%s ", Bold, agentColor(id), id, Reset)
+func (o *Output) AgentLabel(id string, color string) {
+	o.Print("%s%s[%s]:%s ", Bold, color, id, Reset)
 }
 
 // LogWriter returns an io.Writer for the log file, or nil if no log is open.
