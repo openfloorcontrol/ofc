@@ -6,6 +6,12 @@
 
 ACP integration with Claude Code is working end-to-end: multi-agent coordination with real tool execution in sandboxed containers. The core protocol (mentions, activation modes, call-stack delegation, PASS semantics) is validated. Go implementation is the primary runtime, with some features from the Python version still pending port (e.g., `tool_context: summary`).
 
+### Recent completions
+
+- **Event-driven floor architecture** — The monolithic floor loop has been refactored into a reactive, event-driven design: a pure-logic Controller (event in, decision out), Runners (LLM/ACP agent execution), Frontend/StreamSink interfaces, and a Coordinator wiring layer. The controller is fully testable with zero mocks.
+- **Bubble Tea TUI frontend** — Split-layout terminal UI (`--tui`) with scrollable viewport and text input, built on charmbracelet/bubbletea. Runs alongside the existing CLI frontend via the decoupled Frontend interface.
+- **ACP output routing** — ACP subprocess stderr and debug output properly routed through the frontend instead of directly to stdout/stderr, enabling clean TUI rendering.
+
 ---
 
 ## Phase 1: Protocol Refinements
@@ -53,6 +59,9 @@ Beyond delegation — explore peer-to-peer agent dynamics.
 
 Move beyond synchronous request-response.
 
+- [x] Event-driven floor architecture (controller is pure event→event, no I/O)
+- [x] Multiple frontend support via Frontend/StreamSink interfaces (CLI, TUI)
+- [ ] Web frontend (chat UI over HTTP/WebSocket)
 - [ ] Event-driven activation (external triggers, webhooks, scheduled)
 - [ ] Async agent work — agents that take time and report back
 - [ ] Integration patterns: how external systems interact with a running floor
