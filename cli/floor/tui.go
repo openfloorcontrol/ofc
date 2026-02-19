@@ -182,6 +182,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Quit
 
+		case tea.KeyCtrlL:
+			return m, tea.ClearScreen
+
 		case tea.KeyEnter:
 			text := strings.TrimSpace(m.textarea.Value())
 			if text == "" {
