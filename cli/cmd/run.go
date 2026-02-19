@@ -36,8 +36,8 @@ var runCmd = &cobra.Command{
 		}
 
 		// Run the floor
-		f := floor.New(bp, debug, logFile)
-		if err := f.Run(initialPrompt); err != nil {
+		co := floor.NewCoordinator(bp, debug, logFile)
+		if err := co.Run(initialPrompt); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
