@@ -3,6 +3,7 @@ package floor
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,40 +16,70 @@ import (
 // Coordinator wires the controller, runners, and frontend together.
 // It owns the lifecycle (sandbox, ACP sessions) and the main loop.
 type Coordinator struct {
-	ctrl     *Controller
-	frontend *CLIFrontend
-	sandbox  *sandbox.Sandbox
-	sessions map[string]*acpclient.AgentSession
-	bp       *blueprint.Blueprint
-	colorMap map[string]string
+	ctrl         *Controller
+	frontend     Frontend
+	stream       StreamSink
+	debugFn      func(string)
+	logWriter    io.Writer
+	stderrWriter io.Writer // if set, ACP subprocess stderr goes here instead of os.Stderr
+	sandbox      *sandbox.Sandbox
+	sessions     map[string]*acpclient.AgentSession
+	bp           *blueprint.Blueprint
+	colorMap     map[string]string
 }
 
 // NewCoordinator creates a coordinator with a CLI frontend.
-// This is the main entry point for running a floor from the command line.
+// Convenience wrapper for the common CLI case.
 func NewCoordinator(bp *blueprint.Blueprint, debug bool, logPath string) *Coordinator {
-	// Assign colors to agents
+	cm := BuildColorMap(bp)
+	frontend := NewCLIFrontend(logPath, debug, cm)
+
+	var debugFn func(string)
+	if debug {
+		debugFn = frontend.Debug
+	}
+
+	return newCoordinator(bp, frontend, frontend, debugFn, frontend.LogWriter(), cm)
+}
+
+// NewCoordinatorWith creates a coordinator with a custom frontend.
+// Used by TUI and other frontends. stderrWriter overrides where ACP subprocess
+// stderr goes (nil = os.Stderr).
+func NewCoordinatorWith(bp *blueprint.Blueprint, frontend Frontend, stream StreamSink, debugFn func(string), logWriter io.Writer, stderrWriter io.Writer) *Coordinator {
+	co := newCoordinator(bp, frontend, stream, debugFn, logWriter, BuildColorMap(bp))
+	co.stderrWriter = stderrWriter
+	return co
+}
+
+func newCoordinator(bp *blueprint.Blueprint, frontend Frontend, stream StreamSink, debugFn func(string), logWriter io.Writer, colorMap map[string]string) *Coordinator {
+	ctrl := NewController(bp)
+	if debugFn != nil {
+		ctrl.DebugFunc = debugFn
+	}
+
+	return &Coordinator{
+		ctrl:      ctrl,
+		frontend:  frontend,
+		stream:    stream,
+		debugFn:   debugFn,
+		logWriter: logWriter,
+		bp:        bp,
+		colorMap:  colorMap,
+		sessions:  make(map[string]*acpclient.AgentSession),
+	}
+}
+
+// BuildColorMap assigns colors to agents, cycling through the palette.
+func BuildColorMap(bp *blueprint.Blueprint) map[string]string {
 	cm := map[string]string{"@user": Cyan}
 	for i, a := range bp.Agents {
 		cm[a.ID] = agentColors[i%len(agentColors)]
 	}
-
-	frontend := NewCLIFrontend(logPath, debug, cm)
-
-	ctrl := NewController(bp)
-	ctrl.DebugFunc = frontend.Debug
-
-	return &Coordinator{
-		ctrl:     ctrl,
-		frontend: frontend,
-		bp:       bp,
-		colorMap: cm,
-		sessions: make(map[string]*acpclient.AgentSession),
-	}
+	return cm
 }
 
 // Start initializes sandbox and ACP agent sessions.
 func (co *Coordinator) Start() error {
-	// Start sandbox if one is defined in the blueprint
 	var sandboxWS *blueprint.Workstation
 	for i := range co.bp.Workstations {
 		if co.bp.Workstations[i].Type == "sandbox" {
@@ -66,7 +97,6 @@ func (co *Coordinator) Start() error {
 		co.frontend.Render(SystemInfo{Text: fmt.Sprintf("Sandbox ready (%s)", co.sandbox.ContainerID[:12])})
 	}
 
-	// Launch ACP agent sessions
 	for _, agent := range co.bp.Agents {
 		if agent.Type != "acp" {
 			continue
@@ -80,9 +110,13 @@ func (co *Coordinator) Start() error {
 		cwd, _ := os.Getwd()
 		workDir := filepath.Join(cwd, "workspace")
 		os.MkdirAll(workDir, 0o755)
-		client := acpclient.NewFloorClient(co.sandbox, workDir, co.frontend.IsDebug())
-		client.LogWriter = co.frontend.LogWriter()
-		session, err := acpclient.NewAgentSession(agent.Command, agent.Args, agent.Env, client)
+		client := acpclient.NewFloorClient(co.sandbox, workDir)
+		client.LogWriter = co.logWriter
+		client.DebugFunc = func(msg string) {
+			co.frontend.Render(SystemInfo{Text: msg})
+		}
+
+		session, err := acpclient.NewAgentSession(agent.Command, agent.Args, agent.Env, client, co.stderrWriter)
 		if err != nil {
 			return fmt.Errorf("failed to start ACP agent %s: %w", agent.ID, err)
 		}
@@ -107,7 +141,9 @@ func (co *Coordinator) Start() error {
 // Stop tears down ACP sessions and sandbox.
 func (co *Coordinator) Stop() {
 	for id, session := range co.sessions {
-		co.frontend.Debug(fmt.Sprintf("closing ACP session for %s", id))
+		if co.debugFn != nil {
+			co.debugFn(fmt.Sprintf("closing ACP session for %s", id))
+		}
 		session.Close()
 	}
 	if co.sandbox != nil {
@@ -123,21 +159,18 @@ func (co *Coordinator) Run(initialPrompt string) error {
 	defer co.Stop()
 	defer co.frontend.Close()
 
-	// Print header
 	co.renderHeader()
 
-	// One-shot mode: process initial prompt and return
 	if initialPrompt != "" {
 		co.renderInitialPrompt(initialPrompt)
 		co.processEvents(co.ctrl.HandleEvent(UserMessage{Content: initialPrompt}))
 		return nil
 	}
 
-	// Interactive loop
 	for {
 		ev, err := co.frontend.ReadInput()
 		if err != nil {
-			break // EOF / interrupt
+			break
 		}
 
 		events := co.ctrl.HandleEvent(ev)
@@ -158,11 +191,9 @@ func (co *Coordinator) processEvents(events []Event) bool {
 
 		switch e := ev.(type) {
 		case PromptAgent:
-			// Dispatch to runner, get result, feed back into controller
 			co.frontend.Render(AgentThinking{AgentID: e.AgentID})
 			result := co.runAgent(e.AgentID)
 			co.frontend.Render(result.Event)
-			// Feed the result into the controller and process recursively
 			if stopped := co.processEvents(co.ctrl.HandleEvent(result.Event)); stopped {
 				return true
 			}
@@ -186,17 +217,18 @@ func (co *Coordinator) runAgent(agentID string) RunnerResult {
 	if agent.Type == "acp" {
 		runner := &ACPRunner{
 			Sessions: co.sessions,
-			Stream:   co.frontend,
+			Stream:   co.stream,
 		}
 		blocks := co.ctrl.BuildACPContext(agent)
-		co.frontend.Debug(fmt.Sprintf("ACP prompt for %s (%d blocks)", agent.ID, len(blocks)))
+		if co.debugFn != nil {
+			co.debugFn(fmt.Sprintf("ACP prompt for %s (%d blocks)", agent.ID, len(blocks)))
+		}
 		return runner.Run(agent, blocks)
 	}
 
-	// Default: LLM runner
 	runner := &LLMRunner{
 		Sandbox: co.sandbox,
-		Stream:  co.frontend,
+		Stream:  co.stream,
 	}
 	messages := co.ctrl.BuildContext(agent)
 	return runner.Run(agent, messages)
@@ -225,6 +257,6 @@ func (co *Coordinator) renderHeader() {
 
 // renderInitialPrompt displays the initial prompt as if the user typed it.
 func (co *Coordinator) renderInitialPrompt(prompt string) {
-	co.frontend.OnStream(AgentLabel{AgentID: "@user"})
-	co.frontend.OnStream(TokenStreamed{AgentID: "@user", Token: prompt + "\n"})
+	co.stream.OnStream(AgentLabel{AgentID: "@user"})
+	co.stream.OnStream(TokenStreamed{AgentID: "@user", Token: prompt + "\n"})
 }

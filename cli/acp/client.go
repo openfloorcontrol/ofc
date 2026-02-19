@@ -25,8 +25,8 @@ type FloorClient struct {
 	Sandbox      *sandbox.Sandbox
 	WorkspaceDir string
 	Terminals    *TerminalManager
-	Debug        bool
-	LogWriter    io.Writer // optional log file writer (plain text, no ANSI)
+	DebugFunc    func(string) // if set, debug messages are routed here
+	LogWriter    io.Writer    // optional log file writer (plain text, no ANSI)
 
 	// Per-prompt state (set before each Prompt call, reset after)
 	OnToken      func(string)
@@ -43,15 +43,13 @@ var _ acpsdk.Client = (*FloorClient)(nil)
 
 // NewFloorClient creates a new floor client that handles ACP callbacks.
 // TerminalManager is always created — it supports both sandbox and host execution.
-func NewFloorClient(sb *sandbox.Sandbox, workspaceDir string, debug bool) *FloorClient {
-	fc := &FloorClient{
+func NewFloorClient(sb *sandbox.Sandbox, workspaceDir string) *FloorClient {
+	return &FloorClient{
 		Sandbox:      sb,
 		WorkspaceDir: workspaceDir,
-		Debug:        debug,
 		Terminals:    NewTerminalManager(sb),
 		toolCalls:    make(map[string]string),
 	}
-	return fc
 }
 
 // Reset clears per-prompt state before a new prompt.
@@ -64,13 +62,14 @@ func (c *FloorClient) Reset() {
 }
 
 func (c *FloorClient) debug(msg string) {
-	if c.Debug {
-		fmt.Printf("  \033[90m[acp-debug] %s\033[0m\n", msg)
-		if c.LogWriter != nil {
-			fmt.Fprintf(c.LogWriter, "  [acp-debug] %s\n", msg)
-		}
+	if c.DebugFunc != nil {
+		c.DebugFunc(msg)
+	}
+	if c.LogWriter != nil {
+		fmt.Fprintf(c.LogWriter, "  [acp] %s\n", msg)
 	}
 }
+
 
 // --- acp.Client interface ---
 

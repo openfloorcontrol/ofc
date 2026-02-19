@@ -3,6 +3,7 @@ package acp
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 
@@ -18,9 +19,14 @@ type AgentSession struct {
 }
 
 // NewAgentSession launches an ACP agent process and establishes a connection.
-func NewAgentSession(command string, args []string, env map[string]string, client *FloorClient) (*AgentSession, error) {
+// stderrWriter receives the agent's stderr output. If nil, defaults to os.Stderr.
+func NewAgentSession(command string, args []string, env map[string]string, client *FloorClient, stderrWriter io.Writer) (*AgentSession, error) {
 	cmd := exec.Command(command, args...)
-	cmd.Stderr = os.Stderr
+	if stderrWriter != nil {
+		cmd.Stderr = stderrWriter
+	} else {
+		cmd.Stderr = os.Stderr
+	}
 
 	// Pass through environment, with overrides
 	cmd.Env = os.Environ()
