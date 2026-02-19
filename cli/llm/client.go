@@ -1,3 +1,4 @@
+// Package llm provides an OpenAI-compatible LLM client with streaming support.
 package llm
 
 import (

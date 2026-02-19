@@ -1,3 +1,5 @@
+// Package acp implements the ACP (Agent Control Protocol) client,
+// handling communication with ACP agent subprocesses.
 package acp
 
 import (

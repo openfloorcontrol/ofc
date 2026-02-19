@@ -1,3 +1,5 @@
+// Package floor implements the floor orchestration engine,
+// managing multi-agent turn-taking, event routing, and frontends.
 package floor
 
 // ANSI color codes

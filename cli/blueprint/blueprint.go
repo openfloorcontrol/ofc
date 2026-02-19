@@ -1,3 +1,4 @@
+// Package blueprint defines the blueprint schema and loading for OFC floors.
 package blueprint
 
 import (

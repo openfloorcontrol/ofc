@@ -1,3 +1,4 @@
+// Package sandbox manages Docker-based sandboxed execution environments.
 package sandbox
 
 import (
