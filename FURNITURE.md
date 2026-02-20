@@ -196,12 +196,15 @@ agents:
 - [x] ACP agent MCP pass-through (capability-based transport selection)
 - [x] Blueprint `furniture:` and `agents[].furniture:` fields
 - [x] Coordinator lifecycle (init, start, stop)
+- [x] External MCP servers via command/stdio (`ExternalMCP` + go-sdk `CommandTransport`)
+- [x] Subprocess cleanup on coordinator stop (optional `io.Closer`)
 
 ## What's Next
 
-- [ ] External MCP servers (`type: mcp` with `command` or `url`)
+- [ ] External MCP servers via URL (connect to already-running servers)
 - [ ] Per-agent access control at the tool level
 - [ ] Furniture persistence (TaskBoard is in-memory only)
 - [ ] Stdio bridge for ACP agents that only support stdio MCP
+- [ ] Advanced MCP features (progress notifications, resource subscriptions, logging)
 
 ofc. 🎤

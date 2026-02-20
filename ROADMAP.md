@@ -13,6 +13,7 @@ ACP integration with Claude Code is working end-to-end: multi-agent coordination
 - **ACP output routing** — ACP subprocess stderr and debug output properly routed through the frontend instead of directly to stdout/stderr, enabling clean TUI rendering.
 - **Furniture system** — Shared interactive objects on the floor (task boards, etc.) that agents can interact with via tool calls. Built-in `Furniture` interface wrapped as MCP servers via go-sdk, exposed over HTTP (Echo) at `/api/v1/floors/{floor}/mcp/{name}`. LLM agents get namespaced tool injection; ACP agents get MCP pass-through. First built-in: TaskBoard with CRUD operations. Validated end-to-end with planner/coder demo.
 - **SSE MCP transport for ACP agents** — API server now serves both Streamable HTTP and SSE endpoints per furniture item. Transport auto-selected from agent's MCP capabilities reported during init. Validated with Claude Code (claude-code-acp) reading/writing the shared task board via SSE MCP, writing and testing actual code.
+- **External MCP servers as furniture** — OFC can spawn external MCP server subprocesses (`type: mcp` with `command`/`args` in blueprint) and expose their tools through the standard furniture pipeline. `ExternalMCP` connects as MCP client via go-sdk `CommandTransport`, discovers tools at startup, proxies calls. Validated with the Everything MCP test server (14 tools).
 
 ---
 
@@ -34,7 +35,10 @@ Expand what agents can interact with on the floor.
 - [x] Define how agents discover and use MCP-provided tools (LLM: namespaced tool calls; ACP: MCP pass-through)
 - [x] SSE transport alongside Streamable HTTP (claude-code-acp requires SSE despite advertising HTTP)
 - [x] Capability-based transport selection from agent init handshake
-- [ ] Test with practical external MCP servers (filesystem, database, APIs)
+- [x] External MCP servers via command/stdio (`ExternalMCP` + go-sdk `CommandTransport`)
+- [x] Validated with Everything MCP test server (14 tools discovered, tool calls work)
+- [ ] Test with practical MCP servers in real scenarios (filesystem, database, APIs)
+- [ ] External MCP servers via URL (connect to already-running servers)
 - [ ] Stdio bridge (`ofc mcp-bridge`) for ACP agents that only support stdio
 
 ### 2b: Collaboration Furniture
