@@ -1,0 +1,34 @@
+# OFC Blueprint - Everything MCP Server
+# Tests external MCP server integration with the "Everything" test server.
+# Run with: ofc run examples/everything/blueprint.yaml
+
+name: everything-demo
+description: "Testing external MCP server integration"
+
+defaults:
+  endpoint: http://localhost:11434/v1
+  model: glm-4.7:cloud
+
+furniture:
+  - name: everything
+    type: mcp
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-everything"]
+
+agents:
+  - id: "@assistant"
+    name: "Assistant"
+    activation: always
+    can_use_tools: false
+    temperature: 0.7
+    furniture: [everything]
+    prompt: |
+      You are @assistant in a multi-agent chatroom with access to the "everything" MCP test server.
+
+      You have access to various tools via the everything server, including:
+      - everything__echo: Echo back a message
+      - everything__get-sum: Add two numbers
+      - everything__get-env: Show environment variables
+      - everything__get-tiny-image: Get a small image
+
+      Try out the tools when the user asks. Keep responses concise.

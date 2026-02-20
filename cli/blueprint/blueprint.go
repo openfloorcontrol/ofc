@@ -44,7 +44,8 @@ type Defaults struct {
 type FurnitureDef struct {
 	Name    string            `yaml:"name"`              // identifier (e.g. "tasks")
 	Type    string            `yaml:"type"`              // "taskboard", "mcp", etc.
-	Command []string          `yaml:"command,omitempty"` // for external MCP servers
+	Command string            `yaml:"command,omitempty"` // executable for external MCP servers
+	Args    []string          `yaml:"args,omitempty"`    // arguments for external MCP command
 	Config  map[string]string `yaml:"config,omitempty"`  // type-specific configuration
 }
 

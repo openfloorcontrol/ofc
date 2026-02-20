@@ -148,7 +148,7 @@ func (co *Coordinator) Start() error {
 	return nil
 }
 
-// Stop tears down ACP sessions, API server, and sandbox.
+// Stop tears down ACP sessions, furniture, API server, and sandbox.
 func (co *Coordinator) Stop() {
 	for id, session := range co.sessions {
 		if co.debugFn != nil {
@@ -158,6 +158,12 @@ func (co *Coordinator) Stop() {
 	}
 	if co.apiServer != nil {
 		co.apiServer.Stop()
+	}
+	// Close furniture that needs cleanup (e.g. external MCP subprocesses)
+	for _, f := range co.furnitureMap {
+		if closer, ok := f.(io.Closer); ok {
+			closer.Close()
+		}
 	}
 	if co.sandbox != nil {
 		co.sandbox.Stop()
@@ -256,8 +262,9 @@ func (co *Coordinator) initFurniture() error {
 
 	co.furnitureMap = make(map[string]furniture.Furniture)
 
+	ctx := context.Background()
 	for _, fd := range co.bp.Furniture {
-		f, err := createFurniture(fd)
+		f, err := createFurniture(ctx, fd)
 		if err != nil {
 			return fmt.Errorf("failed to create furniture %q: %w", fd.Name, err)
 		}
@@ -326,10 +333,15 @@ func (co *Coordinator) buildACPMCPServers(agent blueprint.Agent, session *acpcli
 }
 
 // createFurniture instantiates a furniture from its blueprint definition.
-func createFurniture(fd blueprint.FurnitureDef) (furniture.Furniture, error) {
+func createFurniture(ctx context.Context, fd blueprint.FurnitureDef) (furniture.Furniture, error) {
 	switch fd.Type {
 	case "taskboard":
 		return furniture.NewTaskBoard(), nil
+	case "mcp":
+		if fd.Command == "" {
+			return nil, fmt.Errorf("mcp furniture %q requires a command", fd.Name)
+		}
+		return furniture.NewExternalMCP(ctx, fd.Name, fd.Command, fd.Args)
 	default:
 		return nil, fmt.Errorf("unknown furniture type %q", fd.Type)
 	}
