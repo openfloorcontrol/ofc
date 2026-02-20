@@ -83,10 +83,14 @@ func (s *AgentSession) Initialize(ctx context.Context) error {
 }
 
 // StartSession creates a new ACP session with the given working directory.
-func (s *AgentSession) StartSession(ctx context.Context, cwd string) error {
+// mcpServers are MCP servers to make available to the agent.
+func (s *AgentSession) StartSession(ctx context.Context, cwd string, mcpServers []acpsdk.McpServer) error {
+	if mcpServers == nil {
+		mcpServers = []acpsdk.McpServer{}
+	}
 	resp, err := s.Conn.NewSession(ctx, acpsdk.NewSessionRequest{
 		Cwd:        cwd,
-		McpServers: []acpsdk.McpServer{},
+		McpServers: mcpServers,
 	})
 	if err != nil {
 		return fmt.Errorf("new session: %w", err)

@@ -22,6 +22,7 @@ type Agent struct {
 	CanUseTools bool              `yaml:"can_use_tools"`
 	Temperature float64           `yaml:"temperature"`
 	ToolContext string            `yaml:"tool_context"`
+	Furniture   []string          `yaml:"furniture,omitempty"` // names of accessible furniture
 }
 
 // Workstation configuration
@@ -39,13 +40,22 @@ type Defaults struct {
 	Model    string `yaml:"model"`
 }
 
+// FurnitureDef configures a piece of furniture on the floor.
+type FurnitureDef struct {
+	Name    string            `yaml:"name"`              // identifier (e.g. "tasks")
+	Type    string            `yaml:"type"`              // "taskboard", "mcp", etc.
+	Command []string          `yaml:"command,omitempty"` // for external MCP servers
+	Config  map[string]string `yaml:"config,omitempty"`  // type-specific configuration
+}
+
 // Blueprint is a complete floor configuration
 type Blueprint struct {
-	Name         string        `yaml:"name"`
-	Description  string        `yaml:"description"`
-	Defaults     Defaults      `yaml:"defaults"`
-	Agents       []Agent       `yaml:"agents"`
-	Workstations []Workstation `yaml:"workstations"`
+	Name         string         `yaml:"name"`
+	Description  string         `yaml:"description"`
+	Defaults     Defaults       `yaml:"defaults"`
+	Agents       []Agent        `yaml:"agents"`
+	Workstations []Workstation  `yaml:"workstations"`
+	Furniture    []FurnitureDef `yaml:"furniture,omitempty"`
 }
 
 // Load reads a blueprint from a YAML file

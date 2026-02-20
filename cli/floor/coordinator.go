@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	acpsdk "github.com/coder/acp-go-sdk"
 	acpclient "github.com/openfloorcontrol/ofc/acp"
 	"github.com/openfloorcontrol/ofc/blueprint"
+	"github.com/openfloorcontrol/ofc/furniture"
 	"github.com/openfloorcontrol/ofc/sandbox"
 )
 
@@ -26,6 +28,8 @@ type Coordinator struct {
 	sessions     map[string]*acpclient.AgentSession
 	bp           *blueprint.Blueprint
 	colorMap     map[string]string
+	furnitureMap map[string]furniture.Furniture // furniture instances keyed by name
+	apiServer    *APIServer                     // serves MCP endpoints for furniture
 }
 
 // NewCoordinator creates a coordinator with a CLI frontend.
@@ -97,6 +101,11 @@ func (co *Coordinator) Start() error {
 		co.frontend.Render(SystemInfo{Text: fmt.Sprintf("Sandbox ready (%s)", co.sandbox.ContainerID[:12])})
 	}
 
+	// Initialize furniture
+	if err := co.initFurniture(); err != nil {
+		return err
+	}
+
 	for _, agent := range co.bp.Agents {
 		if agent.Type != "acp" {
 			continue
@@ -126,7 +135,8 @@ func (co *Coordinator) Start() error {
 			session.Close()
 			return fmt.Errorf("failed to initialize ACP agent %s: %w", agent.ID, err)
 		}
-		if err := session.StartSession(ctx, workDir); err != nil {
+		mcpServers := co.buildACPMCPServers(agent)
+		if err := session.StartSession(ctx, workDir, mcpServers); err != nil {
 			session.Close()
 			return fmt.Errorf("failed to create session for ACP agent %s: %w", agent.ID, err)
 		}
@@ -138,13 +148,16 @@ func (co *Coordinator) Start() error {
 	return nil
 }
 
-// Stop tears down ACP sessions and sandbox.
+// Stop tears down ACP sessions, API server, and sandbox.
 func (co *Coordinator) Stop() {
 	for id, session := range co.sessions {
 		if co.debugFn != nil {
 			co.debugFn(fmt.Sprintf("closing ACP session for %s", id))
 		}
 		session.Close()
+	}
+	if co.apiServer != nil {
+		co.apiServer.Stop()
 	}
 	if co.sandbox != nil {
 		co.sandbox.Stop()
@@ -227,11 +240,75 @@ func (co *Coordinator) runAgent(agentID string) RunnerResult {
 	}
 
 	runner := &LLMRunner{
-		Sandbox: co.sandbox,
-		Stream:  co.stream,
+		Sandbox:   co.sandbox,
+		Stream:    co.stream,
+		Furniture: co.furnitureMap,
 	}
 	messages := co.ctrl.BuildContext(agent)
 	return runner.Run(agent, messages)
+}
+
+// initFurniture creates furniture instances from the blueprint and starts the API server.
+func (co *Coordinator) initFurniture() error {
+	if len(co.bp.Furniture) == 0 {
+		return nil
+	}
+
+	co.furnitureMap = make(map[string]furniture.Furniture)
+
+	for _, fd := range co.bp.Furniture {
+		f, err := createFurniture(fd)
+		if err != nil {
+			return fmt.Errorf("failed to create furniture %q: %w", fd.Name, err)
+		}
+		co.furnitureMap[fd.Name] = f
+		co.frontend.Render(SystemInfo{Text: fmt.Sprintf("Furniture ready: %s (%s)", fd.Name, fd.Type)})
+	}
+
+	// Start API server for MCP access
+	co.apiServer = NewAPIServer()
+	for name, f := range co.furnitureMap {
+		mcpSrv := furniture.WrapAsMCP(f)
+		co.apiServer.RegisterFurniture("default", name, mcpSrv)
+	}
+	if err := co.apiServer.Start(":0"); err != nil {
+		return fmt.Errorf("failed to start furniture API server: %w", err)
+	}
+	co.frontend.Render(SystemInfo{Text: fmt.Sprintf("Furniture API server at %s", co.apiServer.BaseURL())})
+
+	return nil
+}
+
+// buildACPMCPServers builds the MCP server list for an ACP agent based on its furniture access.
+func (co *Coordinator) buildACPMCPServers(agent blueprint.Agent) []acpsdk.McpServer {
+	if co.apiServer == nil || len(agent.Furniture) == 0 {
+		return nil
+	}
+
+	var servers []acpsdk.McpServer
+	for _, fname := range agent.Furniture {
+		if _, ok := co.furnitureMap[fname]; !ok {
+			continue
+		}
+		url := co.apiServer.BaseURL() + "/api/v1/floors/default/mcp/" + fname + "/"
+		servers = append(servers, acpsdk.McpServer{
+			Http: &acpsdk.McpServerHttp{
+				Name: fname,
+				Url:  url,
+			},
+		})
+	}
+	return servers
+}
+
+// createFurniture instantiates a furniture from its blueprint definition.
+func createFurniture(fd blueprint.FurnitureDef) (furniture.Furniture, error) {
+	switch fd.Type {
+	case "taskboard":
+		return furniture.NewTaskBoard(), nil
+	default:
+		return nil, fmt.Errorf("unknown furniture type %q", fd.Type)
+	}
 }
 
 // renderHeader prints the floor header.
@@ -251,6 +328,13 @@ func (co *Coordinator) renderHeader() {
 		agentList = append(agentList, color+a.ID+Reset)
 	}
 	co.frontend.Render(SystemInfo{Text: fmt.Sprintf("Agents: %s", strings.Join(agentList, ", "))})
+	if len(co.furnitureMap) > 0 {
+		var furnitureNames []string
+		for name := range co.furnitureMap {
+			furnitureNames = append(furnitureNames, name)
+		}
+		co.frontend.Render(SystemInfo{Text: fmt.Sprintf("Furniture: %s", strings.Join(furnitureNames, ", "))})
+	}
 	co.frontend.Render(SystemInfo{Text: fmt.Sprintf("Type %s/quit%s to exit, %s/clear%s to reset", Bold, Reset, Bold, Reset)})
 	co.frontend.Render(SystemInfo{Text: fmt.Sprintf("%s%s%s", Bold, strings.Repeat("=", 50), Reset)})
 }
