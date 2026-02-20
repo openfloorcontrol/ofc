@@ -11,7 +11,8 @@ ACP integration with Claude Code is working end-to-end: multi-agent coordination
 - **Event-driven floor architecture** — The monolithic floor loop has been refactored into a reactive, event-driven design: a pure-logic Controller (event in, decision out), Runners (LLM/ACP agent execution), Frontend/StreamSink interfaces, and a Coordinator wiring layer. The controller is fully testable with zero mocks.
 - **Bubble Tea TUI frontend** — Split-layout terminal UI (`--tui`) with scrollable viewport and text input, built on charmbracelet/bubbletea. Runs alongside the existing CLI frontend via the decoupled Frontend interface.
 - **ACP output routing** — ACP subprocess stderr and debug output properly routed through the frontend instead of directly to stdout/stderr, enabling clean TUI rendering.
-- **Furniture system** — Shared interactive objects on the floor (task boards, etc.) that agents can interact with via tool calls. Built-in `Furniture` interface wrapped as MCP servers via go-sdk, exposed over HTTP (Echo) at `/api/v1/floors/{floor}/mcp/{name}`. LLM agents get namespaced tool injection; ACP agents get HTTP MCP pass-through. First built-in: TaskBoard with CRUD operations. Validated end-to-end with planner/coder demo.
+- **Furniture system** — Shared interactive objects on the floor (task boards, etc.) that agents can interact with via tool calls. Built-in `Furniture` interface wrapped as MCP servers via go-sdk, exposed over HTTP (Echo) at `/api/v1/floors/{floor}/mcp/{name}`. LLM agents get namespaced tool injection; ACP agents get MCP pass-through. First built-in: TaskBoard with CRUD operations. Validated end-to-end with planner/coder demo.
+- **SSE MCP transport for ACP agents** — API server now serves both Streamable HTTP and SSE endpoints per furniture item. Transport auto-selected from agent's MCP capabilities reported during init. Validated with Claude Code (claude-code-acp) reading/writing the shared task board via SSE MCP, writing and testing actual code.
 
 ---
 
@@ -30,9 +31,11 @@ Expand what agents can interact with on the floor.
 
 ### 2a: MCP Servers
 - [x] Integrate MCP servers as furniture items (Furniture interface → MCP wrapper → HTTP API)
-- [x] Define how agents discover and use MCP-provided tools (LLM: namespaced tool calls; ACP: HTTP MCP pass-through)
+- [x] Define how agents discover and use MCP-provided tools (LLM: namespaced tool calls; ACP: MCP pass-through)
+- [x] SSE transport alongside Streamable HTTP (claude-code-acp requires SSE despite advertising HTTP)
+- [x] Capability-based transport selection from agent init handshake
 - [ ] Test with practical external MCP servers (filesystem, database, APIs)
-- [ ] Stdio bridge (`ofc mcp-bridge`) for ACP agents that don't support HTTP MCP
+- [ ] Stdio bridge (`ofc mcp-bridge`) for ACP agents that only support stdio
 
 ### 2b: Collaboration Furniture
 - [x] Task board — shared state agents can read/write/update
