@@ -12,10 +12,11 @@ import (
 
 // AgentSession manages the lifecycle of one ACP agent connection.
 type AgentSession struct {
-	Conn      *acpsdk.ClientSideConnection
-	SessionID acpsdk.SessionId
-	Cmd       *exec.Cmd
-	Client    *FloorClient
+	Conn            *acpsdk.ClientSideConnection
+	SessionID       acpsdk.SessionId
+	Cmd             *exec.Cmd
+	Client          *FloorClient
+	McpCapabilities acpsdk.McpCapabilities // from agent init response
 }
 
 // NewAgentSession launches an ACP agent process and establishes a connection.
@@ -78,7 +79,8 @@ func (s *AgentSession) Initialize(ctx context.Context) error {
 		return fmt.Errorf("initialize: %w", err)
 	}
 
-	s.Client.debug(fmt.Sprintf("initialized: protocol v%d, agent=%v", resp.ProtocolVersion, resp.AgentCapabilities))
+	s.McpCapabilities = resp.AgentCapabilities.McpCapabilities
+	s.Client.debug(fmt.Sprintf("initialized: protocol v%d, mcp={http:%v, sse:%v}", resp.ProtocolVersion, s.McpCapabilities.Http, s.McpCapabilities.Sse))
 	return nil
 }
 

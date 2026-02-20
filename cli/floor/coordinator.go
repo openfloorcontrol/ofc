@@ -135,7 +135,7 @@ func (co *Coordinator) Start() error {
 			session.Close()
 			return fmt.Errorf("failed to initialize ACP agent %s: %w", agent.ID, err)
 		}
-		mcpServers := co.buildACPMCPServers(agent)
+		mcpServers := co.buildACPMCPServers(agent, session)
 		if err := session.StartSession(ctx, workDir, mcpServers); err != nil {
 			session.Close()
 			return fmt.Errorf("failed to create session for ACP agent %s: %w", agent.ID, err)
@@ -279,24 +279,48 @@ func (co *Coordinator) initFurniture() error {
 	return nil
 }
 
-// buildACPMCPServers builds the MCP server list for an ACP agent based on its furniture access.
-func (co *Coordinator) buildACPMCPServers(agent blueprint.Agent) []acpsdk.McpServer {
+// buildACPMCPServers builds the MCP server list for an ACP agent based on its
+// furniture access and MCP capabilities reported during initialization.
+func (co *Coordinator) buildACPMCPServers(agent blueprint.Agent, session *acpclient.AgentSession) []acpsdk.McpServer {
 	if co.apiServer == nil || len(agent.Furniture) == 0 {
 		return nil
 	}
+
+	caps := session.McpCapabilities
+	base := co.apiServer.BaseURL()
 
 	var servers []acpsdk.McpServer
 	for _, fname := range agent.Furniture {
 		if _, ok := co.furnitureMap[fname]; !ok {
 			continue
 		}
-		url := co.apiServer.BaseURL() + "/api/v1/floors/default/mcp/" + fname + "/"
-		servers = append(servers, acpsdk.McpServer{
-			Http: &acpsdk.McpServerHttp{
-				Name: fname,
-				Url:  url,
-			},
-		})
+
+		switch {
+		case caps.Sse:
+			url := base + "/api/v1/floors/default/sse/" + fname
+			servers = append(servers, acpsdk.McpServer{
+				Sse: &acpsdk.McpServerSse{
+					Type:    "sse",
+					Name:    fname,
+					Url:     url,
+					Headers: []acpsdk.HttpHeader{},
+				},
+			})
+		case caps.Http:
+			url := base + "/api/v1/floors/default/mcp/" + fname + "/"
+			servers = append(servers, acpsdk.McpServer{
+				Http: &acpsdk.McpServerHttp{
+					Type:    "http",
+					Name:    fname,
+					Url:     url,
+					Headers: []acpsdk.HttpHeader{},
+				},
+			})
+		default:
+			if co.debugFn != nil {
+				co.debugFn(fmt.Sprintf("agent %s has no supported MCP transport for furniture %s (need sse or http)", agent.ID, fname))
+			}
+		}
 	}
 	return servers
 }

@@ -24,19 +24,26 @@ func NewAPIServer() *APIServer {
 	return &APIServer{echo: e}
 }
 
-// RegisterFurniture adds an MCP endpoint for a piece of furniture.
-// The endpoint is served at /api/v1/floors/{floor}/mcp/{name}/
+// RegisterFurniture adds MCP endpoints for a piece of furniture.
+// Registers both Streamable HTTP and SSE transports:
+//   - /api/v1/floors/{floor}/mcp/{name}/ — Streamable HTTP
+//   - /api/v1/floors/{floor}/sse/{name}/ — SSE (legacy, used by claude-code-acp)
 func (s *APIServer) RegisterFurniture(floor, name string, mcpSrv *mcp.Server) {
-	path := fmt.Sprintf("/api/v1/floors/%s/mcp/%s", floor, name)
-	handler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
-		return mcpSrv
-	}, &mcp.StreamableHTTPOptions{
+	getServer := func(r *http.Request) *mcp.Server { return mcpSrv }
+
+	// Streamable HTTP endpoint
+	httpPath := fmt.Sprintf("/api/v1/floors/%s/mcp/%s", floor, name)
+	httpHandler := mcp.NewStreamableHTTPHandler(getServer, &mcp.StreamableHTTPOptions{
 		Stateless: true,
 	})
-	// Mount the stdlib http.Handler under the MCP path.
-	// Echo needs a wildcard suffix to match sub-paths (e.g. /mcp).
-	s.echo.Any(path, echo.WrapHandler(handler))
-	s.echo.Any(path+"/", echo.WrapHandler(handler))
+	s.echo.Any(httpPath, echo.WrapHandler(httpHandler))
+	s.echo.Any(httpPath+"/", echo.WrapHandler(httpHandler))
+
+	// SSE endpoint (for ACP agents like claude-code-acp that only support SSE)
+	ssePath := fmt.Sprintf("/api/v1/floors/%s/sse/%s", floor, name)
+	sseHandler := mcp.NewSSEHandler(getServer, nil)
+	s.echo.Any(ssePath, echo.WrapHandler(sseHandler))
+	s.echo.Any(ssePath+"/", echo.WrapHandler(sseHandler))
 }
 
 // Start begins listening in a background goroutine on the given address.
