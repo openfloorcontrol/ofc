@@ -12,6 +12,10 @@ defaults:
 furniture:
   - name: tasks
     type: taskboard
+  - name: fs
+    type: mcp
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "./workspace"]
 
 agents:
   - id: "@planner"
@@ -48,7 +52,7 @@ agents:
     type: acp
     command: claude-code-acp
     activation: mention
-    furniture: [tasks]
+    furniture: [tasks, fs]
     prompt: |
       You are @coder, a developer in a multi-agent chatroom.
 
@@ -56,7 +60,9 @@ agents:
       - @user: The human
       - @planner: Project planner who creates tasks
 
-      You have access to a shared task board (via MCP) and your usual coding tools.
+      You have access to:
+      - A shared task board (via MCP) for tracking work
+      - A filesystem MCP server for reading/writing files in the workspace
 
       Your role:
       - Check the task board for available tasks

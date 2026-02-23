@@ -171,7 +171,7 @@ func (c *FloorClient) ReadTextFile(ctx context.Context, params acpsdk.ReadTextFi
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(c.WorkspaceDir, path)
 	}
-	c.debug(fmt.Sprintf("fs/read: %s", path))
+	c.debug(fmt.Sprintf("acp read_file: %s", path))
 
 	var content string
 	if c.Sandbox != nil {
@@ -216,7 +216,7 @@ func (c *FloorClient) WriteTextFile(ctx context.Context, params acpsdk.WriteText
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(c.WorkspaceDir, path)
 	}
-	c.debug(fmt.Sprintf("fs/write: %s (%d bytes)", path, len(params.Content)))
+	c.debug(fmt.Sprintf("acp write_file: %s (%d bytes)", path, len(params.Content)))
 
 	if c.Sandbox != nil {
 		// Write into sandbox container
@@ -244,7 +244,7 @@ func (c *FloorClient) WriteTextFile(ctx context.Context, params acpsdk.WriteText
 // --- Terminal callbacks ---
 
 func (c *FloorClient) CreateTerminal(ctx context.Context, params acpsdk.CreateTerminalRequest) (acpsdk.CreateTerminalResponse, error) {
-	c.debug(fmt.Sprintf("terminal/create: %s %v", params.Command, params.Args))
+	c.debug(fmt.Sprintf("acp terminal: %s %v", params.Command, params.Args))
 
 	id, err := c.Terminals.Create(params.Command, params.Args, params.Cwd)
 	if err != nil {
