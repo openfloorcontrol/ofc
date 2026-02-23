@@ -46,6 +46,7 @@ examples/                     # Blueprint examples
   everything/                 # External MCP test server demo
   taskboard/                  # LLM agents with shared task board
   data-analysis/              # LLM agents with Docker sandbox
+  data-analysis-acp/          # LLM analyst (fs MCP) + Claude Code coder
   acp-test/                   # ACP agent with sandbox
   chaindepth/                 # Delegation chain depth test
 ```
@@ -68,7 +69,7 @@ User Input → Frontend.ReadInput() → Controller.HandleEvent() → Coordinator
 
 ## Two Agent Paths
 
-- **LLM agents**: Controller builds `[]llm.Message` context. LLMRunner calls OpenAI-compatible API. Furniture tools injected as function calls namespaced `{furniture}__{tool}`. Direct `Furniture.Call()`.
+- **LLM agents**: Controller builds `[]llm.Message` context. LLMRunner calls OpenAI-compatible API. Furniture tools injected as function calls namespaced `{furniture}__{tool}`. Direct `Furniture.Call()`. `can_use_sandbox` controls bash tool access (requires Docker sandbox).
 - **ACP agents** (e.g. Claude Code via `claude-code-acp`): Controller builds `[]acpsdk.ContentBlock` context. ACPRunner sends via `AgentSession.Prompt()` over stdio. Furniture exposed as MCP server URLs (SSE preferred). ACP agents also have built-in file read/write and terminal execution via FloorClient callbacks (separate from furniture MCP).
 
 ## Furniture System
