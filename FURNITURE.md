@@ -198,6 +198,8 @@ agents:
 - [x] Coordinator lifecycle (init, start, stop)
 - [x] External MCP servers via command/stdio (`ExternalMCP` + go-sdk `CommandTransport`)
 - [x] Subprocess cleanup on coordinator stop (optional `io.Closer`)
+- [x] LLM agents using external MCP tools via function calls (validated with filesystem MCP)
+- [x] ACP agents using external MCP tools via SSE (validated with filesystem MCP)
 
 ## What's Next
 

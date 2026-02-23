@@ -37,7 +37,7 @@ Expand what agents can interact with on the floor.
 - [x] Capability-based transport selection from agent init handshake
 - [x] External MCP servers via command/stdio (`ExternalMCP` + go-sdk `CommandTransport`)
 - [x] Validated with Everything MCP test server (14 tools discovered, tool calls work)
-- [ ] Test with practical MCP servers in real scenarios (filesystem, database, APIs)
+- [x] Validated with filesystem MCP server — LLM agent (function calls) and ACP agent (SSE) both working
 - [ ] External MCP servers via URL (connect to already-running servers)
 - [ ] Stdio bridge (`ofc mcp-bridge`) for ACP agents that only support stdio
 
