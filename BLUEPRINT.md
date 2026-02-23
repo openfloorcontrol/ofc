@@ -52,7 +52,7 @@ agents:
   - id: "@data"
     name: "Data Analyst"
     activation: always
-    can_use_tools: true
+    can_use_sandbox: true
     tool_context: summary
     temperature: 0.7
     prompt: |
@@ -89,7 +89,7 @@ Most agents need an ACP adapter — for example, Claude Code uses
 | `type` | `"llm"` | `"llm"` for OpenAI-compatible API, `"acp"` for Agent Client Protocol |
 | `prompt` | | System prompt defining the agent's role and behavior |
 | `activation` | `"mention"` | When the agent wakes up: `"mention"` (only on `@id?`) or `"always"` (listens to everything) |
-| `can_use_tools` | `false` | Whether the agent can use workstation tools (sandbox, etc.) |
+| `can_use_sandbox` | `false` | Whether the agent can use workstation tools (sandbox, etc.) |
 | `tool_context` | `"full"` | How much of other agents' tool output to include: `"full"`, `"summary"`, or `"none"` |
 | `temperature` | `0.7` | LLM temperature |
 
@@ -163,7 +163,7 @@ agents:
   - id: "@data"
     name: "Data Analyst"
     activation: always
-    can_use_tools: true
+    can_use_sandbox: true
     temperature: 0.7
     tool_context: summary
     prompt: |
@@ -177,7 +177,7 @@ agents:
   - id: "@code"
     name: "Coder"
     activation: mention
-    can_use_tools: true
+    can_use_sandbox: true
     temperature: 0.2
     tool_context: full
     prompt: |

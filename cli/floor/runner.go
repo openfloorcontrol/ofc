@@ -98,7 +98,7 @@ func (r *LLMRunner) Run(agent *blueprint.Agent, messages []llm.Message) RunnerRe
 // buildTools constructs the tool list for an LLM agent, including bash and furniture tools.
 func (r *LLMRunner) buildTools(agent *blueprint.Agent) []llm.Tool {
 	var tools []llm.Tool
-	if agent.CanUseTools && r.Sandbox != nil {
+	if agent.CanUseSandbox && r.Sandbox != nil {
 		tools = append(tools, llm.BashTool)
 	}
 	for _, fname := range agent.Furniture {

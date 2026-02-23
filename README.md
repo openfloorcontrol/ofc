@@ -61,10 +61,10 @@ name: data-analysis
 agents:
   - id: "@data"
     activation: always
-    can_use_tools: true
+    can_use_sandbox: true
   - id: "@code"
     activation: mention
-    can_use_tools: true
+    can_use_sandbox: true
 workstations:
   - type: sandbox
     image: python:3.11-slim

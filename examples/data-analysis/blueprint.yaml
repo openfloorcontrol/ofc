@@ -14,7 +14,7 @@ agents:
   - id: "@data"
     name: "Data Analyst"
     activation: always
-    can_use_tools: true
+    can_use_sandbox: true
     temperature: 0.7
     tool_context: summary  # Don't flood with tool output
     prompt: |
@@ -52,7 +52,7 @@ agents:
   - id: "@code"
     name: "Coder"
     activation: mention
-    can_use_tools: true
+    can_use_sandbox: true
     temperature: 0.2
     tool_context: full
     prompt: |

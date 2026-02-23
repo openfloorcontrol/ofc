@@ -12,7 +12,7 @@ agents:
   - id: "@assistant"
     name: "Assistant"
     activation: always
-    can_use_tools: false
+    can_use_sandbox: false
     temperature: 0.7
     prompt: |
       You are a helpful assistant.
@@ -23,13 +23,13 @@ agents:
   - id: "@helper"
     name: helper
     activation: mention
-    can_use_tools: false
+    can_use_sandbox: false
     prompt: |
       When asked, say "@helper2? what do you think?" and report back what he told you?
 
   - id: "@helper2"
     name: helper2
     activation: mention
-    can_use_tools: false
+    can_use_sandbox: false
     prompt: |
       When asked, say "Nothing to report, sir"

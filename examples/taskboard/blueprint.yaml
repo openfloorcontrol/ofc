@@ -17,7 +17,7 @@ agents:
   - id: "@planner"
     name: "Planner"
     activation: always
-    can_use_tools: false
+    can_use_sandbox: false
     temperature: 0.7
     furniture: [tasks]
     prompt: |
@@ -46,7 +46,7 @@ agents:
   - id: "@coder"
     name: "Coder"
     activation: mention
-    can_use_tools: false
+    can_use_sandbox: false
     temperature: 0.3
     furniture: [tasks]
     prompt: |

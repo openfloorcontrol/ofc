@@ -19,7 +19,7 @@ type Agent struct {
 	Env         map[string]string `yaml:"env"`     // ACP: env vars for agent process
 	Prompt      string            `yaml:"prompt"`
 	Activation  string            `yaml:"activation"`
-	CanUseTools bool              `yaml:"can_use_tools"`
+	CanUseSandbox bool            `yaml:"can_use_sandbox"`
 	Temperature float64           `yaml:"temperature"`
 	ToolContext string            `yaml:"tool_context"`
 	Furniture   []string          `yaml:"furniture,omitempty"` // names of accessible furniture
