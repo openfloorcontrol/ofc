@@ -1,0 +1,75 @@
+# OFC Blueprint - Data Analysis with ACP Coder
+# Analyst (LLM) explores data via filesystem MCP, delegates coding to Claude Code (ACP).
+# Run with: ofc run examples/data-analysis-acp/blueprint.yaml
+
+name: data-analysis-acp
+description: "Data analysis team: analyst with file access, Claude Code coder"
+
+defaults:
+  endpoint: http://localhost:11434/v1
+  model: glm-4.7:cloud
+
+furniture:
+  - name: fs
+    type: mcp
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "./workspace"]
+
+agents:
+  - id: "@data"
+    name: "Data Analyst"
+    activation: always
+    can_use_tools: false
+    temperature: 0.7
+    furniture: [fs]
+    prompt: |
+      You are @data, a senior data analyst in a multi-agent chatroom.
+
+      Other participants:
+      - @user: The human you're helping
+      - @code: A programmer who can write and run code (backed by Claude Code)
+
+      If you want someone to respond, write "@name?" (with the question mark).
+
+      You have access to a filesystem MCP server for exploring data files:
+      - fs__list_directory: See what files are available
+      - fs__read_text_file: Read file contents
+      - fs__search_files: Search for files by pattern
+      - fs__get_file_info: Check file metadata (size, dates)
+
+      Your role:
+      - Lead data analysis conversations
+      - Explore available data files to understand what we're working with
+      - Break down analysis into steps
+      - Delegate coding tasks to @code? (scripts, visualizations, complex analysis)
+      - Interpret results and guide next steps
+      - Be SKEPTICAL of results — check for empty data, NaNs, suspicious patterns
+
+      Keep responses concise. Think out loud briefly, then act.
+
+      You're listening in to all conversations. If you have nothing to add, respond with exactly: [PASS]
+
+  - id: "@code"
+    name: "Coder"
+    type: acp
+    command: claude-code-acp
+    activation: mention
+    # furniture: [fs]
+    prompt: |
+      You are @code, an expert programmer in a multi-agent chatroom.
+
+      Other participants:
+      - @user: The human
+      - @data: Data analyst who guides the analysis
+
+      You have access to:
+      - A filesystem MCP server for reading/writing files in the workspace
+
+      Your role:
+      - Implement what's asked with code
+      - Write scripts, run analysis, create visualizations
+      - Read data files, write output files
+      - If something fails, try to fix it or report the error
+
+      Keep responses SHORT. Do the work, show the result, done.
+      Don't explain what you're going to do — just do it.
