@@ -1,6 +1,7 @@
 package floor
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strings"
@@ -12,70 +13,29 @@ import (
 )
 
 const (
-	textareaHeight = 3
+	textareaHeight  = 3
 	separatorHeight = 1
 )
 
-// --- TUIFrontend: implements Frontend + StreamSink ---
-
-// TUIFrontend bridges the coordinator (background goroutine) with the
-// Bubble Tea event loop (main thread) via channels and p.Send().
+// TUIFrontend bridges the floor (background goroutine) with the
+// Bubble Tea event loop (main thread) via p.Send().
 type TUIFrontend struct {
 	program  *tea.Program
-	inputCh  chan Event
 	out      *Output // for log file only
 	colorMap map[string]string
 	debug    bool
 }
 
-// NewTUIFrontend creates a TUI frontend and its Bubble Tea model.
-// Call SetProgram() after creating the tea.Program.
-func NewTUIFrontend(logPath string, debug bool, colorMap map[string]string) (*TUIFrontend, *tuiModel) {
-	inputCh := make(chan Event, 1)
-
-	frontend := &TUIFrontend{
-		inputCh:  inputCh,
-		out:      NewOutput(logPath, false), // log file only, no terminal debug
-		colorMap: colorMap,
-		debug:    debug,
-	}
-
-	model := &tuiModel{
-		inputCh:  inputCh,
-		colorMap: colorMap,
-	}
-
-	return frontend, model
-}
-
-// SetProgram sets the Bubble Tea program reference. Must be called before Run().
+// SetProgram sets the Bubble Tea program reference. Must be called before RunLoop().
 func (t *TUIFrontend) SetProgram(p *tea.Program) {
 	t.program = p
 }
 
-// Render sends an event to the Bubble Tea UI and logs it.
+// Render sends a display event to Bubble Tea (used by cmd/run.go for debug).
 func (t *TUIFrontend) Render(ev Event) {
 	if t.program != nil {
 		t.program.Send(ev)
 	}
-	t.logEvent(ev)
-}
-
-// OnStream sends a streaming event to the Bubble Tea UI and logs it.
-func (t *TUIFrontend) OnStream(ev Event) {
-	if t.program != nil {
-		t.program.Send(ev)
-	}
-	t.logEvent(ev)
-}
-
-// ReadInput blocks until the user submits input from the TUI textarea.
-func (t *TUIFrontend) ReadInput() (Event, error) {
-	ev, ok := <-t.inputCh
-	if !ok {
-		return nil, io.EOF
-	}
-	return ev, nil
 }
 
 // LogWriter returns the log file writer for subsystems.
@@ -88,41 +48,226 @@ func (t *TUIFrontend) Close() {
 	t.out.Close()
 }
 
-// logEvent writes event details to the log file (no terminal output).
-func (t *TUIFrontend) logEvent(ev Event) {
+// --- Bubble Tea message types ---
+
+// tuiDisplayMsg wraps a display event for injection into Bubble Tea.
+type tuiDisplayMsg struct {
+	Event Event
+}
+
+// tuiPassedMsg signals [PASS] in the TUI.
+type tuiPassedMsg struct {
+	AgentID string
+}
+
+// tuiErrorMsg signals an agent error in the TUI.
+type tuiErrorMsg struct {
+	AgentID string
+	Err     error
+}
+
+// tuiClearedMsg signals conversation cleared.
+type tuiClearedMsg struct{}
+
+// tuiStoppedMsg signals the floor should stop.
+type tuiStoppedMsg struct{}
+
+// tuiSystemMsg displays a system info message.
+type tuiSystemMsg struct {
+	Text string
+}
+
+// --- Constructor ---
+
+// NewTUIFrontend creates a TUI frontend and its Bubble Tea model.
+func NewTUIFrontend(logPath string, debug bool, colorMap map[string]string) (*TUIFrontend, *tuiModel) {
+	frontend := &TUIFrontend{
+		out:      NewOutput(logPath, false),
+		colorMap: colorMap,
+		debug:    debug,
+	}
+
+	model := &tuiModel{
+		colorMap: colorMap,
+	}
+
+	return frontend, model
+}
+
+// --- RunLoop ---
+
+// RunLoop is the event-driven main loop for TUI.
+// It runs a background goroutine that reads Chat.Events(), calls Controller.Decide(),
+// dispatches agents, and sends display events to Bubble Tea via p.Send().
+func (t *TUIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]Agent, initialPrompt string) error {
+	// Start floor infrastructure
+	if err := floor.Start(func(msg string) {
+		if t.program != nil {
+			t.program.Send(tuiSystemMsg{Text: msg})
+		}
+	}); err != nil {
+		return err
+	}
+
+	// Background goroutine: read Chat events, dispatch agents
+	go func() {
+		defer floor.Stop()
+
+		// Render header
+		if t.program != nil {
+			t.program.Send(tuiSystemMsg{Text: fmt.Sprintf("%s%s%s", Bold, strings.Repeat("=", 50), Reset)})
+			t.program.Send(tuiSystemMsg{Text: fmt.Sprintf("%sOFC - %s%s", Bold, floor.Blueprint.Name, Reset)})
+			if floor.Blueprint.Description != "" {
+				t.program.Send(tuiSystemMsg{Text: floor.Blueprint.Description})
+			}
+			var agentList []string
+			for _, a := range floor.Blueprint.Agents {
+				color := Cyan
+				if c, ok := t.colorMap[a.ID]; ok {
+					color = c
+				}
+				agentList = append(agentList, color+a.ID+Reset)
+			}
+			t.program.Send(tuiSystemMsg{Text: fmt.Sprintf("Agents: %s", strings.Join(agentList, ", "))})
+			t.program.Send(tuiSystemMsg{Text: fmt.Sprintf("%s%s%s", Bold, strings.Repeat("=", 50), Reset)})
+		}
+
+		// Post initial prompt if provided
+		if initialPrompt != "" {
+			if t.program != nil {
+				t.program.Send(tuiDisplayMsg{Event: AgentLabel{AgentID: "@user"}})
+				t.program.Send(tuiDisplayMsg{Event: TokenStreamed{AgentID: "@user", Token: initialPrompt + "\n"}})
+			}
+			floor.Chat.Post(ChatMessage{From: "@user", Content: initialPrompt})
+		}
+
+		var cancelAgent context.CancelFunc
+
+		for ev := range floor.Chat.Events() {
+			switch e := ev.(type) {
+			case MessagePosted:
+				t.logChatEvent(ev)
+				decision := ctrl.Decide(floor.Chat, e)
+				t.dispatchDecision(floor, agents, decision, &cancelAgent)
+
+			case StreamEvent:
+				if t.program != nil {
+					t.program.Send(tuiDisplayMsg{Event: e.Event})
+				}
+				t.logStreamEvent(e.Event)
+
+			case AgentFinished:
+				if t.program != nil {
+					t.program.Send(tuiDisplayMsg{Event: AgentDone{AgentID: e.AgentID}})
+				}
+
+			case AgentPassedEvent:
+				if t.program != nil {
+					t.program.Send(tuiPassedMsg{AgentID: e.AgentID})
+				}
+				t.out.Log("[%s]: [PASS]\n", e.AgentID)
+				decision := ctrl.Decide(floor.Chat, e)
+				t.dispatchDecision(floor, agents, decision, &cancelAgent)
+
+			case AgentErrorEvent:
+				if t.program != nil {
+					t.program.Send(tuiErrorMsg{AgentID: e.AgentID, Err: e.Err})
+				}
+				t.out.Log("[ERROR from %s: %v]\n", e.AgentID, e.Err)
+				decision := ctrl.Decide(floor.Chat, e)
+				t.dispatchDecision(floor, agents, decision, &cancelAgent)
+
+			case UserCommandEvent:
+				decision := ctrl.Decide(floor.Chat, e)
+				switch decision.Action {
+				case "stop":
+					if t.program != nil {
+						t.program.Send(tuiStoppedMsg{})
+					}
+					return
+				case "clear":
+					if t.program != nil {
+						t.program.Send(tuiClearedMsg{})
+					}
+				case "error":
+					if t.program != nil {
+						t.program.Send(tuiSystemMsg{Text: decision.Info})
+					}
+				}
+			}
+		}
+	}()
+
+	return nil
+}
+
+func (t *TUIFrontend) dispatchDecision(floor *Floor, agents map[string]Agent, d Decision, cancelAgent *context.CancelFunc) {
+	switch d.Action {
+	case "trigger":
+		agent, ok := agents[d.AgentID]
+		if !ok {
+			if t.program != nil {
+				t.program.Send(tuiSystemMsg{Text: fmt.Sprintf("[ERROR: unknown agent %s]", d.AgentID)})
+			}
+			return
+		}
+
+		// Show thinking
+		if t.program != nil {
+			t.program.Send(tuiDisplayMsg{Event: AgentThinking{AgentID: d.AgentID}})
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		*cancelAgent = cancel
+
+		go func() {
+			defer cancel()
+			agent.Run(ctx, floor)
+		}()
+	}
+}
+
+func (t *TUIFrontend) logChatEvent(ev ChatEvent) {
 	switch e := ev.(type) {
-	case SystemInfo:
-		t.out.Log("[System]: %s\n", e.Text)
-	case TokenStreamed:
-		t.out.Log("%s", e.Token)
+	case MessagePosted:
+		if e.Message.From != "@user" {
+			t.out.Log("\n")
+		}
+	}
+}
+
+func (t *TUIFrontend) logStreamEvent(ev Event) {
+	switch e := ev.(type) {
 	case AgentLabel:
 		t.out.Log("\n[%s]: ", e.AgentID)
+	case TokenStreamed:
+		t.out.Log("%s", e.Token)
 	case ToolCallStarted:
 		t.out.Log("\n  > %s\n", e.Title)
 	case ToolCallResult:
 		if e.Output != "" {
 			t.out.Log("  %s\n", e.Output)
 		}
-	case AgentDone:
-		t.out.Log("\n")
-	case AgentPassed:
-		t.out.Log("[%s]: [PASS]\n", e.AgentID)
-	case AgentError:
-		t.out.Log("[ERROR from %s: %v]\n", e.AgentID, e.Err)
 	}
 }
 
 // --- tuiModel: Bubble Tea Model ---
+// Posts directly to Chat instead of using inputCh.
 
 type tuiModel struct {
 	viewport viewport.Model
 	textarea textarea.Model
 	content  strings.Builder
-	inputCh  chan<- Event
+	chat     *Chat // set before program starts
 	colorMap map[string]string
 	ready    bool
 	width    int
 	height   int
+}
+
+// SetChat sets the Chat reference for posting user messages.
+func (m *tuiModel) SetChat(chat *Chat) {
+	m.chat = chat
 }
 
 func (m *tuiModel) Init() tea.Cmd {
@@ -167,18 +312,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		switch msg.Type {
-		case tea.KeyCtrlC:
-			// Signal quit to coordinator
-			select {
-			case m.inputCh <- UserCommand{Command: "/quit"}:
-			default:
-			}
-			return m, tea.Quit
-
-		case tea.KeyEsc:
-			select {
-			case m.inputCh <- UserCommand{Command: "/quit"}:
-			default:
+		case tea.KeyCtrlC, tea.KeyEsc:
+			if m.chat != nil {
+				m.chat.PostEvent(UserCommandEvent{Command: "/quit"})
 			}
 			return m, tea.Quit
 
@@ -192,84 +328,48 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.textarea.Reset()
 
-			// Display user input in viewport
+			// Display user input
 			userColor := Cyan
 			if c, ok := m.colorMap["@user"]; ok {
 				userColor = c
 			}
 			m.appendContent(fmt.Sprintf("\n%s%s[@user]:%s %s\n", Bold, userColor, Reset, text))
 
-			// Send to coordinator
-			if strings.HasPrefix(text, "/") {
-				select {
-				case m.inputCh <- UserCommand{Command: text}:
-				default:
-				}
-			} else {
-				select {
-				case m.inputCh <- UserMessage{Content: text}:
-				default:
+			// Post to Chat
+			if m.chat != nil {
+				if strings.HasPrefix(text, "/") {
+					m.chat.PostEvent(UserCommandEvent{Command: text})
+				} else {
+					m.chat.Post(ChatMessage{From: "@user", Content: text})
 				}
 			}
-
 			return m, nil
 		}
 
-		// All other keys go to textarea
 		var cmd tea.Cmd
 		m.textarea, cmd = m.textarea.Update(msg)
 		return m, cmd
 
-	// --- Floor events (injected via p.Send()) ---
+	// --- Display events from background goroutine ---
 
-	case SystemInfo:
+	case tuiDisplayMsg:
+		return m.handleDisplayEvent(msg.Event)
+
+	case tuiSystemMsg:
 		m.appendContent(fmt.Sprintf("%s%s%s\n", Dim, msg.Text, Reset))
 		return m, nil
 
-	case AgentThinking:
-		color := m.agentColor(msg.AgentID)
-		m.appendContent(fmt.Sprintf("\n%s%s[%s]:%s %sthinking...%s", Bold, color, msg.AgentID, Reset, Dim, Reset))
-		return m, nil
-
-	case AgentLabel:
-		// Replace "thinking..." with actual agent label
-		m.replaceThinking(msg.AgentID)
-		return m, nil
-
-	case TokenStreamed:
-		m.appendContent(msg.Token)
-		return m, nil
-
-	case ToolCallStarted:
-		m.appendContent(fmt.Sprintf("\n%s  > %s%s\n", Dim, msg.Title, Reset))
-		return m, nil
-
-	case ToolCallResult:
-		if msg.Output != "" {
-			display := msg.Output
-			if len(display) > 500 {
-				display = display[:500] + "..."
-			}
-			m.appendContent(fmt.Sprintf("%s  %s%s\n", Dim, display, Reset))
-		}
-		return m, nil
-
-	case AgentDone:
-		m.appendContent("\n")
-		return m, nil
-
-	case AgentPassed:
-		// Replace thinking with [PASS]
+	case tuiPassedMsg:
 		color := m.agentColor(msg.AgentID)
 		m.replaceThinking(msg.AgentID)
 		m.appendContent(fmt.Sprintf("%s%s[%s]:%s [PASS]\n", Bold, color, msg.AgentID, Reset))
 		return m, nil
 
-	case AgentError:
+	case tuiErrorMsg:
 		m.appendContent(fmt.Sprintf("\n%s[ERROR from %s: %v]%s\n", Red, msg.AgentID, msg.Err, Reset))
 		return m, nil
 
-	case ConversationCleared:
+	case tuiClearedMsg:
 		m.content.Reset()
 		if m.ready {
 			m.viewport.SetContent("")
@@ -278,24 +378,40 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.appendContent(fmt.Sprintf("%s[Conversation cleared]%s\n", Dim, Reset))
 		return m, nil
 
-	case FloorStopped:
+	case tuiStoppedMsg:
 		return m, tea.Quit
-
-	case WaitingForUser:
-		// No-op — textarea is always ready
-		return m, nil
-
-	case PromptAgent:
-		// No-op — coordinator handles dispatch
-		return m, nil
 	}
 
-	// Pass other messages to viewport (mouse wheel, etc.)
 	var cmd tea.Cmd
 	m.viewport, cmd = m.viewport.Update(msg)
 	cmds = append(cmds, cmd)
 
 	return m, tea.Batch(cmds...)
+}
+
+func (m *tuiModel) handleDisplayEvent(ev Event) (tea.Model, tea.Cmd) {
+	switch e := ev.(type) {
+	case AgentThinking:
+		color := m.agentColor(e.AgentID)
+		m.appendContent(fmt.Sprintf("\n%s%s[%s]:%s %sthinking...%s", Bold, color, e.AgentID, Reset, Dim, Reset))
+	case AgentLabel:
+		m.replaceThinking(e.AgentID)
+	case TokenStreamed:
+		m.appendContent(e.Token)
+	case ToolCallStarted:
+		m.appendContent(fmt.Sprintf("\n%s  > %s%s\n", Dim, e.Title, Reset))
+	case ToolCallResult:
+		if e.Output != "" {
+			display := e.Output
+			if len(display) > 500 {
+				display = display[:500] + "..."
+			}
+			m.appendContent(fmt.Sprintf("%s  %s%s\n", Dim, display, Reset))
+		}
+	case AgentDone:
+		m.appendContent("\n")
+	}
+	return m, nil
 }
 
 func (m *tuiModel) View() string {
@@ -310,7 +426,6 @@ func (m *tuiModel) View() string {
 	return m.viewport.View() + "\n" + separator + "\n" + m.textarea.View()
 }
 
-// appendContent adds text to the viewport and auto-scrolls to bottom.
 func (m *tuiModel) appendContent(text string) {
 	m.content.WriteString(text)
 	if m.ready {
@@ -319,13 +434,10 @@ func (m *tuiModel) appendContent(text string) {
 	}
 }
 
-// replaceThinking removes the last "thinking..." line for an agent,
-// replacing it with the actual agent label for streaming output.
 func (m *tuiModel) replaceThinking(agentID string) {
 	content := m.content.String()
 	thinkSuffix := fmt.Sprintf("%sthinking...%s", Dim, Reset)
 	if idx := strings.LastIndex(content, thinkSuffix); idx >= 0 {
-		// Remove "thinking..." and everything after it on that line
 		content = content[:idx]
 		m.content.Reset()
 		m.content.WriteString(content)

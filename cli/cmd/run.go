@@ -32,7 +32,6 @@ var runCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		// Get initial prompt if provided
 		var initialPrompt string
 		if len(args) > 0 {
 			initialPrompt = args[0]
@@ -41,55 +40,97 @@ var runCmd = &cobra.Command{
 		if useTUI {
 			runTUI(bp, initialPrompt)
 		} else {
-			co := floor.NewCoordinator(bp, debug, logFile)
-			if err := co.Run(initialPrompt); err != nil {
-				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-				os.Exit(1)
-			}
+			runCLI(bp, initialPrompt)
 		}
 	},
 }
 
-func runTUI(bp *blueprint.Blueprint, initialPrompt string) {
-	frontend, model := floor.NewTUIFrontend(logFile, debug, floor.BuildColorMap(bp))
+func runCLI(bp *blueprint.Blueprint, initialPrompt string) {
+	cm := floor.BuildColorMap(bp)
+	frontend := floor.NewCLIFrontend(logFile, debug, cm)
 
+	f := floor.NewFloor(bp)
+	if debug {
+		f.DebugFunc = frontend.Debug
+	}
+	f.LogWriter = frontend.LogWriter()
+
+	ctrl := floor.NewController(bp)
+	if debug {
+		ctrl.DebugFunc = frontend.Debug
+	}
+
+	agents := buildAgents(bp)
+
+	if err := frontend.RunLoop(f, ctrl, agents, initialPrompt); err != nil {
+		if err.Error() != "stop" {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	}
+}
+
+func runTUI(bp *blueprint.Blueprint, initialPrompt string) {
+	cm := floor.BuildColorMap(bp)
+	frontend, model := floor.NewTUIFrontend(logFile, debug, cm)
+
+	f := floor.NewFloor(bp)
+	if debug {
+		f.DebugFunc = func(msg string) {
+			frontend.Render(floor.SystemInfo{Text: "[debug] " + msg})
+		}
+	}
+	f.LogWriter = frontend.LogWriter()
+
+	var stderrWriter io.Writer = io.Discard
+	if lw := frontend.LogWriter(); lw != nil {
+		stderrWriter = lw
+	}
+	f.StderrWriter = stderrWriter
+
+	ctrl := floor.NewController(bp)
+	if debug {
+		ctrl.DebugFunc = func(msg string) {
+			frontend.Render(floor.SystemInfo{Text: "[debug] " + msg})
+		}
+	}
+
+	agents := buildAgents(bp)
+
+	// Set up Bubble Tea
+	model.SetChat(f.Chat)
 	p := tea.NewProgram(model,
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
 	)
 	frontend.SetProgram(p)
 
-	var debugFn func(string)
-	if debug {
-		debugFn = func(msg string) {
-			// In TUI mode, debug goes to log file only
-			frontend.Render(floor.SystemInfo{Text: "[debug] " + msg})
-		}
+	// Start the event loop (background goroutine)
+	if err := frontend.RunLoop(f, ctrl, agents, initialPrompt); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
 	}
-
-	// In TUI mode, route ACP subprocess stderr to log file (or discard)
-	// to avoid corrupting the Bubble Tea display.
-	var stderrWriter io.Writer = io.Discard
-	if lw := frontend.LogWriter(); lw != nil {
-		stderrWriter = lw
-	}
-
-	co := floor.NewCoordinatorWith(bp, frontend, frontend, debugFn, frontend.LogWriter(), stderrWriter)
-
-	// Run coordinator in background goroutine
-	go func() {
-		if err := co.Run(initialPrompt); err != nil {
-			p.Send(floor.SystemInfo{Text: fmt.Sprintf("[ERROR: %v]", err)})
-		}
-		// Coordinator finished — quit the TUI
-		p.Send(floor.FloorStopped{})
-	}()
 
 	// Bubble Tea owns the main thread
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// buildAgents creates Agent instances from the blueprint.
+func buildAgents(bp *blueprint.Blueprint) map[string]floor.Agent {
+	agents := make(map[string]floor.Agent)
+	for i := range bp.Agents {
+		a := &bp.Agents[i]
+		switch a.Type {
+		case "acp":
+			agents[a.ID] = floor.NewACPAgent(a)
+		default:
+			agents[a.ID] = floor.NewLLMAgent(a)
+		}
+	}
+	return agents
 }
 
 func init() {

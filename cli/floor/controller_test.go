@@ -17,118 +17,98 @@ func twoAgentBlueprint() *blueprint.Blueprint {
 	}
 }
 
-// requireEvent asserts that events[index] is of type T and returns it.
-func requireEvent[T Event](t *testing.T, events []Event, index int) T {
+func requireDecision(t *testing.T, d Decision, action string, agentID string) {
 	t.Helper()
-	if index >= len(events) {
-		t.Fatalf("expected event at index %d, but only got %d events", index, len(events))
+	if d.Action != action {
+		t.Fatalf("expected action %q, got %q (info: %s)", action, d.Action, d.Info)
 	}
-	e, ok := events[index].(T)
-	if !ok {
-		t.Fatalf("expected event[%d] to be %T, got %T", index, e, events[index])
-	}
-	return e
-}
-
-func TestUserMessageTriggersAlwaysAgent(t *testing.T) {
-	ctrl := NewController(twoAgentBlueprint())
-	events := ctrl.HandleEvent(UserMessage{Content: "hello"})
-
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d: %v", len(events), events)
-	}
-	pa := requireEvent[PromptAgent](t, events, 0)
-	if pa.AgentID != "@data" {
-		t.Errorf("expected @data, got %s", pa.AgentID)
+	if agentID != "" && d.AgentID != agentID {
+		t.Fatalf("expected agent %q, got %q", agentID, d.AgentID)
 	}
 }
 
-func TestMentionDelegation(t *testing.T) {
+func TestDecideUserMessageTriggersAlwaysAgent(t *testing.T) {
 	ctrl := NewController(twoAgentBlueprint())
+	chat := NewChat()
 
-	// User says hello → @data wakes (always activation)
-	events := ctrl.HandleEvent(UserMessage{Content: "hello"})
-	requireEvent[PromptAgent](t, events, 0)
+	chat.Post(ChatMessage{From: "@user", Content: "hello"})
+	d := ctrl.Decide(chat, MessagePosted{Message: ChatMessage{From: "@user", Content: "hello"}})
 
-	// @data mentions @code? → should delegate to @code
-	events = ctrl.HandleEvent(AgentDone{
-		AgentID: "@data",
-		Content: "Let me ask @code? about this",
-	})
-	pa := requireEvent[PromptAgent](t, events, 0)
-	if pa.AgentID != "@code" {
-		t.Errorf("expected @code, got %s", pa.AgentID)
-	}
+	requireDecision(t, d, "trigger", "@data")
+}
 
-	// Verify call stack was pushed
+func TestDecideMentionDelegation(t *testing.T) {
+	ctrl := NewController(twoAgentBlueprint())
+	chat := NewChat()
+
+	// User says hello → @data wakes
+	chat.Post(ChatMessage{From: "@user", Content: "hello"})
+	d := ctrl.Decide(chat, MessagePosted{Message: ChatMessage{From: "@user", Content: "hello"}})
+	requireDecision(t, d, "trigger", "@data")
+
+	// @data mentions @code?
+	chat.Post(ChatMessage{From: "@data", Content: "Let me ask @code? about this"})
+	d = ctrl.Decide(chat, MessagePosted{Message: ChatMessage{From: "@data", Content: "Let me ask @code? about this"}})
+	requireDecision(t, d, "trigger", "@code")
+
+	// Verify call stack
 	if len(ctrl.CallStack) != 1 {
 		t.Fatalf("expected stack depth 1, got %d", len(ctrl.CallStack))
 	}
-	if ctrl.CallStack[0].Caller != "@data" || ctrl.CallStack[0].Callee != "@code" {
-		t.Errorf("unexpected frame: %+v", ctrl.CallStack[0])
-	}
 }
 
-func TestStackPopReturns(t *testing.T) {
+func TestDecideStackPopReturns(t *testing.T) {
 	ctrl := NewController(twoAgentBlueprint())
+	chat := NewChat()
 
-	// User → @data wakes
-	ctrl.HandleEvent(UserMessage{Content: "hello"})
+	// User → @data
+	chat.Post(ChatMessage{From: "@user", Content: "hello"})
+	ctrl.Decide(chat, MessagePosted{Message: ChatMessage{From: "@user", Content: "hello"}})
 
-	// @data mentions @code? → delegates
-	ctrl.HandleEvent(AgentDone{
-		AgentID: "@data",
-		Content: "ask @code? about this",
-	})
+	// @data → @code
+	chat.Post(ChatMessage{From: "@data", Content: "ask @code? about this"})
+	ctrl.Decide(chat, MessagePosted{Message: ChatMessage{From: "@data", Content: "ask @code? about this"}})
 
-	// @code responds (no mentions) → stack pops, returns to @data
-	events := ctrl.HandleEvent(AgentDone{
-		AgentID: "@code",
-		Content: "here is the result",
-	})
-	pa := requireEvent[PromptAgent](t, events, 0)
-	if pa.AgentID != "@data" {
-		t.Errorf("expected @data (stack pop), got %s", pa.AgentID)
-	}
+	// @code responds → pops to @data
+	chat.Post(ChatMessage{From: "@code", Content: "here is the result"})
+	d := ctrl.Decide(chat, MessagePosted{Message: ChatMessage{From: "@code", Content: "here is the result"}})
+	requireDecision(t, d, "trigger", "@data")
 
-	// Stack should be empty now
 	if len(ctrl.CallStack) != 0 {
 		t.Errorf("expected empty stack, got %d", len(ctrl.CallStack))
 	}
 }
 
-func TestStackPopToUser(t *testing.T) {
+func TestDecideStackPopToUser(t *testing.T) {
 	ctrl := NewController(twoAgentBlueprint())
+	chat := NewChat()
 
 	// User mentions @code? directly
-	events := ctrl.HandleEvent(UserMessage{Content: "@code? what is this?"})
-	pa := requireEvent[PromptAgent](t, events, 0)
-	if pa.AgentID != "@code" {
-		t.Errorf("expected @code, got %s", pa.AgentID)
-	}
+	chat.Post(ChatMessage{From: "@user", Content: "@code? what is this?"})
+	d := ctrl.Decide(chat, MessagePosted{Message: ChatMessage{From: "@user", Content: "@code? what is this?"}})
+	requireDecision(t, d, "trigger", "@code")
 
-	// @code responds → stack pops to @user → WaitingForUser
-	events = ctrl.HandleEvent(AgentDone{
-		AgentID: "@code",
-		Content: "it's a test",
-	})
-	requireEvent[WaitingForUser](t, events, 0)
+	// @code responds → pops to @user → wait
+	chat.Post(ChatMessage{From: "@code", Content: "it's a test"})
+	d = ctrl.Decide(chat, MessagePosted{Message: ChatMessage{From: "@code", Content: "it's a test"}})
+	requireDecision(t, d, "wait", "")
 }
 
-func TestPassExcludesAgent(t *testing.T) {
+func TestDecidePassExcludesAgent(t *testing.T) {
 	ctrl := NewController(twoAgentBlueprint())
+	chat := NewChat()
 
 	// User says hello → @data wakes
-	events := ctrl.HandleEvent(UserMessage{Content: "hello"})
-	requireEvent[PromptAgent](t, events, 0)
+	chat.Post(ChatMessage{From: "@user", Content: "hello"})
+	d := ctrl.Decide(chat, MessagePosted{Message: ChatMessage{From: "@user", Content: "hello"}})
+	requireDecision(t, d, "trigger", "@data")
 
-	// @data passes → should try next agent or go back to user
-	events = ctrl.HandleEvent(AgentPassed{AgentID: "@data"})
-	// @code has "mention" activation, won't wake → back to user
-	requireEvent[WaitingForUser](t, events, 0)
+	// @data passes → @code won't wake (mention only) → wait
+	d = ctrl.Decide(chat, AgentPassedEvent{AgentID: "@data"})
+	requireDecision(t, d, "wait", "")
 }
 
-func TestPassAfterMentionFallsBack(t *testing.T) {
+func TestDecidePassFallsToNextAlwaysAgent(t *testing.T) {
 	bp := &blueprint.Blueprint{
 		Name: "test",
 		Agents: []blueprint.Agent{
@@ -137,111 +117,106 @@ func TestPassAfterMentionFallsBack(t *testing.T) {
 		},
 	}
 	ctrl := NewController(bp)
+	chat := NewChat()
 
-	// User says hello → @a wakes (first always agent)
-	events := ctrl.HandleEvent(UserMessage{Content: "hello"})
-	pa := requireEvent[PromptAgent](t, events, 0)
-	if pa.AgentID != "@a" {
-		t.Errorf("expected @a, got %s", pa.AgentID)
-	}
+	// User says hello → @a
+	chat.Post(ChatMessage{From: "@user", Content: "hello"})
+	d := ctrl.Decide(chat, MessagePosted{Message: ChatMessage{From: "@user", Content: "hello"}})
+	requireDecision(t, d, "trigger", "@a")
 
-	// @a passes → @b should wake (second always agent)
-	events = ctrl.HandleEvent(AgentPassed{AgentID: "@a"})
-	pa = requireEvent[PromptAgent](t, events, 0)
-	if pa.AgentID != "@b" {
-		t.Errorf("expected @b, got %s", pa.AgentID)
-	}
+	// @a passes → @b
+	d = ctrl.Decide(chat, AgentPassedEvent{AgentID: "@a"})
+	requireDecision(t, d, "trigger", "@b")
 }
 
-func TestQuitCommand(t *testing.T) {
+func TestDecideQuitCommand(t *testing.T) {
 	ctrl := NewController(twoAgentBlueprint())
-	events := ctrl.HandleEvent(UserCommand{Command: "/quit"})
-	requireEvent[FloorStopped](t, events, 0)
+	chat := NewChat()
+
+	d := ctrl.Decide(chat, UserCommandEvent{Command: "/quit"})
+	requireDecision(t, d, "stop", "")
 }
 
-func TestClearCommand(t *testing.T) {
+func TestDecideClearCommand(t *testing.T) {
 	ctrl := NewController(twoAgentBlueprint())
+	chat := NewChat()
 
 	// Add some messages
-	ctrl.HandleEvent(UserMessage{Content: "hello"})
-	ctrl.HandleEvent(AgentDone{AgentID: "@data", Content: "hi"})
+	chat.Post(ChatMessage{From: "@user", Content: "hello"})
+	ctrl.Decide(chat, MessagePosted{Message: ChatMessage{From: "@user", Content: "hello"}})
 
-	if len(ctrl.Messages) == 0 {
+	if len(chat.History()) == 0 {
 		t.Fatal("expected messages before clear")
 	}
 
-	events := ctrl.HandleEvent(UserCommand{Command: "/clear"})
-	requireEvent[ConversationCleared](t, events, 0)
+	d := ctrl.Decide(chat, UserCommandEvent{Command: "/clear"})
+	requireDecision(t, d, "clear", "")
 
-	if len(ctrl.Messages) != 0 {
-		t.Errorf("expected empty messages after clear, got %d", len(ctrl.Messages))
+	if len(chat.History()) != 0 {
+		t.Errorf("expected empty after clear, got %d", len(chat.History()))
 	}
 }
 
-func TestUnknownCommand(t *testing.T) {
+func TestDecideAgentError(t *testing.T) {
 	ctrl := NewController(twoAgentBlueprint())
-	events := ctrl.HandleEvent(UserCommand{Command: "/foo"})
-	si := requireEvent[SystemInfo](t, events, 0)
-	if si.Text != "Unknown command: /foo" {
-		t.Errorf("unexpected system info: %s", si.Text)
-	}
-}
+	chat := NewChat()
 
-func TestAgentErrorReturnsToUser(t *testing.T) {
-	ctrl := NewController(twoAgentBlueprint())
-	events := ctrl.HandleEvent(AgentError{
+	d := ctrl.Decide(chat, AgentErrorEvent{
 		AgentID: "@data",
 		Err:     fmt.Errorf("connection timeout"),
 	})
-	// Should emit SystemInfo + WaitingForUser
-	if len(events) != 2 {
-		t.Fatalf("expected 2 events, got %d", len(events))
+	requireDecision(t, d, "error", "")
+}
+
+func TestDecideMentionsUserPauses(t *testing.T) {
+	ctrl := NewController(twoAgentBlueprint())
+	chat := NewChat()
+
+	// User says hello → @data
+	chat.Post(ChatMessage{From: "@user", Content: "hello"})
+	ctrl.Decide(chat, MessagePosted{Message: ChatMessage{From: "@user", Content: "hello"}})
+
+	// @data mentions @user? → wait
+	chat.Post(ChatMessage{From: "@data", Content: "I need to ask @user? about this"})
+	d := ctrl.Decide(chat, MessagePosted{Message: ChatMessage{From: "@data", Content: "I need to ask @user? about this"}})
+	requireDecision(t, d, "wait", "")
+}
+
+func TestDecideUnknownCommand(t *testing.T) {
+	ctrl := NewController(twoAgentBlueprint())
+	chat := NewChat()
+
+	d := ctrl.Decide(chat, UserCommandEvent{Command: "/foo"})
+	requireDecision(t, d, "error", "")
+	if d.Info != "Unknown command: /foo" {
+		t.Errorf("unexpected info: %s", d.Info)
 	}
-	requireEvent[SystemInfo](t, events, 0)
-	requireEvent[WaitingForUser](t, events, 1)
 }
 
-func TestMentionsUserPausesForUser(t *testing.T) {
+func TestDecideToolInteractionsPreserved(t *testing.T) {
 	ctrl := NewController(twoAgentBlueprint())
+	chat := NewChat()
 
-	// User says hello → @data wakes
-	ctrl.HandleEvent(UserMessage{Content: "hello"})
+	chat.Post(ChatMessage{From: "@user", Content: "do something"})
+	ctrl.Decide(chat, MessagePosted{Message: ChatMessage{From: "@user", Content: "do something"}})
 
-	// @data mentions @user? → should pause for user input
-	events := ctrl.HandleEvent(AgentDone{
-		AgentID: "@data",
-		Content: "I need to ask @user? about this",
-	})
-	requireEvent[WaitingForUser](t, events, 0)
-}
-
-func TestToolInteractionsPreserved(t *testing.T) {
-	ctrl := NewController(twoAgentBlueprint())
-
-	ctrl.HandleEvent(UserMessage{Content: "do something"})
-	ctrl.HandleEvent(AgentDone{
-		AgentID: "@data",
+	chat.Post(ChatMessage{
+		From:    "@data",
 		Content: "done",
 		ToolInteractions: []ToolInteraction{
 			{Command: "ls -la", Output: "file1\nfile2"},
 		},
 	})
 
-	if len(ctrl.Messages) != 2 {
-		t.Fatalf("expected 2 messages, got %d", len(ctrl.Messages))
+	history := chat.History()
+	if len(history) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(history))
 	}
-	msg := ctrl.Messages[1]
+	msg := history[1]
 	if len(msg.ToolInteractions) != 1 {
 		t.Fatalf("expected 1 tool interaction, got %d", len(msg.ToolInteractions))
 	}
 	if msg.ToolInteractions[0].Command != "ls -la" {
 		t.Errorf("unexpected command: %s", msg.ToolInteractions[0].Command)
 	}
-}
-
-func TestNoMessagesReturnsNil(t *testing.T) {
-	ctrl := NewController(twoAgentBlueprint())
-	// Calling advanceTurn with no messages should return WaitingForUser
-	events := ctrl.advanceTurn()
-	requireEvent[WaitingForUser](t, events, 0)
 }

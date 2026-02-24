@@ -5,17 +5,21 @@ import (
 	"regexp"
 	"strings"
 
-	acpsdk "github.com/coder/acp-go-sdk"
 	"github.com/openfloorcontrol/ofc/blueprint"
-	"github.com/openfloorcontrol/ofc/llm"
 )
+
+// Decision is the output of Controller.Decide().
+type Decision struct {
+	Action  string // "trigger", "wait", "stop", "clear", "error"
+	AgentID string // who to trigger (if Action == "trigger")
+	Info    string // additional info (error message, command name)
+}
 
 // Controller is the pure-logic heart of the floor.
 // It receives events, updates state, and returns actions.
 // It has NO I/O, NO goroutines, NO channels.
 type Controller struct {
 	Blueprint    *blueprint.Blueprint
-	Messages     []FloorMessage
 	CallStack    []Frame
 	passedAgents map[string]bool
 	DebugFunc    func(string) // injected for debug logging; no-op in tests
@@ -30,105 +34,77 @@ func NewController(bp *blueprint.Blueprint) *Controller {
 	}
 }
 
-// HandleEvent processes one event and returns zero or more response events.
-func (c *Controller) HandleEvent(ev Event) []Event {
+// Decide processes a ChatEvent and returns what to do next.
+// It reads messages from the Chat rather than storing them internally.
+func (c *Controller) Decide(chat *Chat, ev ChatEvent) Decision {
 	switch e := ev.(type) {
-	case UserMessage:
-		return c.handleUserMessage(e)
-	case AgentDone:
-		return c.handleAgentDone(e)
-	case AgentPassed:
-		return c.handleAgentPassed(e)
-	case AgentError:
-		return c.handleAgentError(e)
-	case UserCommand:
-		return c.handleUserCommand(e)
+	case MessagePosted:
+		if e.Message.From == "@user" {
+			// User message resets the turn state
+			c.CallStack = nil
+			c.passedAgents = make(map[string]bool)
+		} else {
+			// Agent finished (message posted) — reset passed agents
+			c.passedAgents = make(map[string]bool)
+		}
+		return c.decideNext(chat)
+
+	case AgentPassedEvent:
+		// Pop frame if this agent was the callee on top of stack
+		if len(c.CallStack) > 0 && c.CallStack[len(c.CallStack)-1].Callee == e.AgentID {
+			c.CallStack = c.CallStack[:len(c.CallStack)-1]
+		}
+		c.passedAgents[e.AgentID] = true
+		return c.decideNext(chat)
+
+	case AgentErrorEvent:
+		return Decision{
+			Action: "error",
+			Info:   fmt.Sprintf("[ERROR from %s: %v]", e.AgentID, e.Err),
+		}
+
+	case UserCommandEvent:
+		switch e.Command {
+		case "/quit":
+			return Decision{Action: "stop"}
+		case "/clear":
+			chat.Clear()
+			c.CallStack = nil
+			c.passedAgents = make(map[string]bool)
+			return Decision{Action: "clear"}
+		default:
+			return Decision{Action: "error", Info: fmt.Sprintf("Unknown command: %s", e.Command)}
+		}
+
 	default:
-		return nil
+		return Decision{Action: "wait"}
 	}
 }
 
-func (c *Controller) handleUserMessage(e UserMessage) []Event {
-	c.Messages = append(c.Messages, FloorMessage{
-		FromID:  "@user",
-		Content: e.Content,
-	})
-	c.CallStack = nil
-	c.passedAgents = make(map[string]bool)
-	return c.advanceTurn()
-}
-
-func (c *Controller) handleAgentDone(e AgentDone) []Event {
-	c.Messages = append(c.Messages, FloorMessage{
-		FromID:           e.AgentID,
-		Content:          e.Content,
-		ToolInteractions: e.ToolInteractions,
-	})
-	c.passedAgents = make(map[string]bool)
-	return c.advanceTurn()
-}
-
-func (c *Controller) handleAgentPassed(e AgentPassed) []Event {
-	// Pop frame if this agent was the callee on top of stack
-	if len(c.CallStack) > 0 && c.CallStack[len(c.CallStack)-1].Callee == e.AgentID {
-		c.CallStack = c.CallStack[:len(c.CallStack)-1]
+// decideNext uses the turn-taking algorithm to pick the next agent.
+func (c *Controller) decideNext(chat *Chat) Decision {
+	messages := chat.History()
+	if len(messages) == 0 {
+		return Decision{Action: "wait"}
 	}
-	c.passedAgents[e.AgentID] = true
-	return c.advanceTurn()
-}
 
-func (c *Controller) handleAgentError(e AgentError) []Event {
-	return []Event{
-		SystemInfo{Text: fmt.Sprintf("[ERROR from %s: %v]", e.AgentID, e.Err)},
-		WaitingForUser{},
-	}
-}
-
-func (c *Controller) handleUserCommand(e UserCommand) []Event {
-	switch e.Command {
-	case "/quit":
-		return []Event{FloorStopped{}}
-	case "/clear":
-		c.Messages = nil
-		c.CallStack = nil
-		c.passedAgents = make(map[string]bool)
-		return []Event{ConversationCleared{}}
-	default:
-		return []Event{SystemInfo{Text: fmt.Sprintf("Unknown command: %s", e.Command)}}
-	}
-}
-
-// advanceTurn calls nextRecipient and returns the appropriate event.
-func (c *Controller) advanceTurn() []Event {
-	next := c.nextRecipient(c.passedAgents)
+	lastMsg := messages[len(messages)-1]
+	next := c.nextRecipient(lastMsg, c.passedAgents)
 	if next == nil {
-		return []Event{WaitingForUser{}}
+		return Decision{Action: "wait"}
 	}
-	return []Event{PromptAgent{AgentID: next.ID}}
+	return Decision{Action: "trigger", AgentID: next.ID}
 }
 
-func (c *Controller) debug(format string, args ...any) {
-	if c.DebugFunc != nil {
-		c.DebugFunc(fmt.Sprintf(format, args...))
-	}
-}
-
-// --- Turn-taking logic (moved from floor.go, unchanged) ---
-
-// nextRecipient determines which agent should respond next using the call stack.
-func (c *Controller) nextRecipient(excluded map[string]bool) *blueprint.Agent {
-	if len(c.Messages) == 0 {
-		return nil
-	}
-
-	lastMsg := c.Messages[len(c.Messages)-1]
-
-	// Extract @mentions with ?
+// nextRecipient is the turn-taking algorithm.
+// It examines the last message for mentions, manages the call stack,
+// and polls agents for activation.
+func (c *Controller) nextRecipient(lastMsg ChatMessage, excluded map[string]bool) *blueprint.Agent {
 	mentions := extractMentions(lastMsg.Content)
-	c.debug("next_recipient: from=%s, mentions=%v, exclude=%v, stack=%d", lastMsg.FromID, mentions, excluded, len(c.CallStack))
+	c.debug("next_recipient: from=%s, mentions=%v, exclude=%v, stack=%d", lastMsg.From, mentions, excluded, len(c.CallStack))
 
 	// 0. If mentions @user (and not from @user), pause for user
-	if lastMsg.FromID != "@user" {
+	if lastMsg.From != "@user" {
 		for _, m := range mentions {
 			if m == "@user" {
 				c.debug("→ pausing for @user")
@@ -143,9 +119,9 @@ func (c *Controller) nextRecipient(excluded map[string]bool) *blueprint.Agent {
 			continue
 		}
 		for _, m := range mentions {
-			if m == agent.ID && m != lastMsg.FromID {
+			if m == agent.ID && m != lastMsg.From {
 				c.CallStack = append(c.CallStack, Frame{
-					Caller: lastMsg.FromID,
+					Caller: lastMsg.From,
 					Callee: agent.ID,
 				})
 				c.debug("→ mentioned: %s (pushed frame, stack=%d)", agent.ID, len(c.CallStack))
@@ -184,14 +160,13 @@ func (c *Controller) nextRecipient(excluded map[string]bool) *blueprint.Agent {
 		}
 	}
 
-	// 4. Nobody → back to user
 	c.debug("→ back to user")
 	return nil
 }
 
 // shouldWake determines if an agent should respond to a message.
-func (c *Controller) shouldWake(agent *blueprint.Agent, lastMsg *FloorMessage) bool {
-	if lastMsg.FromID == agent.ID {
+func (c *Controller) shouldWake(agent *blueprint.Agent, lastMsg *ChatMessage) bool {
+	if lastMsg.From == agent.ID {
 		return false
 	}
 	if agent.Activation == "always" {
@@ -220,111 +195,13 @@ func extractMentions(content string) []string {
 	return mentions
 }
 
-// --- Context building (moved from floor.go, unchanged) ---
-
-// BuildContext converts floor messages to LLM messages for a specific agent,
-// applying tool_context filtering.
-func (c *Controller) BuildContext(agent *blueprint.Agent) []llm.Message {
-	messages := []llm.Message{
-		{Role: "system", Content: agent.Prompt},
+func (c *Controller) debug(format string, args ...any) {
+	if c.DebugFunc != nil {
+		c.DebugFunc(fmt.Sprintf(format, args...))
 	}
-
-	for _, msg := range c.Messages {
-		if msg.FromID == agent.ID {
-			// Own messages: role = "assistant", full tool context
-			if len(msg.ToolInteractions) > 0 {
-				for i, ti := range msg.ToolInteractions {
-					callID := fmt.Sprintf("call_%d", i)
-					messages = append(messages, llm.Message{
-						Role:    "assistant",
-						Content: msg.Content,
-						ToolCalls: []llm.ToolCall{
-							{
-								ID:   callID,
-								Type: "function",
-								Function: struct {
-									Name      string `json:"name"`
-									Arguments string `json:"arguments"`
-								}{
-									Name:      "bash",
-									Arguments: fmt.Sprintf(`{"cmd":%q}`, ti.Command),
-								},
-							},
-						},
-					})
-					messages = append(messages, llm.Message{
-						Role:       "tool",
-						Content:    ti.Output,
-						ToolCallID: callID,
-					})
-				}
-				if msg.Content != "" {
-					messages = append(messages, llm.Message{
-						Role:    "assistant",
-						Content: msg.Content,
-					})
-				}
-			} else {
-				messages = append(messages, llm.Message{
-					Role:    "assistant",
-					Content: msg.Content,
-				})
-			}
-		} else {
-			// Other participants: role = "user", apply tool_context filtering
-			content := msg.Content
-			if len(msg.ToolInteractions) > 0 {
-				toolSummary := formatToolInteractions(msg.ToolInteractions, agent.ToolContext)
-				if toolSummary != "" {
-					content += "\n\n" + toolSummary
-				}
-			}
-			messages = append(messages, llm.Message{
-				Role:    "user",
-				Content: content,
-				Name:    strings.TrimPrefix(msg.FromID, "@"),
-			})
-		}
-	}
-
-	return messages
 }
 
-// BuildACPContext builds content blocks for an ACP agent prompt.
-// Each floor message becomes a separate TextBlock for structural separation.
-func (c *Controller) BuildACPContext(agent *blueprint.Agent) []acpsdk.ContentBlock {
-	var blocks []acpsdk.ContentBlock
-
-	if agent.Prompt != "" {
-		blocks = append(blocks, acpsdk.TextBlock("[System] "+agent.Prompt))
-	}
-
-	for _, msg := range c.Messages {
-		var sb strings.Builder
-		sb.WriteString(msg.FromID)
-		sb.WriteString(": ")
-		sb.WriteString(msg.Content)
-
-		if len(msg.ToolInteractions) > 0 {
-			level := agent.ToolContext
-			if msg.FromID == agent.ID {
-				level = "full"
-			}
-			summary := formatToolInteractions(msg.ToolInteractions, level)
-			if summary != "" {
-				sb.WriteString("\n")
-				sb.WriteString(summary)
-			}
-		}
-
-		blocks = append(blocks, acpsdk.TextBlock(sb.String()))
-	}
-
-	blocks = append(blocks, acpsdk.TextBlock("Your turn to respond."))
-	return blocks
-}
-
-// --- Helpers (moved from floor.go) ---
+// --- Helpers ---
 
 func summarizeLines(text string, maxLines int) string {
 	lines := strings.Split(strings.TrimSpace(text), "\n")
