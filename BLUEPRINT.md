@@ -91,6 +91,7 @@ Most agents need an ACP adapter — for example, Claude Code uses
 | `activation` | `"mention"` | When the agent wakes up: `"mention"` (only on `@id?`) or `"always"` (listens to everything) |
 | `can_use_sandbox` | `false` | Whether the agent can use workstation tools (sandbox, etc.) |
 | `tool_context` | `"full"` | How much of other agents' tool output to include: `"full"`, `"summary"`, or `"none"` |
+| `furniture` | `[]` | List of furniture names this agent can access (e.g. `[tasks, fs]`) |
 | `temperature` | `0.7` | LLM temperature |
 
 **LLM-only fields:**

@@ -4,11 +4,14 @@
 
 ## Current State
 
-ACP integration with Claude Code is working end-to-end: multi-agent coordination with real tool execution in sandboxed containers. The core protocol (mentions, activation modes, call-stack delegation, PASS semantics) is validated. Go implementation is the primary runtime, with some features from the Python version still pending port (e.g., `tool_context: summary`).
+Multi-agent coordination with real tool execution in sandboxed containers is working end-to-end, via both LLM (OpenAI-compatible) and ACP (Claude Code) agents. The core protocol (mentions, activation modes, call-stack delegation, PASS semantics) is validated. Go implementation is the primary runtime. The architecture has been refactored into a clean event-driven design with an HTTP API for external integration.
 
 ### Recent completions
 
-- **Event-driven floor architecture** — The monolithic floor loop has been refactored into a reactive, event-driven design: a pure-logic Controller (event in, decision out), Runners (LLM/ACP agent execution), Frontend/StreamSink interfaces, and a Coordinator wiring layer. The controller is fully testable with zero mocks.
+- **Floor/Controller/Agent architecture** — Complete rewrite from the monolithic Coordinator into decoupled components: `Floor` (shared state: Chat + Furniture + API), `Controller` (pure-logic turn-taking: event in → decision out, fully testable with zero mocks), and `Agent` interface (LLM and ACP implementations). Legacy coordinator.go, runner.go, frontend.go removed.
+- **Chat as event bus** — `Chat` is the communication fabric: thread-safe message history + typed event channel (`MessagePosted`, `StreamEvent`, `AgentFinished`, `AgentPassedEvent`, `AgentErrorEvent`) with fan-out to multiple subscribers.
+- **HTTP API for external integration** — `POST /api/v1/messages` (inject messages from external systems), `GET /api/v1/messages` (read chat history as JSON), `GET /api/v1/events` (SSE stream of all chat events). The API server is always started, enabling webhooks and future web frontends.
+- **Integration test infrastructure** — Full-pipeline integration tests driven entirely over HTTP: fake `testAgent` with configurable responses, minimal `testLoop` (event loop without terminal I/O), `setupTestFloor` helper. 10 integration tests covering agent triggering, mention delegation, PASS semantics, SSE streaming, multiple subscribers, external webhooks, and error handling.
 - **Bubble Tea TUI frontend** — Split-layout terminal UI (`--tui`) with scrollable viewport and text input, built on charmbracelet/bubbletea. Runs alongside the existing CLI frontend via the decoupled Frontend interface.
 - **ACP output routing** — ACP subprocess stderr and debug output properly routed through the frontend instead of directly to stdout/stderr, enabling clean TUI rendering.
 - **Furniture system** — Shared interactive objects on the floor (task boards, etc.) that agents can interact with via tool calls. Built-in `Furniture` interface wrapped as MCP servers via go-sdk, exposed over HTTP (Echo) at `/api/v1/floors/{floor}/mcp/{name}`. LLM agents get namespaced tool injection; ACP agents get MCP pass-through. First built-in: TaskBoard with CRUD operations. Validated end-to-end with planner/coder demo.
@@ -72,9 +75,10 @@ Move beyond synchronous request-response.
 - [x] Event-driven floor architecture (controller is pure event→event, no I/O)
 - [x] Multiple frontend support via Frontend/StreamSink interfaces (CLI, TUI)
 - [ ] Web frontend (chat UI over HTTP/WebSocket)
-- [ ] Event-driven activation (external triggers, webhooks, scheduled)
+- [x] Event-driven activation (external triggers, webhooks) — `POST /api/v1/messages` injects messages from any source
+- [x] Integration patterns — HTTP API (POST messages, GET history, SSE events) enables external system interaction
+- [ ] Scheduled activation (cron-like triggers)
 - [ ] Async agent work — agents that take time and report back
-- [ ] Integration patterns: how external systems interact with a running floor
 - [ ] Explore long-running floors that persist and respond to events over time
 
 ## Phase 6: Virtual Lab Rebuild

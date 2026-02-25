@@ -102,6 +102,7 @@ type Furniture interface {
 ```
 
 Currently implemented:
+
 - **TaskBoard** (`furniture/taskboard.go`) — in-memory task board with `list_tasks`, `add_task`, `update_task`, `get_task`
 
 ## External MCP Servers
@@ -123,6 +124,7 @@ furniture:
 ```
 
 The `ExternalMCP` implementation:
+
 1. Connects to the external server (stdio subprocess or SSE/HTTP URL)
 2. Calls `tools/list` to discover available tools
 3. Implements `Furniture.Tools()` from the discovered tool list
@@ -195,18 +197,18 @@ agents:
 - [x] LLM agent tool injection (namespaced as `{furniture}__{tool}`)
 - [x] ACP agent MCP pass-through (capability-based transport selection)
 - [x] Blueprint `furniture:` and `agents[].furniture:` fields
-- [x] Coordinator lifecycle (init, start, stop)
+- [x] Floor lifecycle (init, start, stop)
 - [x] External MCP servers via command/stdio (`ExternalMCP` + go-sdk `CommandTransport`)
-- [x] Subprocess cleanup on coordinator stop (optional `io.Closer`)
+- [x] Subprocess cleanup on floor stop (optional `io.Closer`)
 - [x] LLM agents using external MCP tools via function calls (validated with filesystem MCP)
 - [x] ACP agents using external MCP tools via SSE (validated with filesystem MCP)
 
 ## What's Next
 
+- [ ] Advanced MCP features (progress notifications, resource subscriptions, logging)
 - [ ] External MCP servers via URL (connect to already-running servers)
 - [ ] Per-agent access control at the tool level
 - [ ] Furniture persistence (TaskBoard is in-memory only)
 - [ ] Stdio bridge for ACP agents that only support stdio MCP
-- [ ] Advanced MCP features (progress notifications, resource subscriptions, logging)
 
 ofc. 🎤

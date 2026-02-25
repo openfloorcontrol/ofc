@@ -376,11 +376,19 @@ Given these building blocks, OFC's unique implementation scope is:
 
 ```
 cli/
-├── ofc/                         ← our code
-│   ├── floor.go                 (turn-taking, @mentions, should-wake)
-│   ├── blueprint.go             (YAML loading, agent/workstation config)
-│   ├── manager.go               (@floor-manager logic)
-│   └── workstations/            (built-in MCP server implementations)
+├── floor/                       ← core floor engine
+│   ├── floor.go                 (Floor: shared state, lifecycle, API server)
+│   ├── controller.go            (Controller: pure-logic turn-taking, event → decision)
+│   ├── chat.go                  (Chat: event bus, message history, subscriber fan-out)
+│   ├── api.go                   (HTTP API: messages, SSE events, MCP endpoints)
+│   ├── agent.go                 (Agent interface)
+│   ├── agent_llm.go             (LLM agent: OpenAI-compatible API)
+│   ├── agent_acp.go             (ACP agent: Claude Code, etc.)
+│   └── cli_frontend.go          (CLI frontend: terminal I/O, rendering)
+├── blueprint/                   (YAML loading, agent/workstation config)
+├── furniture/                   (Furniture interface, TaskBoard, ExternalMCP)
+├── sandbox/                     (Docker sandbox management)
+├── acp/                         (ACP client: session management, callbacks)
 │
 ├── github.com/coder/acp-go-sdk  ← agent communication
 │

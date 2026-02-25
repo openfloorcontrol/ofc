@@ -1419,4 +1419,12 @@ ofc/
 - **Go CLI** (`cli/`): The `ofc` binary. Streaming, tools, @mentions, debug mode.
 - **Python** (`python/`): Rapid prototyping. Same features, easier to hack on.
 
-Both implement the local mode with turn-taking protocol. The HTTP APIs for distributed mode are specified but not yet implemented.
+Both implement the local mode with turn-taking protocol. The Go CLI now has a working HTTP API for floor interaction:
+
+- `POST /api/v1/messages` — inject messages (webhooks, external systems)
+- `GET /api/v1/messages` — read chat history as JSON
+- `GET /api/v1/events` — SSE stream of all chat events (message_posted, agent_finished, token streaming, tool calls)
+- `/api/v1/floors/{floor}/mcp/{name}/` — Streamable HTTP MCP endpoints for furniture
+- `/api/v1/floors/{floor}/sse/{name}/` — SSE MCP endpoints for furniture
+
+The full distributed protocol (registry, multi-tenant floor servers, remote agents) is specified but not yet implemented.
