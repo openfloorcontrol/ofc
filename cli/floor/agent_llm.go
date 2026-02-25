@@ -104,15 +104,34 @@ func (a *LLMAgent) Run(ctx context.Context, floor *Floor) error {
 	return nil
 }
 
-// buildContext converts chat history to LLM messages for this agent,
-// applying tool_context filtering. Extracted from Controller.BuildContext.
+// buildContext converts the agent's accumulated context to LLM messages,
+// applying tool_context filtering. Reads from AgentContext if available,
+// falls back to Chat.History() for test agents without a context.
 func (a *LLMAgent) buildContext(floor *Floor) []llm.Message {
 	messages := []llm.Message{
 		{Role: "system", Content: a.agent.Prompt},
 	}
 
-	for _, msg := range floor.Chat.History() {
-		if msg.From == a.agent.ID {
+	// Use AgentContext if available, fall back to Chat.History()
+	var chatMsgs []*ChatMessage
+	if ac := floor.GetAgentContext(a.agent.ID); ac != nil {
+		chatMsgs = ac.Entries()
+	} else {
+		history := floor.Chat.History()
+		chatMsgs = make([]*ChatMessage, len(history))
+		for i := range history {
+			chatMsgs[i] = &history[i]
+		}
+	}
+
+	for _, msg := range chatMsgs {
+		if msg.From == "@system" {
+			// System messages (room transitions, etc.)
+			messages = append(messages, llm.Message{
+				Role:    "system",
+				Content: msg.Content,
+			})
+		} else if msg.From == a.agent.ID {
 			// Own messages: role = "assistant", full tool context
 			if len(msg.ToolInteractions) > 0 {
 				// Batch all tool calls into one assistant message

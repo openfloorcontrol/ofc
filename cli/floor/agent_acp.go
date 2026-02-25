@@ -91,29 +91,55 @@ func (a *ACPAgent) Run(ctx context.Context, floor *Floor) error {
 }
 
 // buildACPContext builds content blocks for the ACP agent prompt.
-// Extracted from Controller.BuildACPContext.
+// Uses AgentContext.Delta() to send only new messages since the last prompt.
+// ACP agents maintain their own session state, so we skip the agent's own
+// messages (it already remembers them) and only send the system prompt once.
 func (a *ACPAgent) buildACPContext(floor *Floor) []acpsdk.ContentBlock {
 	var blocks []acpsdk.ContentBlock
 
-	if a.agent.Prompt != "" {
+	// Use AgentContext delta if available, fall back to full history
+	var chatMsgs []*ChatMessage
+	var isFirstPrompt bool
+
+	if ac := floor.GetAgentContext(a.agent.ID); ac != nil {
+		chatMsgs = ac.Delta()
+		isFirstPrompt = (ac.Len() == len(chatMsgs)) // all entries are new = first prompt
+	} else {
+		// Fallback for contexts without AgentContext
+		history := floor.Chat.History()
+		chatMsgs = make([]*ChatMessage, len(history))
+		for i := range history {
+			chatMsgs[i] = &history[i]
+		}
+		isFirstPrompt = true
+	}
+
+	// Only include system prompt on first prompt (ACP agent remembers it)
+	if isFirstPrompt && a.agent.Prompt != "" {
 		blocks = append(blocks, acpsdk.TextBlock("[System] "+a.agent.Prompt))
 	}
 
-	for _, msg := range floor.Chat.History() {
-		var sb strings.Builder
-		sb.WriteString(msg.From)
-		sb.WriteString(": ")
-		sb.WriteString(msg.Content)
+	for _, msg := range chatMsgs {
+		// Skip own messages — ACP agent already has these in session memory
+		if msg.From == a.agent.ID {
+			continue
+		}
 
-		if len(msg.ToolInteractions) > 0 {
-			level := a.agent.ToolContext
-			if msg.From == a.agent.ID {
-				level = "full"
-			}
-			summary := formatToolInteractions(msg.ToolInteractions, level)
-			if summary != "" {
-				sb.WriteString("\n")
-				sb.WriteString(summary)
+		var sb strings.Builder
+		if msg.From == "@system" {
+			sb.WriteString("[System] ")
+			sb.WriteString(msg.Content)
+		} else {
+			sb.WriteString(msg.From)
+			sb.WriteString(": ")
+			sb.WriteString(msg.Content)
+
+			if len(msg.ToolInteractions) > 0 {
+				summary := formatToolInteractions(msg.ToolInteractions, a.agent.ToolContext)
+				if summary != "" {
+					sb.WriteString("\n")
+					sb.WriteString(summary)
+				}
 			}
 		}
 
@@ -121,5 +147,11 @@ func (a *ACPAgent) buildACPContext(floor *Floor) []acpsdk.ContentBlock {
 	}
 
 	blocks = append(blocks, acpsdk.TextBlock("Your turn to respond."))
+
+	// Mark all entries as sent so next Delta() only returns new messages
+	if ac := floor.GetAgentContext(a.agent.ID); ac != nil {
+		ac.MarkSent()
+	}
+
 	return blocks
 }
