@@ -53,7 +53,8 @@ func (f *CLIFrontend) Debug(msg string) {
 }
 
 // RunLoop is the event-driven main loop for CLI.
-// It reads from Chat.Events(), renders events, and dispatches agents.
+// It reads from the unified event channel (main floor + rooms), renders events,
+// and dispatches agents to the correct context.
 func (f *CLIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]Agent, initialPrompt string) error {
 	// Start floor infrastructure
 	if err := floor.Start(func(msg string) {
@@ -73,22 +74,23 @@ func (f *CLIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 	// Spawn stdin reader goroutine (waits for readyForInput before each prompt)
 	go f.readStdinLoop(floor, readyForInput)
 
-	// If initial prompt, post it as @user
+	// If initial prompt, post it as @user (or handle as command)
 	if initialPrompt != "" {
-		f.renderStream(AgentLabel{AgentID: "@user"})
-		f.renderStream(TokenStreamed{AgentID: "@user", Token: initialPrompt + "\n"})
-		floor.Chat.Post(ChatMessage{From: "@user", Content: initialPrompt})
+		f.renderStream(AgentLabel{AgentID: "@user"}, "")
+		f.renderStream(TokenStreamed{AgentID: "@user", Token: initialPrompt + "\n"}, "")
+		floor.Chat.PostUserInput(initialPrompt)
 	} else {
 		// No initial prompt — ready for user input immediately
 		readyForInput <- struct{}{}
 	}
 
 	var cancelAgent context.CancelFunc
-	oneShot := initialPrompt != ""
+	oneShot := initialPrompt != "" && !IsCommand(initialPrompt)
 
 	// signalReady sends readyForInput if the decision means "back to user"
-	signalReady := func(d Decision) {
-		if d.Action == "wait" {
+	// Only signal for main floor events (rooms are autonomous)
+	signalReady := func(roomID string, d Decision) {
+		if roomID == "" && d.Action == "wait" {
 			select {
 			case readyForInput <- struct{}{}:
 			default:
@@ -96,66 +98,86 @@ func (f *CLIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 		}
 	}
 
+	// Use unified event channel — merges main floor + all room events
+	unified := floor.StartUnified()
+
 	// Main event loop — flat, no recursion
-	for ev := range floor.Chat.Events() {
+	for tagged := range unified {
+		roomID := tagged.RoomID
+		ev := tagged.Event
+
+		// Resolve which Controller and Floor view to use
+		eventCtrl, eventFloor := ctrl, floor
+		if roomID != "" {
+			room, ok := floor.Rooms[roomID]
+			if !ok {
+				continue // room closed, stale event
+			}
+			eventCtrl = room.Controller
+			eventFloor = floor.ViewForRoom(room)
+		}
+
 		switch e := ev.(type) {
 		case MessagePosted:
 			f.renderMessagePosted(e)
 
-			decision := ctrl.Decide(floor.Chat, e)
-			if err := f.handleDecision(floor, ctrl, agents, decision, &cancelAgent); err != nil {
+			decision := eventCtrl.Decide(eventFloor.Chat, e)
+			if err := f.handleDecision(eventFloor, eventCtrl, agents, decision, &cancelAgent); err != nil {
 				return err
 			}
-			if oneShot && decision.Action == "wait" {
+			if oneShot && roomID == "" && decision.Action == "wait" {
 				return nil
 			}
-			signalReady(decision)
+			signalReady(roomID, decision)
 
 		case StreamEvent:
-			f.renderStream(e.Event)
+			f.renderStream(e.Event, roomID)
 
 		case AgentFinished:
 			f.out.Print("\n") // newline after streaming
-			// AgentFinished is posted after Chat.Post (MessagePosted), so Decide
-			// was already called on the MessagePosted. Nothing to do here.
 
 		case AgentPassedEvent:
 			f.out.Terminal("\r\033[K")
-			f.out.Terminal("%s%s[%s]:%s [PASS]\n", Bold, f.agentColor(e.AgentID), e.AgentID, Reset)
+			label := e.AgentID
+			if roomID != "" {
+				label = roomID + "/" + e.AgentID
+			}
+			f.out.Terminal("%s%s[%s]:%s [PASS]\n", Bold, f.agentColor(e.AgentID), label, Reset)
 
-			decision := ctrl.Decide(floor.Chat, e)
-			if err := f.handleDecision(floor, ctrl, agents, decision, &cancelAgent); err != nil {
+			decision := eventCtrl.Decide(eventFloor.Chat, e)
+			if err := f.handleDecision(eventFloor, eventCtrl, agents, decision, &cancelAgent); err != nil {
 				return err
 			}
-			if oneShot && decision.Action == "wait" {
+			if oneShot && roomID == "" && decision.Action == "wait" {
 				return nil
 			}
-			signalReady(decision)
+			signalReady(roomID, decision)
 
 		case AgentErrorEvent:
 			f.out.Terminal("\r\033[K")
 			f.out.AgentLabel(e.AgentID, f.agentColor(e.AgentID))
 			f.out.Print("[ERROR: %v]\n", e.Err)
 
-			decision := ctrl.Decide(floor.Chat, e)
-			if err := f.handleDecision(floor, ctrl, agents, decision, &cancelAgent); err != nil {
+			decision := eventCtrl.Decide(eventFloor.Chat, e)
+			if err := f.handleDecision(eventFloor, eventCtrl, agents, decision, &cancelAgent); err != nil {
 				return err
 			}
-			signalReady(decision)
+			signalReady(roomID, decision)
 
 		case UserCommandEvent:
-			decision := ctrl.Decide(floor.Chat, e)
-			if decision.Action == "stop" {
+			decision := HandleCommand(e.Command, floor, ctrl)
+			switch decision.Action {
+			case "stop":
 				f.out.Print("\n%sGoodbye! ofc. 🎤%s\n", Dim, Reset)
 				return nil
-			}
-			if decision.Action == "clear" {
+			case "clear":
 				f.out.Print("%s[Conversation cleared]%s\n", Dim, Reset)
-			}
-			if decision.Action == "error" {
+			case "room_created", "room_closed":
+				f.renderSystemInfo(decision.Info)
+			case "error":
 				f.renderSystemInfo(decision.Info)
 			}
-			signalReady(decision)
+			signalReady("", decision)
 		}
 	}
 
@@ -228,11 +250,7 @@ func (f *CLIFrontend) readStdinLoop(floor *Floor, readyForInput chan struct{}) {
 			continue
 		}
 
-		if strings.HasPrefix(text, "/") {
-			floor.Chat.PostEvent(UserCommandEvent{Command: text})
-		} else {
-			floor.Chat.Post(ChatMessage{From: "@user", Content: text})
-		}
+		floor.Chat.PostUserInput(text)
 	}
 }
 
@@ -244,11 +262,16 @@ func (f *CLIFrontend) renderMessagePosted(e MessagePosted) {
 }
 
 // renderStream handles display of streaming events.
-func (f *CLIFrontend) renderStream(ev Event) {
+// roomID is "" for main floor, "#name" for room events.
+func (f *CLIFrontend) renderStream(ev Event, roomID string) {
 	switch e := ev.(type) {
 	case AgentLabel:
 		f.out.Terminal("\r\033[K") // clear "thinking..." line
-		f.out.AgentLabel(e.AgentID, f.agentColor(e.AgentID))
+		label := e.AgentID
+		if roomID != "" {
+			label = roomID + "/" + e.AgentID
+		}
+		f.out.Print("%s%s[%s]:%s ", Bold, f.agentColor(e.AgentID), label, Reset)
 	case TokenStreamed:
 		f.out.Print("%s", e.Token)
 	case ToolCallStarted:

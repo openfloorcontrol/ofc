@@ -22,7 +22,8 @@ type Controller struct {
 	Blueprint    *blueprint.Blueprint
 	CallStack    []Frame
 	passedAgents map[string]bool
-	DebugFunc    func(string) // injected for debug logging; no-op in tests
+	RoomBound    map[string]bool // agents currently in rooms — skip on main floor
+	DebugFunc    func(string)    // injected for debug logging; no-op in tests
 }
 
 // NewController creates a controller for the given blueprint.
@@ -30,6 +31,7 @@ func NewController(bp *blueprint.Blueprint) *Controller {
 	return &Controller{
 		Blueprint:    bp,
 		passedAgents: make(map[string]bool),
+		RoomBound:    make(map[string]bool),
 		DebugFunc:    func(string) {}, // no-op by default
 	}
 }
@@ -61,19 +63,6 @@ func (c *Controller) Decide(chat *Chat, ev ChatEvent) Decision {
 		return Decision{
 			Action: "error",
 			Info:   fmt.Sprintf("[ERROR from %s: %v]", e.AgentID, e.Err),
-		}
-
-	case UserCommandEvent:
-		switch e.Command {
-		case "/quit":
-			return Decision{Action: "stop"}
-		case "/clear":
-			chat.Clear()
-			c.CallStack = nil
-			c.passedAgents = make(map[string]bool)
-			return Decision{Action: "clear"}
-		default:
-			return Decision{Action: "error", Info: fmt.Sprintf("Unknown command: %s", e.Command)}
 		}
 
 	default:
@@ -115,7 +104,7 @@ func (c *Controller) nextRecipient(lastMsg ChatMessage, excluded map[string]bool
 
 	// 1. Explicit @mentions? → push frame, wake mentioned agent
 	for _, agent := range c.Blueprint.Agents {
-		if excluded[agent.ID] {
+		if excluded[agent.ID] || c.RoomBound[agent.ID] {
 			continue
 		}
 		for _, m := range mentions {
@@ -149,8 +138,8 @@ func (c *Controller) nextRecipient(lastMsg ChatMessage, excluded map[string]bool
 
 	// 3. Poll shouldWake
 	for _, agent := range c.Blueprint.Agents {
-		if excluded[agent.ID] {
-			c.debug("should_wake(%s): skipped (passed)", agent.ID)
+		if excluded[agent.ID] || c.RoomBound[agent.ID] {
+			c.debug("should_wake(%s): skipped (passed or in room)", agent.ID)
 			continue
 		}
 		wake := c.shouldWake(&agent, &lastMsg)
@@ -199,6 +188,109 @@ func (c *Controller) debug(format string, args ...any) {
 	if c.DebugFunc != nil {
 		c.DebugFunc(fmt.Sprintf(format, args...))
 	}
+}
+
+// HandleCommand parses and executes a user command.
+// This is the single place where all slash commands are parsed.
+// Side effects (room creation, chat clearing) happen here;
+// result events are posted to Chat for frontends to render.
+func HandleCommand(command string, floor *Floor, ctrl *Controller) Decision {
+	args := strings.Fields(command)
+	if len(args) == 0 {
+		return Decision{Action: "error", Info: "Empty command"}
+	}
+
+	switch args[0] {
+	case "/quit":
+		return Decision{Action: "stop"}
+
+	case "/clear":
+		floor.Chat.Clear()
+		ctrl.CallStack = nil
+		ctrl.passedAgents = make(map[string]bool)
+		return Decision{Action: "clear"}
+
+	case "/room":
+		return handleRoomCommand(args, floor, ctrl)
+
+	default:
+		return Decision{Action: "error", Info: fmt.Sprintf("Unknown command: %s", command)}
+	}
+}
+
+// handleRoomCommand handles /room subcommands.
+func handleRoomCommand(args []string, floor *Floor, ctrl *Controller) Decision {
+	if len(args) < 2 {
+		return Decision{Action: "error", Info: "Usage: /room #name @agent1 @agent2 [prompt] or /room close #name"}
+	}
+
+	// /room close #name
+	if args[1] == "close" {
+		if len(args) < 3 {
+			return Decision{Action: "error", Info: "Usage: /room close #name"}
+		}
+		roomID := args[2]
+		if !strings.HasPrefix(roomID, "#") {
+			roomID = "#" + roomID
+		}
+
+		room, ok := floor.Rooms[roomID]
+		if !ok {
+			return Decision{Action: "error", Info: fmt.Sprintf("Room %s not found", roomID)}
+		}
+
+		// Capture agent IDs before closing
+		for aid := range room.AgentIDs {
+			delete(ctrl.RoomBound, aid)
+		}
+
+		if err := floor.CloseRoom(roomID); err != nil {
+			return Decision{Action: "error", Info: fmt.Sprintf("Failed to close room: %v", err)}
+		}
+
+		return Decision{Action: "room_closed", Info: fmt.Sprintf("Room %s closed, agents returned to main floor", roomID)}
+	}
+
+	// /room #name @agent1 @agent2 [prompt text]
+	roomID := args[1]
+	if !strings.HasPrefix(roomID, "#") {
+		roomID = "#" + roomID
+	}
+
+	var agentIDs []string
+	var promptParts []string
+	inPrompt := false
+	for _, arg := range args[2:] {
+		if !inPrompt && strings.HasPrefix(arg, "@") {
+			agentIDs = append(agentIDs, arg)
+		} else {
+			inPrompt = true
+			promptParts = append(promptParts, arg)
+		}
+	}
+	prompt := strings.Join(promptParts, " ")
+
+	if len(agentIDs) == 0 {
+		return Decision{Action: "error", Info: "Usage: /room #name @agent1 @agent2 [prompt]"}
+	}
+
+	room, err := floor.CreateRoom(roomID, "@user", agentIDs, prompt)
+	if err != nil {
+		return Decision{Action: "error", Info: fmt.Sprintf("Failed to create room: %v", err)}
+	}
+
+	// Wire room controller debug + mark agents as room-bound
+	room.Controller.DebugFunc = ctrl.DebugFunc
+	for _, aid := range agentIDs {
+		ctrl.RoomBound[aid] = true
+	}
+
+	// Post initial prompt to room if provided
+	if prompt != "" {
+		room.Chat.Post(ChatMessage{From: "@user", Content: prompt})
+	}
+
+	return Decision{Action: "room_created", Info: fmt.Sprintf("Created room %s with %s", roomID, strings.Join(agentIDs, ", "))}
 }
 
 // --- Helpers ---

@@ -97,8 +97,9 @@ func NewTUIFrontend(logPath string, debug bool, colorMap map[string]string) (*TU
 // --- RunLoop ---
 
 // RunLoop is the event-driven main loop for TUI.
-// It runs a background goroutine that reads Chat.Events(), calls Controller.Decide(),
-// dispatches agents, and sends display events to Bubble Tea via p.Send().
+// It runs a background goroutine that reads from the unified event channel
+// (main floor + rooms), calls Controller.Decide(), dispatches agents,
+// and sends display events to Bubble Tea via p.Send().
 func (t *TUIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]Agent, initialPrompt string) error {
 	// Start floor infrastructure
 	if err := floor.Start(func(msg string) {
@@ -132,23 +133,40 @@ func (t *TUIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 			t.program.Send(tuiSystemMsg{Text: fmt.Sprintf("%s%s%s", Bold, strings.Repeat("=", 50), Reset)})
 		}
 
-		// Post initial prompt if provided
+		// Post initial prompt if provided (or handle as command)
 		if initialPrompt != "" {
 			if t.program != nil {
 				t.program.Send(tuiDisplayMsg{Event: AgentLabel{AgentID: "@user"}})
 				t.program.Send(tuiDisplayMsg{Event: TokenStreamed{AgentID: "@user", Token: initialPrompt + "\n"}})
 			}
-			floor.Chat.Post(ChatMessage{From: "@user", Content: initialPrompt})
+			floor.Chat.PostUserInput(initialPrompt)
 		}
 
 		var cancelAgent context.CancelFunc
 
-		for ev := range floor.Chat.Events() {
+		// Use unified event channel — merges main floor + all room events
+		unified := floor.StartUnified()
+
+		for tagged := range unified {
+			roomID := tagged.RoomID
+			ev := tagged.Event
+
+			// Resolve which Controller and Floor view to use
+			eventCtrl, eventFloor := ctrl, floor
+			if roomID != "" {
+				room, ok := floor.Rooms[roomID]
+				if !ok {
+					continue // room closed, stale event
+				}
+				eventCtrl = room.Controller
+				eventFloor = floor.ViewForRoom(room)
+			}
+
 			switch e := ev.(type) {
 			case MessagePosted:
 				t.logChatEvent(ev)
-				decision := ctrl.Decide(floor.Chat, e)
-				t.dispatchDecision(floor, agents, decision, &cancelAgent)
+				decision := eventCtrl.Decide(eventFloor.Chat, e)
+				t.dispatchDecision(eventFloor, agents, decision, &cancelAgent)
 
 			case StreamEvent:
 				if t.program != nil {
@@ -166,19 +184,19 @@ func (t *TUIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 					t.program.Send(tuiPassedMsg{AgentID: e.AgentID})
 				}
 				t.out.Log("[%s]: [PASS]\n", e.AgentID)
-				decision := ctrl.Decide(floor.Chat, e)
-				t.dispatchDecision(floor, agents, decision, &cancelAgent)
+				decision := eventCtrl.Decide(eventFloor.Chat, e)
+				t.dispatchDecision(eventFloor, agents, decision, &cancelAgent)
 
 			case AgentErrorEvent:
 				if t.program != nil {
 					t.program.Send(tuiErrorMsg{AgentID: e.AgentID, Err: e.Err})
 				}
 				t.out.Log("[ERROR from %s: %v]\n", e.AgentID, e.Err)
-				decision := ctrl.Decide(floor.Chat, e)
-				t.dispatchDecision(floor, agents, decision, &cancelAgent)
+				decision := eventCtrl.Decide(eventFloor.Chat, e)
+				t.dispatchDecision(eventFloor, agents, decision, &cancelAgent)
 
 			case UserCommandEvent:
-				decision := ctrl.Decide(floor.Chat, e)
+				decision := HandleCommand(e.Command, floor, ctrl)
 				switch decision.Action {
 				case "stop":
 					if t.program != nil {
@@ -188,6 +206,10 @@ func (t *TUIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 				case "clear":
 					if t.program != nil {
 						t.program.Send(tuiClearedMsg{})
+					}
+				case "room_created", "room_closed":
+					if t.program != nil {
+						t.program.Send(tuiSystemMsg{Text: decision.Info})
 					}
 				case "error":
 					if t.program != nil {
@@ -337,11 +359,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			// Post to Chat
 			if m.chat != nil {
-				if strings.HasPrefix(text, "/") {
-					m.chat.PostEvent(UserCommandEvent{Command: text})
-				} else {
-					m.chat.Post(ChatMessage{From: "@user", Content: text})
-				}
+				m.chat.PostUserInput(text)
 			}
 			return m, nil
 		}

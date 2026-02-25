@@ -130,30 +130,32 @@ func TestDecidePassFallsToNextAlwaysAgent(t *testing.T) {
 }
 
 func TestDecideQuitCommand(t *testing.T) {
-	ctrl := NewController(twoAgentBlueprint())
-	chat := NewChat()
+	bp := twoAgentBlueprint()
+	ctrl := NewController(bp)
+	floor := NewFloor(bp)
 
-	d := ctrl.Decide(chat, UserCommandEvent{Command: "/quit"})
+	d := HandleCommand("/quit", floor, ctrl)
 	requireDecision(t, d, "stop", "")
 }
 
 func TestDecideClearCommand(t *testing.T) {
-	ctrl := NewController(twoAgentBlueprint())
-	chat := NewChat()
+	bp := twoAgentBlueprint()
+	ctrl := NewController(bp)
+	floor := NewFloor(bp)
 
 	// Add some messages
-	chat.Post(ChatMessage{From: "@user", Content: "hello"})
-	ctrl.Decide(chat, MessagePosted{Message: ChatMessage{From: "@user", Content: "hello"}})
+	floor.Chat.Post(ChatMessage{From: "@user", Content: "hello"})
+	ctrl.Decide(floor.Chat, MessagePosted{Message: ChatMessage{From: "@user", Content: "hello"}})
 
-	if len(chat.History()) == 0 {
+	if len(floor.Chat.History()) == 0 {
 		t.Fatal("expected messages before clear")
 	}
 
-	d := ctrl.Decide(chat, UserCommandEvent{Command: "/clear"})
+	d := HandleCommand("/clear", floor, ctrl)
 	requireDecision(t, d, "clear", "")
 
-	if len(chat.History()) != 0 {
-		t.Errorf("expected empty after clear, got %d", len(chat.History()))
+	if len(floor.Chat.History()) != 0 {
+		t.Errorf("expected empty after clear, got %d", len(floor.Chat.History()))
 	}
 }
 
@@ -183,10 +185,11 @@ func TestDecideMentionsUserPauses(t *testing.T) {
 }
 
 func TestDecideUnknownCommand(t *testing.T) {
-	ctrl := NewController(twoAgentBlueprint())
-	chat := NewChat()
+	bp := twoAgentBlueprint()
+	ctrl := NewController(bp)
+	floor := NewFloor(bp)
 
-	d := ctrl.Decide(chat, UserCommandEvent{Command: "/foo"})
+	d := HandleCommand("/foo", floor, ctrl)
 	requireDecision(t, d, "error", "")
 	if d.Info != "Unknown command: /foo" {
 		t.Errorf("unexpected info: %s", d.Info)

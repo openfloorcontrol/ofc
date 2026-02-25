@@ -75,6 +75,13 @@ type AgentLabel struct {
 	AgentID string
 }
 
+// TaggedEvent wraps a ChatEvent with a room identifier.
+// RoomID is "" for main floor events.
+type TaggedEvent struct {
+	RoomID string
+	Event  ChatEvent
+}
+
 // Seal the interface — only floor package types can implement Event.
 func (UserMessage) eventMarker()    {}
 func (AgentDone) eventMarker()      {}
