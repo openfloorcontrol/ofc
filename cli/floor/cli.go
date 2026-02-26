@@ -128,6 +128,9 @@ func (f *CLIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 			if oneShot && roomID == "" && decision.Action == "wait" {
 				return nil
 			}
+			if info := TryAutoCloseRoom(roomID, decision, floor, ctrl); info != "" {
+				f.renderSystemInfo(info)
+			}
 			signalReady(roomID, decision)
 
 		case StreamEvent:
@@ -150,6 +153,9 @@ func (f *CLIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 			}
 			if oneShot && roomID == "" && decision.Action == "wait" {
 				return nil
+			}
+			if info := TryAutoCloseRoom(roomID, decision, floor, ctrl); info != "" {
+				f.renderSystemInfo(info)
 			}
 			signalReady(roomID, decision)
 

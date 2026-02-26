@@ -190,6 +190,31 @@ func (c *Controller) debug(format string, args ...any) {
 	}
 }
 
+// TryAutoCloseRoom checks if a room should auto-close after a decision.
+// Ad-hoc rooms auto-close when the controller returns "wait" (all agents done).
+// Returns info text if the room was closed, empty string otherwise.
+func TryAutoCloseRoom(roomID string, d Decision, floor *Floor, ctrl *Controller) string {
+	if roomID == "" || d.Action != "wait" {
+		return ""
+	}
+
+	room, ok := floor.Rooms[roomID]
+	if !ok || room.IsClosed() {
+		return ""
+	}
+
+	// Release agents from RoomBound before closing
+	for aid := range room.AgentIDs {
+		delete(ctrl.RoomBound, aid)
+	}
+
+	if err := floor.CloseRoom(roomID); err != nil {
+		return fmt.Sprintf("Failed to auto-close room %s: %v", roomID, err)
+	}
+
+	return fmt.Sprintf("Room %s finished, agents returned to main floor", roomID)
+}
+
 // HandleCommand parses and executes a user command.
 // This is the single place where all slash commands are parsed.
 // Side effects (room creation, chat clearing) happen here;

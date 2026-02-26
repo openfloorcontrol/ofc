@@ -167,6 +167,11 @@ func (t *TUIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 				t.logChatEvent(ev)
 				decision := eventCtrl.Decide(eventFloor.Chat, e)
 				t.dispatchDecision(eventFloor, agents, decision, &cancelAgent)
+				if info := TryAutoCloseRoom(roomID, decision, floor, ctrl); info != "" {
+					if t.program != nil {
+						t.program.Send(tuiSystemMsg{Text: info})
+					}
+				}
 
 			case StreamEvent:
 				if t.program != nil {
@@ -186,6 +191,11 @@ func (t *TUIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 				t.out.Log("[%s]: [PASS]\n", e.AgentID)
 				decision := eventCtrl.Decide(eventFloor.Chat, e)
 				t.dispatchDecision(eventFloor, agents, decision, &cancelAgent)
+				if info := TryAutoCloseRoom(roomID, decision, floor, ctrl); info != "" {
+					if t.program != nil {
+						t.program.Send(tuiSystemMsg{Text: info})
+					}
+				}
 
 			case AgentErrorEvent:
 				if t.program != nil {

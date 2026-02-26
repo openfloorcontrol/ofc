@@ -1,6 +1,7 @@
 package floor
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/openfloorcontrol/ofc/blueprint"
@@ -354,5 +355,75 @@ func TestRoomMissedMainFloorMessages(t *testing.T) {
 		if e.Content == "msg1" || e.Content == "msg2" || e.Content == "msg3" {
 			t.Errorf("@data should have missed main floor message %q", e.Content)
 		}
+	}
+}
+
+func TestTryAutoCloseRoom(t *testing.T) {
+	bp := &blueprint.Blueprint{
+		Name: "test",
+		Agents: []blueprint.Agent{
+			{ID: "@data", Activation: "always", ToolContext: "full"},
+			{ID: "@code", Activation: "mention", ToolContext: "full"},
+		},
+	}
+	floor := NewFloor(bp)
+	ctrl := NewController(bp)
+
+	// Create a room
+	room, err := floor.CreateRoom("#work", "@user", []string{"@data", "@code"}, "do stuff")
+	if err != nil {
+		t.Fatalf("CreateRoom: %v", err)
+	}
+	ctrl.RoomBound["@data"] = true
+	ctrl.RoomBound["@code"] = true
+
+	// Post a message so room has some history
+	room.Chat.Post(ChatMessage{From: "@data", Content: "done with the analysis"})
+
+	// Non-room event — should not close anything
+	info := TryAutoCloseRoom("", Decision{Action: "wait"}, floor, ctrl)
+	if info != "" {
+		t.Errorf("expected no auto-close for main floor, got: %s", info)
+	}
+
+	// Room event but action is "trigger" — should not close
+	info = TryAutoCloseRoom("#work", Decision{Action: "trigger", AgentID: "@code"}, floor, ctrl)
+	if info != "" {
+		t.Errorf("expected no auto-close for trigger, got: %s", info)
+	}
+
+	// Room event with "wait" — should auto-close
+	info = TryAutoCloseRoom("#work", Decision{Action: "wait"}, floor, ctrl)
+	if info == "" {
+		t.Fatal("expected auto-close info, got empty")
+	}
+
+	// Room should be closed
+	if !room.IsClosed() {
+		t.Error("room should be closed after auto-close")
+	}
+
+	// Agents should be unbound
+	if ctrl.RoomBound["@data"] || ctrl.RoomBound["@code"] {
+		t.Error("agents should be removed from RoomBound after auto-close")
+	}
+
+	// Summary should be posted to main floor
+	mainHistory := floor.Chat.History()
+	found := false
+	for _, m := range mainHistory {
+		if m.From == "@system" && strings.Contains(m.Content, "#work") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected summary posted to main floor after auto-close")
+	}
+
+	// Calling again on closed room — should be a no-op
+	info = TryAutoCloseRoom("#work", Decision{Action: "wait"}, floor, ctrl)
+	if info != "" {
+		t.Errorf("expected no-op for already-closed room, got: %s", info)
 	}
 }
