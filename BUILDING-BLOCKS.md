@@ -377,14 +377,18 @@ Given these building blocks, OFC's unique implementation scope is:
 ```
 cli/
 ├── floor/                       ← core floor engine
-│   ├── floor.go                 (Floor: shared state, lifecycle, API server)
-│   ├── controller.go            (Controller: pure-logic turn-taking, event → decision)
-│   ├── chat.go                  (Chat: event bus, message history, subscriber fan-out)
+│   ├── floor.go                 (Floor: shared state, rooms, lifecycle, API server)
+│   ├── controller.go            (Controller: turn-taking, command handling)
+│   ├── chat.go                  (Chat: event bus, message history, subscribers)
+│   ├── agent_context.go         (AgentContext: per-agent message streams, delta)
+│   ├── room.go                  (Room: isolated sub-conversations)
+│   ├── events.go                (Event types, TaggedEvent for unified channel)
 │   ├── api.go                   (HTTP API: messages, SSE events, MCP endpoints)
 │   ├── agent.go                 (Agent interface)
 │   ├── agent_llm.go             (LLM agent: OpenAI-compatible API)
 │   ├── agent_acp.go             (ACP agent: Claude Code, etc.)
-│   └── cli_frontend.go          (CLI frontend: terminal I/O, rendering)
+│   ├── cli.go                   (CLI frontend: terminal I/O, rendering)
+│   └── tui.go                   (TUI frontend: Bubble Tea split-layout)
 ├── blueprint/                   (YAML loading, agent/workstation config)
 ├── furniture/                   (Furniture interface, TaskBoard, ExternalMCP)
 ├── sandbox/                     (Docker sandbox management)

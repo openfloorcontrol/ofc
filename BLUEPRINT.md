@@ -150,6 +150,40 @@ Agents interact through conversation:
 
 Delegation chains work like a call stack: if `@user` asks `@data?`, and `@data` asks `@code?`, then `@code`'s response goes back to `@data`, and `@data`'s response goes back to `@user`.
 
+## Rooms
+
+Rooms are isolated sub-conversations. Agents in a room have their own Chat and Controller — messages don't leak to the main floor.
+
+### Creating a room
+
+```
+/room #analysis @data @code Analyze the sales data and produce a summary
+```
+
+This creates room `#analysis`, moves `@data` and `@code` into it, and posts the prompt. The agents collaborate in the room, and their output is tagged with the room name (e.g. `[#analysis/@data]:`).
+
+### Auto-close
+
+When all agents in a room are done (no more agents to trigger), the room auto-closes:
+- Agents return to the main floor
+- A summary is posted to the main floor chat
+- Agents receive a system message about the transition
+
+### Manual close
+
+```
+/room close #analysis
+```
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `/quit` | Exit the floor |
+| `/clear` | Clear conversation history and reset turn state |
+| `/room #name @agent1 @agent2 [prompt]` | Create a room with agents and optional prompt |
+| `/room close #name` | Close a room manually |
+
 ## Full example
 
 ```yaml
