@@ -30,11 +30,11 @@ builds:
 
 archives:
   - id: default
-    format: tar.gz
+    formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     format_overrides:
       - goos: windows
-        format: zip
+        formats: [zip]
 
 checksum:
   name_template: "checksums.txt"
@@ -50,18 +50,13 @@ changelog:
       - "^test:"
       - "^chore:"
 
-brews:
+homebrew_casks:
   - repository:
       owner: openfloorcontrol
       name: homebrew-tap
-    directory: Formula
     homepage: "https://ofc.dev"
     description: "Open Floor Control - multi-agent conversation protocol"
     license: "MIT"
-    install: |
-      bin.install "ofc"
-    test: |
-      system "#{bin}/ofc", "--version"
 
 release:
   github:
