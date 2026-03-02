@@ -80,6 +80,20 @@ Most agents need an ACP adapter — for example, Claude Code uses
 [claude-code-acp](https://github.com/zed-industries/claude-code-acp)
 (`npm i -g @zed-industries/claude-code-acp`).
 
+### External prompt files
+
+For longer prompts, use `prompt_file` to keep the blueprint clean:
+
+```yaml
+agents:
+  - id: "@data"
+    name: "Data Analyst"
+    activation: always
+    prompt_file: prompts/analyst.txt
+```
+
+The path is relative to the blueprint file's directory. Absolute paths also work.
+
 ### Agent fields
 
 | Field | Default | Description |
@@ -88,6 +102,7 @@ Most agents need an ACP adapter — for example, Claude Code uses
 | `name` | | Human-readable name |
 | `type` | `"llm"` | `"llm"` for OpenAI-compatible API, `"acp"` for Agent Client Protocol |
 | `prompt` | | System prompt defining the agent's role and behavior |
+| `prompt_file` | | Path to a file containing the system prompt (relative to blueprint dir). Cannot be used together with `prompt`. |
 | `activation` | `"mention"` | When the agent wakes up: `"mention"` (only on `@id?`) or `"always"` (listens to everything) |
 | `can_use_sandbox` | `false` | Whether the agent can use workstation tools (sandbox, etc.) |
 | `tool_context` | `"full"` | How much of other agents' tool output to include: `"full"`, `"summary"`, or `"none"` |

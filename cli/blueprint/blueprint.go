@@ -2,7 +2,9 @@
 package blueprint
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 
 	"gopkg.in/yaml.v3"
 )
@@ -18,6 +20,7 @@ type Agent struct {
 	Args        []string          `yaml:"args"`    // ACP: args for the command
 	Env         map[string]string `yaml:"env"`     // ACP: env vars for agent process
 	Prompt      string            `yaml:"prompt"`
+	PromptFile  string            `yaml:"prompt_file"`
 	Activation  string            `yaml:"activation"`
 	CanUseSandbox bool            `yaml:"can_use_sandbox"`
 	Temperature float64           `yaml:"temperature"`
@@ -69,6 +72,25 @@ func Load(path string) (*Blueprint, error) {
 	var bp Blueprint
 	if err := yaml.Unmarshal(data, &bp); err != nil {
 		return nil, err
+	}
+
+	// Resolve prompt files relative to blueprint directory
+	bpDir := filepath.Dir(path)
+	for i := range bp.Agents {
+		if bp.Agents[i].PromptFile != "" {
+			if bp.Agents[i].Prompt != "" {
+				return nil, fmt.Errorf("agent %s: cannot set both prompt and prompt_file", bp.Agents[i].ID)
+			}
+			p := bp.Agents[i].PromptFile
+			if !filepath.IsAbs(p) {
+				p = filepath.Join(bpDir, p)
+			}
+			data, err := os.ReadFile(p)
+			if err != nil {
+				return nil, fmt.Errorf("agent %s: reading prompt_file: %w", bp.Agents[i].ID, err)
+			}
+			bp.Agents[i].Prompt = string(data)
+		}
 	}
 
 	// Apply defaults
