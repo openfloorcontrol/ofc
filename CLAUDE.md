@@ -20,16 +20,19 @@ cli/                          # Go module (github.com/openfloorcontrol/ofc)
   cmd/                        # Cobra CLI commands (run, init, version)
   blueprint/                  # YAML blueprint schema + loader
   floor/                      # Core orchestration engine
-    controller.go             # Pure-logic state machine (event→event, no I/O)
-    coordinator.go            # Wiring layer (lifecycle, agent dispatch, furniture)
-    runner.go                 # LLMRunner + ACPRunner (agent execution)
-    events.go                 # All event types (sealed interface)
-    floor.go                  # Domain types (FloorMessage, Frame, ToolInteraction)
-    frontend.go               # Frontend + StreamSink interfaces
-    cli.go                    # CLI frontend (stdin/stdout)
+    floor.go                  # Floor: Chat, Furniture, Sandbox, ACP sessions, Rooms
+    chat.go                   # Chat: thread-safe message store + event channel + listeners
+    controller.go             # Controller: pure-logic turn-taking (Decide → Decision, no I/O)
+    agent.go                  # Agent interface + dispatch
+    agent_llm.go              # LLMAgent: builds context from AgentContext, calls LLM API
+    agent_acp.go              # ACPAgent: sends deltas via AgentContext, ACP over stdio
+    agent_context.go          # AgentContext: per-agent message accumulator (Entries/Delta/MarkSent)
+    room.go                   # Room: isolated sub-conversation with own Chat + Controller
+    events.go                 # ChatEvent types + TaggedEvent for unified channel
+    cli.go                    # CLI frontend (stdin/stdout, unified event loop)
     tui.go                    # Bubble Tea TUI frontend
     output.go                 # Output multiplexer (terminal + log file)
-    api.go                    # Echo HTTP server for MCP endpoints (SSE + Streamable HTTP)
+    api.go                    # Echo HTTP server: MCP endpoints + Floor REST API
   acp/                        # Agent Client Protocol integration
     session.go                # ACP agent subprocess lifecycle + handshake
     client.go                 # FloorClient: implements acpsdk.Client callbacks
@@ -47,6 +50,7 @@ examples/                     # Blueprint examples
   taskboard/                  # LLM agents with shared task board
   data-analysis/              # LLM agents with Docker sandbox
   data-analysis-acp/          # LLM analyst (fs MCP) + Claude Code coder
+  data-analysis-opencode/     # LLM analyst (fs MCP) + OpenCode coder
   acp-test/                   # ACP agent with sandbox
   chaindepth/                 # Delegation chain depth test
 ```
@@ -56,21 +60,25 @@ examples/                     # Blueprint examples
 **Event-driven** with clean separation:
 
 ```
-User Input → Frontend.ReadInput() → Controller.HandleEvent() → Coordinator.processEvents()
-                                         ↓                            ↓
-                                    Pure logic:                  Dispatches to:
-                                    Messages[], CallStack[]      LLMRunner or ACPRunner
-                                    Turn-taking decisions        Frontend.Render()
+User Input → Chat.PostUserInput() → ChatEvent → Frontend event loop
+                                                      ↓
+                                              Controller.Decide(chat, event) → Decision
+                                                      ↓
+                                              Agent.Run(ctx, floor) — goroutine
+                                                      ↓
+                                              Chat.Post() → next event
 ```
 
-**Controller** (`floor/controller.go`) is the heart — a pure function: event in, events out. No I/O, no goroutines. Fully testable (12 tests, zero mocks).
+**Floor** (`floor/floor.go`) owns shared state: Chat, Furniture, Sandbox, ACP sessions, Rooms, AgentContexts.
 
-**Coordinator** (`floor/coordinator.go`) owns lifecycle: sandbox, ACP sessions, furniture, API server. Main loop reads input → HandleEvent → processEvents (recursive dispatch).
+**Controller** (`floor/controller.go`) is the heart — a pure function: event in, Decision out. No I/O, no goroutines. Fully testable.
+
+**Agents** run as goroutines. LLMAgent builds context from AgentContext and calls the LLM API. ACPAgent sends deltas over stdio. Both post results back to Chat.
 
 ## Two Agent Paths
 
-- **LLM agents**: Controller builds `[]llm.Message` context. LLMRunner calls OpenAI-compatible API. Furniture tools injected as function calls namespaced `{furniture}__{tool}`. Direct `Furniture.Call()`. `can_use_sandbox` controls bash tool access (requires Docker sandbox).
-- **ACP agents** (e.g. Claude Code via `claude-code-acp`): Controller builds `[]acpsdk.ContentBlock` context. ACPRunner sends via `AgentSession.Prompt()` over stdio. Furniture exposed as MCP server URLs (SSE preferred). ACP agents also have built-in file read/write and terminal execution via FloorClient callbacks (separate from furniture MCP).
+- **LLM agents** (`agent_llm.go`): Builds `[]llm.Message` context from `AgentContext.Entries()`. Calls OpenAI-compatible API. Furniture tools injected as function calls namespaced `{furniture}__{tool}`. Direct `Furniture.Call()`. `can_use_sandbox` controls bash tool access (requires Docker sandbox).
+- **ACP agents** (`agent_acp.go`, e.g. Claude Code, OpenCode): Sends delta context via `AgentContext.Delta()` / `MarkSent()`. Communicates over stdio via `AgentSession.Prompt()`. Furniture exposed as MCP server URLs (SSE preferred). ACP agents also have built-in file read/write and terminal execution via FloorClient callbacks.
 
 ## Furniture System
 
@@ -142,8 +150,8 @@ agents:
 
 ## Design Docs
 
-- `PROTOCOL.md` — Full OFC protocol specification
 - `FURNITURE.md` — Furniture architecture (proxy principle, two agent paths, MCP transport)
 - `BLUEPRINT.md` — Blueprint YAML reference
-- `ROADMAP.md` — 6-phase roadmap
+- `ROADMAP.md` — Project roadmap
 - `BUILDING-BLOCKS.md` — Research notes on ACP, MCP, KAOS protocol stack
+- `history/PROTOCOL.md` — Early protocol specification (historical)
