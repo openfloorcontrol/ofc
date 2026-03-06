@@ -370,6 +370,8 @@ func (f *Floor) initFurniture(renderInfo func(string)) error {
 		if err != nil {
 			return fmt.Errorf("failed to create furniture %q: %w", fd.Name, err)
 		}
+		// Wrap so all Call() invocations emit FurnitureUpdated events
+		fur = &observableFurniture{inner: fur, chat: f.Chat}
 		f.Furniture[fd.Name] = fur
 		renderInfo(fmt.Sprintf("Furniture ready: %s (%s)", fd.Name, fd.Type))
 	}
@@ -381,6 +383,29 @@ func (f *Floor) initFurniture(renderInfo func(string)) error {
 	}
 
 	return nil
+}
+
+// observableFurniture wraps a Furniture and emits FurnitureUpdated events
+// on mutating Call()s. This covers all paths: LLM agents, ACP/MCP, and web UI.
+type observableFurniture struct {
+	inner furniture.Furniture
+	chat  *Chat
+}
+
+// readOnlyTools are tool names that don't mutate state (no need to notify).
+var readOnlyTools = map[string]bool{
+	"list_tasks": true,
+	"get_task":   true,
+}
+
+func (o *observableFurniture) Name() string             { return o.inner.Name() }
+func (o *observableFurniture) Tools() []furniture.Tool   { return o.inner.Tools() }
+func (o *observableFurniture) Call(toolName string, args map[string]interface{}) (interface{}, error) {
+	result, err := o.inner.Call(toolName, args)
+	if err == nil && !readOnlyTools[toolName] {
+		o.chat.PostStream(FurnitureUpdated{Name: o.inner.Name()})
+	}
+	return result, err
 }
 
 // startACPAgent initializes one ACP agent session.

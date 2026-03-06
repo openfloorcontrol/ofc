@@ -93,12 +93,15 @@ func (c *FloorClient) SessionUpdate(ctx context.Context, params acpsdk.SessionNo
 
 	case u.ToolCall != nil:
 		c.debug(fmt.Sprintf("tool_call: %s (%s)", u.ToolCall.Title, u.ToolCall.Status))
-		// Track the tool call start so we can pair it with output later
+		// ACP sends two tool_call events per call: first a short preview title,
+		// then a detailed title. Only emit OnToolCall for the first one;
+		// subsequent events for the same ID just update the tracked title.
+		tcID := string(u.ToolCall.ToolCallId)
 		c.mu.Lock()
-		c.toolCalls[string(u.ToolCall.ToolCallId)] = u.ToolCall.Title
+		_, seen := c.toolCalls[tcID]
+		c.toolCalls[tcID] = u.ToolCall.Title
 		c.mu.Unlock()
-		// Print tool call title to output
-		if c.OnToolCall != nil {
+		if !seen && c.OnToolCall != nil {
 			c.OnToolCall(u.ToolCall.Title)
 		}
 

@@ -472,6 +472,78 @@ func TestAuthTokenEndpoint(t *testing.T) {
 	}
 }
 
+func TestGetFurniture(t *testing.T) {
+	tb := furniture.NewTaskBoard()
+	furMap := map[string]furniture.Furniture{"tasks": tb}
+
+	chat := NewChat()
+	api := NewAPIServer()
+	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, furMap)
+	if err := api.Start(":0"); err != nil {
+		t.Fatalf("failed to start: %v", err)
+	}
+	defer api.Stop()
+
+	resp, err := http.Get(api.BaseURL() + "/api/v1/furniture")
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Furniture []struct {
+			Name  string `json:"name"`
+			Tools []struct {
+				Name        string `json:"name"`
+				Description string `json:"description"`
+			} `json:"tools"`
+		} `json:"furniture"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+
+	if len(result.Furniture) != 1 {
+		t.Fatalf("expected 1 furniture, got %d", len(result.Furniture))
+	}
+	if result.Furniture[0].Name != "tasks" {
+		t.Fatalf("expected name 'tasks', got %q", result.Furniture[0].Name)
+	}
+	if len(result.Furniture[0].Tools) != 4 {
+		t.Fatalf("expected 4 tools, got %d", len(result.Furniture[0].Tools))
+	}
+}
+
+func TestGetFurnitureEmpty(t *testing.T) {
+	chat := NewChat()
+	api := NewAPIServer()
+	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil)
+	if err := api.Start(":0"); err != nil {
+		t.Fatalf("failed to start: %v", err)
+	}
+	defer api.Stop()
+
+	resp, err := http.Get(api.BaseURL() + "/api/v1/furniture")
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Furniture []interface{} `json:"furniture"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if len(result.Furniture) != 0 {
+		t.Fatalf("expected empty furniture list, got %d", len(result.Furniture))
+	}
+}
+
 func toolNames(tools []*mcp.Tool) []string {
 	var names []string
 	for _, t := range tools {

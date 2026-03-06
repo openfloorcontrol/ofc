@@ -75,6 +75,11 @@ type AgentLabel struct {
 	AgentID string
 }
 
+// FurnitureUpdated is emitted when a furniture's state may have changed (after a Call).
+type FurnitureUpdated struct {
+	Name string // furniture name (e.g. "tasks")
+}
+
 // TaggedEvent wraps a ChatEvent with a room identifier.
 // RoomID is "" for main floor events.
 type TaggedEvent struct {
@@ -93,4 +98,5 @@ func (TokenStreamed) eventMarker()  {}
 func (ToolCallStarted) eventMarker() {}
 func (ToolCallResult) eventMarker() {}
 func (AgentThinking) eventMarker()  {}
-func (AgentLabel) eventMarker()     {}
+func (AgentLabel) eventMarker()          {}
+func (FurnitureUpdated) eventMarker()    {}

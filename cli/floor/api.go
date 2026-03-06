@@ -223,6 +223,7 @@ func (s *APIServer) RegisterFloorAPI(chat *Chat, bp *blueprint.Blueprint, furnit
 	s.echo.GET("/api/v1/messages", handleGetMessages(chat))
 	s.echo.GET("/api/v1/events", handleSSEEvents(chat))
 	s.echo.GET("/api/v1/agents", handleGetAgents(bp))
+	s.echo.GET("/api/v1/furniture", handleGetFurniture(furnitureMap))
 	s.echo.POST("/api/v1/furniture/:name/call", handleFurnitureCall(furnitureMap))
 	s.echo.GET("/api/v1/auth/token", handleAuthToken(s))
 }
@@ -315,6 +316,41 @@ func handleGetAgents(bp *blueprint.Blueprint) echo.HandlerFunc {
 			"description": bp.Description,
 			"agents":      agents,
 		})
+	}
+}
+
+// GET /api/v1/furniture — list available furniture with their tools.
+func handleGetFurniture(furnitureMap map[string]furniture.Furniture) echo.HandlerFunc {
+	type jsonTool struct {
+		Name        string                 `json:"name"`
+		Description string                 `json:"description"`
+		Parameters  map[string]interface{} `json:"parameters,omitempty"`
+	}
+	type jsonFurniture struct {
+		Name  string     `json:"name"`
+		Tools []jsonTool `json:"tools"`
+	}
+	return func(c echo.Context) error {
+		var items []jsonFurniture
+		for _, fur := range furnitureMap {
+			tools := fur.Tools()
+			jtools := make([]jsonTool, len(tools))
+			for i, t := range tools {
+				jtools[i] = jsonTool{
+					Name:        t.Name,
+					Description: t.Description,
+					Parameters:  t.Parameters,
+				}
+			}
+			items = append(items, jsonFurniture{
+				Name:  fur.Name(),
+				Tools: jtools,
+			})
+		}
+		if items == nil {
+			items = []jsonFurniture{}
+		}
+		return c.JSON(http.StatusOK, map[string]interface{}{"furniture": items})
 	}
 }
 
@@ -435,6 +471,11 @@ func sseEventJSON(ev ChatEvent) []byte {
 			payload = map[string]interface{}{
 				"type":     "agent_label",
 				"agent_id": se.AgentID,
+			}
+		case FurnitureUpdated:
+			payload = map[string]interface{}{
+				"type": "furniture_updated",
+				"name": se.Name,
 			}
 		default:
 			return nil
