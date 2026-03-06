@@ -269,7 +269,15 @@ func joinAgentIDs(ids []string, exclude string) string {
 func (f *Floor) Start(renderInfo func(string)) error {
 	// 1. API server (always — serves floor message endpoints + furniture MCP)
 	f.APIServer = NewAPIServer()
-	f.APIServer.RegisterFloorAPI(f.Chat, f.Blueprint)
+
+	// Generate auth token for web mode
+	if f.ServeWebDist {
+		token := GenerateToken()
+		f.APIServer.SetAuthToken(token)
+	}
+
+	// Register floor API (furniture map is populated later but closures capture the reference)
+	f.APIServer.RegisterFloorAPI(f.Chat, f.Blueprint, f.Furniture)
 
 	// 2. Sandbox
 	var sandboxWS *blueprint.Workstation
@@ -427,6 +435,12 @@ func (f *Floor) buildACPMCPServers(agent blueprint.Agent, session *acpclient.Age
 	caps := session.McpCapabilities
 	base := f.APIServer.BaseURL()
 
+	// Include auth header if token is set
+	var headers []acpsdk.HttpHeader
+	if token := f.APIServer.AuthToken(); token != "" {
+		headers = []acpsdk.HttpHeader{{Name: "Authorization", Value: "Bearer " + token}}
+	}
+
 	var servers []acpsdk.McpServer
 	for _, fname := range agent.Furniture {
 		if _, ok := f.Furniture[fname]; !ok {
@@ -441,7 +455,7 @@ func (f *Floor) buildACPMCPServers(agent blueprint.Agent, session *acpclient.Age
 					Type:    "sse",
 					Name:    fname,
 					Url:     url,
-					Headers: []acpsdk.HttpHeader{},
+					Headers: headers,
 				},
 			})
 		case caps.Http:
@@ -451,7 +465,7 @@ func (f *Floor) buildACPMCPServers(agent blueprint.Agent, session *acpclient.Age
 					Type:    "http",
 					Name:    fname,
 					Url:     url,
-					Headers: []acpsdk.HttpHeader{},
+					Headers: headers,
 				},
 			})
 		default:

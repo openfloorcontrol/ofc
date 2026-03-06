@@ -1,4 +1,5 @@
 import { ref, computed } from 'vue'
+import { apiFetch } from './useAuth.js'
 
 /**
  * Chat state machine composable.
@@ -118,7 +119,7 @@ export function useChat() {
    */
   async function loadHistory() {
     try {
-      const resp = await fetch('/api/v1/messages')
+      const resp = await apiFetch('/api/v1/messages')
       const data = await resp.json()
       messages.value = (data.messages || []).map((m, i) => ({
         id: i,

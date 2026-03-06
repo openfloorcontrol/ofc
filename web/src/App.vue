@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { useSSE } from './composables/useSSE.js'
 import { useChat } from './composables/useChat.js'
+import { getToken, apiFetch } from './composables/useAuth.js'
 import Header from './components/Header.vue'
 import ChatPanel from './components/ChatPanel.vue'
 import InputBar from './components/InputBar.vue'
@@ -11,11 +12,11 @@ const floorDescription = ref('')
 const agents = ref([])
 
 const { messages, streamingMessage, isStreaming, handleEvent, loadHistory } = useChat()
-const sse = useSSE('/api/v1/events')
+const sse = useSSE('/api/v1/events', getToken)
 
 async function fetchMetadata() {
   try {
-    const resp = await fetch('/api/v1/agents')
+    const resp = await apiFetch('/api/v1/agents')
     const data = await resp.json()
     floorName.value = data.floor_name || 'OFC'
     floorDescription.value = data.description || ''
@@ -26,7 +27,7 @@ async function fetchMetadata() {
 }
 
 async function sendMessage(content) {
-  await fetch('/api/v1/messages', {
+  await apiFetch('/api/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ content }),

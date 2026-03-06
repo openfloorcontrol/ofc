@@ -2,6 +2,8 @@ package floor
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -13,12 +15,14 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/openfloorcontrol/ofc/blueprint"
+	"github.com/openfloorcontrol/ofc/furniture"
 )
 
 // APIServer serves MCP endpoints for furniture over HTTP.
 type APIServer struct {
-	echo     *echo.Echo
-	listener net.Listener
+	echo      *echo.Echo
+	listener  net.Listener
+	authToken string
 }
 
 // NewAPIServer creates a new API server.
@@ -31,10 +35,67 @@ func NewAPIServer() *APIServer {
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: []string{"*"},
 		AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodOptions},
-		AllowHeaders: []string{echo.HeaderContentType, echo.HeaderAccept},
+		AllowHeaders: []string{echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization},
 	}))
 
 	return &APIServer{echo: e}
+}
+
+// SetAuthToken sets the token and installs auth middleware.
+// Must be called before Start(). If token is empty, no auth is enforced.
+func (s *APIServer) SetAuthToken(token string) {
+	s.authToken = token
+	if token != "" {
+		s.echo.Use(authMiddleware(token))
+	}
+}
+
+// AuthToken returns the current auth token.
+func (s *APIServer) AuthToken() string {
+	return s.authToken
+}
+
+// GenerateToken creates a cryptographically random 32-byte hex token.
+func GenerateToken() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		panic("failed to generate random token: " + err.Error())
+	}
+	return hex.EncodeToString(b)
+}
+
+// authMiddleware checks for a valid auth token on /api/* routes.
+// Accepts Authorization: Bearer <token> header or ?token=<token> query param.
+// Skips non-API routes (static files) and the token endpoint itself.
+func authMiddleware(token string) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			path := c.Request().URL.Path
+
+			// Skip non-API routes (static files)
+			if !strings.HasPrefix(path, "/api/") {
+				return next(c)
+			}
+
+			// Skip the token endpoint (has its own loopback check)
+			if path == "/api/v1/auth/token" {
+				return next(c)
+			}
+
+			// Check Authorization header
+			auth := c.Request().Header.Get("Authorization")
+			if auth == "Bearer "+token {
+				return next(c)
+			}
+
+			// Check query parameter (needed for EventSource/SSE)
+			if c.QueryParam("token") == token {
+				return next(c)
+			}
+
+			return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		}
+	}
 }
 
 // RegisterFurniture adds MCP endpoints for a piece of furniture.
@@ -60,7 +121,18 @@ func (s *APIServer) RegisterFurniture(floor, name string, mcpSrv *mcp.Server) {
 }
 
 // ServeStaticWeb serves the web/dist/ directory as static files with SPA fallback.
+// If auth is enabled, injects the token into index.html.
 func (s *APIServer) ServeStaticWeb(webFS fs.FS) {
+	// Read index.html and optionally inject auth token
+	indexHTML, err := fs.ReadFile(webFS, "index.html")
+	if err != nil {
+		indexHTML = []byte("<html><body>index.html not found</body></html>")
+	}
+	if s.authToken != "" {
+		tokenScript := fmt.Sprintf(`<script>window.__OFC_TOKEN="%s"</script></head>`, s.authToken)
+		indexHTML = []byte(strings.Replace(string(indexHTML), "</head>", tokenScript, 1))
+	}
+
 	fileServer := http.FileServer(http.FS(webFS))
 
 	// Catch-all: serve static files, fall back to index.html for SPA routes
@@ -71,15 +143,21 @@ func (s *APIServer) ServeStaticWeb(webFS fs.FS) {
 			return
 		}
 
+		// Root path → serve (possibly token-injected) index.html
+		if r.URL.Path == "/" {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Write(indexHTML)
+			return
+		}
+
 		// Try serving the file directly
-		// Use a response recorder to check if file exists
 		rr := &statusRecorder{ResponseWriter: w}
 		fileServer.ServeHTTP(rr, r)
 
 		// If file not found, serve index.html (SPA fallback)
 		if rr.status == http.StatusNotFound {
-			r.URL.Path = "/"
-			fileServer.ServeHTTP(w, r)
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Write(indexHTML)
 		}
 	})))
 }
@@ -139,12 +217,14 @@ func (s *APIServer) BaseURL() string {
 	return fmt.Sprintf("http://%s", s.listener.Addr().String())
 }
 
-// RegisterFloorAPI adds message endpoints for posting to and reading from the floor.
-func (s *APIServer) RegisterFloorAPI(chat *Chat, bp *blueprint.Blueprint) {
+// RegisterFloorAPI adds message and furniture endpoints for the floor.
+func (s *APIServer) RegisterFloorAPI(chat *Chat, bp *blueprint.Blueprint, furnitureMap map[string]furniture.Furniture) {
 	s.echo.POST("/api/v1/messages", handlePostMessage(chat))
 	s.echo.GET("/api/v1/messages", handleGetMessages(chat))
 	s.echo.GET("/api/v1/events", handleSSEEvents(chat))
 	s.echo.GET("/api/v1/agents", handleGetAgents(bp))
+	s.echo.POST("/api/v1/furniture/:name/call", handleFurnitureCall(furnitureMap))
+	s.echo.GET("/api/v1/auth/token", handleAuthToken(s))
 }
 
 // POST /api/v1/messages — inject a message into the floor chat.
@@ -235,6 +315,52 @@ func handleGetAgents(bp *blueprint.Blueprint) echo.HandlerFunc {
 			"description": bp.Description,
 			"agents":      agents,
 		})
+	}
+}
+
+// POST /api/v1/furniture/:name/call — proxy a tool call to a furniture instance.
+func handleFurnitureCall(furnitureMap map[string]furniture.Furniture) echo.HandlerFunc {
+	type request struct {
+		Tool string                 `json:"tool"`
+		Args map[string]interface{} `json:"args"`
+	}
+	return func(c echo.Context) error {
+		name := c.Param("name")
+		fur, ok := furnitureMap[name]
+		if !ok {
+			return c.JSON(http.StatusNotFound, map[string]string{"error": fmt.Sprintf("furniture %q not found", name)})
+		}
+
+		var req request
+		if err := c.Bind(&req); err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		}
+		if req.Tool == "" {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "tool is required"})
+		}
+		if req.Args == nil {
+			req.Args = make(map[string]interface{})
+		}
+
+		result, err := fur.Call(req.Tool, req.Args)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		}
+
+		return c.JSON(http.StatusOK, map[string]interface{}{"result": result})
+	}
+}
+
+// GET /api/v1/auth/token — returns the auth token (loopback only, for dev mode).
+func handleAuthToken(s *APIServer) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		// Only allow from loopback addresses
+		ip := c.RealIP()
+		if ip != "127.0.0.1" && ip != "::1" && ip != "localhost" {
+			return c.JSON(http.StatusForbidden, map[string]string{"error": "only available from localhost"})
+		}
+
+		return c.JSON(http.StatusOK, map[string]interface{}{"token": s.authToken})
 	}
 }
 

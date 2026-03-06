@@ -104,7 +104,7 @@ func TestAPIServerMCPEndToEnd(t *testing.T) {
 func TestPostMessage(t *testing.T) {
 	chat := NewChat()
 	api := NewAPIServer()
-	api.RegisterFloorAPI(chat, &blueprint.Blueprint{})
+	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil)
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestPostMessage(t *testing.T) {
 func TestPostMessageDefaultsFrom(t *testing.T) {
 	chat := NewChat()
 	api := NewAPIServer()
-	api.RegisterFloorAPI(chat, &blueprint.Blueprint{})
+	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil)
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestPostMessageDefaultsFrom(t *testing.T) {
 func TestPostMessageRejectsEmpty(t *testing.T) {
 	chat := NewChat()
 	api := NewAPIServer()
-	api.RegisterFloorAPI(chat, &blueprint.Blueprint{})
+	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil)
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestPostMessageRejectsEmpty(t *testing.T) {
 func TestGetMessages(t *testing.T) {
 	chat := NewChat()
 	api := NewAPIServer()
-	api.RegisterFloorAPI(chat, &blueprint.Blueprint{})
+	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil)
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestGetMessages(t *testing.T) {
 func TestSSEEvents(t *testing.T) {
 	chat := NewChat()
 	api := NewAPIServer()
-	api.RegisterFloorAPI(chat, &blueprint.Blueprint{})
+	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil)
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
@@ -292,7 +292,7 @@ func TestGetAgents(t *testing.T) {
 
 	chat := NewChat()
 	api := NewAPIServer()
-	api.RegisterFloorAPI(chat, bp)
+	api.RegisterFloorAPI(chat, bp, nil)
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
@@ -333,6 +333,142 @@ func TestGetAgents(t *testing.T) {
 	}
 	if result.Agents[1].ID != "@coder" || result.Agents[1].Type != "acp" {
 		t.Fatalf("unexpected second agent: %+v", result.Agents[1])
+	}
+}
+
+func TestAuthMiddlewareBlocksWithoutToken(t *testing.T) {
+	chat := NewChat()
+	api := NewAPIServer()
+	api.SetAuthToken("test-secret-token")
+	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil)
+	if err := api.Start(":0"); err != nil {
+		t.Fatalf("failed to start: %v", err)
+	}
+	defer api.Stop()
+
+	// Request without token → 401
+	resp, err := http.Get(api.BaseURL() + "/api/v1/agents")
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without token, got %d", resp.StatusCode)
+	}
+
+	// Request with Bearer header → 200
+	req, _ := http.NewRequest("GET", api.BaseURL()+"/api/v1/agents", nil)
+	req.Header.Set("Authorization", "Bearer test-secret-token")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET with token failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 with token, got %d", resp.StatusCode)
+	}
+
+	// Request with query param → 200
+	resp, err = http.Get(api.BaseURL() + "/api/v1/agents?token=test-secret-token")
+	if err != nil {
+		t.Fatalf("GET with query token failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 with query token, got %d", resp.StatusCode)
+	}
+}
+
+func TestFurnitureCallProxy(t *testing.T) {
+	tb := furniture.NewTaskBoard()
+	furMap := map[string]furniture.Furniture{"tasks": tb}
+
+	chat := NewChat()
+	api := NewAPIServer()
+	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, furMap)
+	if err := api.Start(":0"); err != nil {
+		t.Fatalf("failed to start: %v", err)
+	}
+	defer api.Stop()
+
+	// Add a task
+	resp, err := http.Post(
+		api.BaseURL()+"/api/v1/furniture/tasks/call",
+		"application/json",
+		strings.NewReader(`{"tool": "add_task", "args": {"title": "Test task"}}`),
+	)
+	if err != nil {
+		t.Fatalf("POST failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	// List tasks
+	resp, err = http.Post(
+		api.BaseURL()+"/api/v1/furniture/tasks/call",
+		"application/json",
+		strings.NewReader(`{"tool": "list_tasks", "args": {}}`),
+	)
+	if err != nil {
+		t.Fatalf("POST list_tasks failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Result interface{} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	t.Logf("list_tasks result: %v", result.Result)
+
+	// Unknown furniture → 404
+	resp, err = http.Post(
+		api.BaseURL()+"/api/v1/furniture/nonexistent/call",
+		"application/json",
+		strings.NewReader(`{"tool": "list_tasks", "args": {}}`),
+	)
+	if err != nil {
+		t.Fatalf("POST unknown furniture failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 for unknown furniture, got %d", resp.StatusCode)
+	}
+}
+
+func TestAuthTokenEndpoint(t *testing.T) {
+	chat := NewChat()
+	api := NewAPIServer()
+	api.SetAuthToken("test-token-123")
+	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil)
+	if err := api.Start(":0"); err != nil {
+		t.Fatalf("failed to start: %v", err)
+	}
+	defer api.Stop()
+
+	// Token endpoint should be accessible without auth (it's exempted)
+	resp, err := http.Get(api.BaseURL() + "/api/v1/auth/token")
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Should succeed from localhost (test runs locally)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if result.Token != "test-token-123" {
+		t.Fatalf("expected token 'test-token-123', got %q", result.Token)
 	}
 }
 
