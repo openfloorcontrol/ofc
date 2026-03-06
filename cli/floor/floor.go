@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,6 +62,8 @@ type Floor struct {
 	Rooms         map[string]*Room         // active rooms by ID
 	agentRoom     map[string]string        // agentID → roomID ("" = main floor)
 	unified       chan TaggedEvent          // merged event channel (lazy, set by StartUnified)
+	ListenAddr    string                   // API server listen address (default ":0" for auto)
+	ServeWebDist  bool                     // serve web/dist/ as static files
 	DebugFunc     func(string)
 	LogWriter     io.Writer
 	StderrWriter  io.Writer // where ACP subprocess stderr goes
@@ -266,7 +269,7 @@ func joinAgentIDs(ids []string, exclude string) string {
 func (f *Floor) Start(renderInfo func(string)) error {
 	// 1. API server (always — serves floor message endpoints + furniture MCP)
 	f.APIServer = NewAPIServer()
-	f.APIServer.RegisterFloorAPI(f.Chat)
+	f.APIServer.RegisterFloorAPI(f.Chat, f.Blueprint)
 
 	// 2. Sandbox
 	var sandboxWS *blueprint.Workstation
@@ -290,13 +293,31 @@ func (f *Floor) Start(renderInfo func(string)) error {
 		return err
 	}
 
-	// 4. Start API server (after furniture is registered)
-	if err := f.APIServer.Start(":0"); err != nil {
+	// 4. Serve web dist if enabled
+	if f.ServeWebDist {
+		webDir := findWebDist()
+		if webDir != nil {
+			f.APIServer.ServeStaticWeb(webDir)
+			renderInfo("Web UI static files registered")
+		} else {
+			renderInfo("Warning: web/dist/ not found, web UI will not be served")
+		}
+	}
+
+	// 5. Start API server (after furniture is registered)
+	listenAddr := f.ListenAddr
+	if listenAddr == "" {
+		listenAddr = ":0"
+	}
+	if err := f.APIServer.Start(listenAddr); err != nil {
 		return fmt.Errorf("failed to start API server: %w", err)
 	}
 	renderInfo(fmt.Sprintf("API server at %s", f.APIServer.BaseURL()))
+	if f.ServeWebDist {
+		renderInfo(fmt.Sprintf("Web UI at %s", f.APIServer.BaseURL()))
+	}
 
-	// 5. ACP agent sessions
+	// 6. ACP agent sessions
 	for _, agent := range f.Blueprint.Agents {
 		if agent.Type != "acp" {
 			continue
@@ -459,6 +480,26 @@ func createFurniture(ctx context.Context, fd blueprint.FurnitureDef) (furniture.
 	default:
 		return nil, fmt.Errorf("unknown furniture type %q", fd.Type)
 	}
+}
+
+// findWebDist locates the web/dist/ directory relative to the executable.
+// Tries: ./web/dist, then relative to the executable binary.
+func findWebDist() fs.FS {
+	// Try relative to cwd first
+	if info, err := os.Stat("web/dist"); err == nil && info.IsDir() {
+		return os.DirFS("web/dist")
+	}
+
+	// Try relative to executable
+	exe, err := os.Executable()
+	if err == nil {
+		dir := filepath.Join(filepath.Dir(exe), "..", "web", "dist")
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			return os.DirFS(dir)
+		}
+	}
+
+	return nil
 }
 
 // BuildColorMap assigns colors to agents, cycling through the palette.

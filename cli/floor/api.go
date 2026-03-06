@@ -4,11 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
+	"strings"
 
 	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/openfloorcontrol/ofc/blueprint"
 )
 
 // APIServer serves MCP endpoints for furniture over HTTP.
@@ -22,6 +26,14 @@ func NewAPIServer() *APIServer {
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
+
+	// CORS middleware — needed for Vite dev server (port 5173 → 8080)
+	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+		AllowOrigins: []string{"*"},
+		AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodOptions},
+		AllowHeaders: []string{echo.HeaderContentType, echo.HeaderAccept},
+	}))
+
 	return &APIServer{echo: e}
 }
 
@@ -45,6 +57,57 @@ func (s *APIServer) RegisterFurniture(floor, name string, mcpSrv *mcp.Server) {
 	sseHandler := mcp.NewSSEHandler(getServer, nil)
 	s.echo.Any(ssePath, echo.WrapHandler(sseHandler))
 	s.echo.Any(ssePath+"/", echo.WrapHandler(sseHandler))
+}
+
+// ServeStaticWeb serves the web/dist/ directory as static files with SPA fallback.
+func (s *APIServer) ServeStaticWeb(webFS fs.FS) {
+	fileServer := http.FileServer(http.FS(webFS))
+
+	// Catch-all: serve static files, fall back to index.html for SPA routes
+	s.echo.GET("/*", echo.WrapHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Don't serve static files for API routes
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			http.NotFound(w, r)
+			return
+		}
+
+		// Try serving the file directly
+		// Use a response recorder to check if file exists
+		rr := &statusRecorder{ResponseWriter: w}
+		fileServer.ServeHTTP(rr, r)
+
+		// If file not found, serve index.html (SPA fallback)
+		if rr.status == http.StatusNotFound {
+			r.URL.Path = "/"
+			fileServer.ServeHTTP(w, r)
+		}
+	})))
+}
+
+// statusRecorder wraps http.ResponseWriter to capture the status code.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+	wrote  bool
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	if code != http.StatusNotFound {
+		r.ResponseWriter.WriteHeader(code)
+	}
+	r.wrote = true
+}
+
+func (r *statusRecorder) Write(b []byte) (int, error) {
+	if !r.wrote {
+		r.status = http.StatusOK
+		r.wrote = true
+	}
+	if r.status == http.StatusNotFound {
+		return len(b), nil // discard 404 body
+	}
+	return r.ResponseWriter.Write(b)
 }
 
 // Start begins listening in a background goroutine on the given address.
@@ -77,13 +140,16 @@ func (s *APIServer) BaseURL() string {
 }
 
 // RegisterFloorAPI adds message endpoints for posting to and reading from the floor.
-func (s *APIServer) RegisterFloorAPI(chat *Chat) {
+func (s *APIServer) RegisterFloorAPI(chat *Chat, bp *blueprint.Blueprint) {
 	s.echo.POST("/api/v1/messages", handlePostMessage(chat))
 	s.echo.GET("/api/v1/messages", handleGetMessages(chat))
 	s.echo.GET("/api/v1/events", handleSSEEvents(chat))
+	s.echo.GET("/api/v1/agents", handleGetAgents(bp))
 }
 
 // POST /api/v1/messages — inject a message into the floor chat.
+// If from is empty or "@user", routes through PostUserInput (handles slash commands).
+// Otherwise posts as the specified sender (for external agents/webhooks).
 func handlePostMessage(chat *Chat) echo.HandlerFunc {
 	type request struct {
 		From    string `json:"from"`
@@ -97,16 +163,18 @@ func handlePostMessage(chat *Chat) echo.HandlerFunc {
 		if req.Content == "" {
 			return c.JSON(http.StatusBadRequest, map[string]string{"error": "content is required"})
 		}
-		if req.From == "" {
-			req.From = "@user"
-		}
 
-		msg := ChatMessage{From: req.From, Content: req.Content}
-		chat.Post(msg)
+		from := req.From
+		if from == "" || from == "@user" {
+			from = "@user"
+			chat.PostUserInput(req.Content)
+		} else {
+			chat.Post(ChatMessage{From: from, Content: req.Content})
+		}
 
 		return c.JSON(http.StatusOK, map[string]interface{}{
 			"ok":      true,
-			"message": map[string]string{"from": msg.From, "content": msg.Content},
+			"message": map[string]string{"from": from, "content": req.Content},
 		})
 	}
 }
@@ -129,6 +197,44 @@ func handleGetMessages(chat *Chat) echo.HandlerFunc {
 			}
 		}
 		return c.JSON(http.StatusOK, map[string]interface{}{"messages": msgs})
+	}
+}
+
+// GET /api/v1/agents — return floor metadata and agent list.
+func handleGetAgents(bp *blueprint.Blueprint) echo.HandlerFunc {
+	type jsonAgent struct {
+		ID         string `json:"id"`
+		Name       string `json:"name"`
+		Type       string `json:"type"`
+		Activation string `json:"activation"`
+	}
+	return func(c echo.Context) error {
+		agents := make([]jsonAgent, len(bp.Agents))
+		for i, a := range bp.Agents {
+			typ := a.Type
+			if typ == "" {
+				typ = "llm"
+			}
+			name := a.Name
+			if name == "" {
+				name = a.ID
+			}
+			activation := a.Activation
+			if activation == "" {
+				activation = "always"
+			}
+			agents[i] = jsonAgent{
+				ID:         a.ID,
+				Name:       name,
+				Type:       typ,
+				Activation: activation,
+			}
+		}
+		return c.JSON(http.StatusOK, map[string]interface{}{
+			"floor_name":  bp.Name,
+			"description": bp.Description,
+			"agents":      agents,
+		})
 	}
 }
 
@@ -173,8 +279,9 @@ func sseEventJSON(ev ChatEvent) []byte {
 		payload = map[string]interface{}{
 			"type": "message_posted",
 			"message": map[string]interface{}{
-				"from":    e.Message.From,
-				"content": e.Message.Content,
+				"from":              e.Message.From,
+				"content":           e.Message.Content,
+				"tool_interactions": e.Message.ToolInteractions,
 			},
 		}
 	case StreamEvent:

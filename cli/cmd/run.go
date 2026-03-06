@@ -16,6 +16,8 @@ var (
 	debug         bool
 	logFile       string
 	useTUI        bool
+	useWeb        bool
+	webPort       int
 )
 
 var runCmd = &cobra.Command{
@@ -54,6 +56,12 @@ func runCLI(bp *blueprint.Blueprint, initialPrompt string) {
 		f.DebugFunc = frontend.Debug
 	}
 	f.LogWriter = frontend.LogWriter()
+
+	if useWeb {
+		f.ListenAddr = fmt.Sprintf(":%d", webPort)
+		f.ServeWebDist = true
+		frontend.Headless = true
+	}
 
 	ctrl := floor.NewController(bp)
 	if debug {
@@ -138,4 +146,6 @@ func init() {
 	runCmd.Flags().BoolVar(&debug, "debug", false, "Enable debug output")
 	runCmd.Flags().StringVar(&logFile, "log", "", "Log output to file (plain text, no colors)")
 	runCmd.Flags().BoolVar(&useTUI, "tui", false, "Use terminal UI with split layout")
+	runCmd.Flags().BoolVar(&useWeb, "web", false, "Enable web UI (serves web/dist/ on --port)")
+	runCmd.Flags().IntVar(&webPort, "port", 8080, "Port for web UI (used with --web)")
 }

@@ -14,6 +14,7 @@ type CLIFrontend struct {
 	out      *Output
 	colorMap map[string]string
 	reader   *bufio.Reader
+	Headless bool // skip stdin reader (web-only mode)
 }
 
 // NewCLIFrontend creates a CLI frontend with terminal output and optional log file.
@@ -71,15 +72,17 @@ func (f *CLIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 	// It gates input so we don't show "@user:" while agents are streaming.
 	readyForInput := make(chan struct{}, 1)
 
-	// Spawn stdin reader goroutine (waits for readyForInput before each prompt)
-	go f.readStdinLoop(floor, readyForInput)
+	if !f.Headless {
+		// Spawn stdin reader goroutine (waits for readyForInput before each prompt)
+		go f.readStdinLoop(floor, readyForInput)
+	}
 
 	// If initial prompt, post it as @user (or handle as command)
 	if initialPrompt != "" {
 		f.renderStream(AgentLabel{AgentID: "@user"}, "")
 		f.renderStream(TokenStreamed{AgentID: "@user", Token: initialPrompt + "\n"}, "")
 		floor.Chat.PostUserInput(initialPrompt)
-	} else {
+	} else if !f.Headless {
 		// No initial prompt — ready for user input immediately
 		readyForInput <- struct{}{}
 	}
@@ -260,11 +263,14 @@ func (f *CLIFrontend) readStdinLoop(floor *Floor, readyForInput chan struct{}) {
 	}
 }
 
-// renderMessagePosted handles display of a completed message (agent only — user already displayed).
+// renderMessagePosted handles display of a completed message.
+// In headless mode, user messages aren't echoed by stdin, so we render them here.
 func (f *CLIFrontend) renderMessagePosted(e MessagePosted) {
-	// User messages are already rendered by readStdinLoop (agent label + typed text).
-	// Agent messages are rendered via streaming (AgentLabel + TokenStreamed events).
-	// So MessagePosted itself doesn't need terminal rendering — the content is already visible.
+	if f.Headless && e.Message.From == "@user" {
+		f.out.Print("\n")
+		f.out.AgentLabel("@user", f.agentColor("@user"))
+		f.out.Print("%s\n", e.Message.Content)
+	}
 }
 
 // renderStream handles display of streaming events.

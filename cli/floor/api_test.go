@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/openfloorcontrol/ofc/blueprint"
 	"github.com/openfloorcontrol/ofc/furniture"
 )
 
@@ -103,7 +104,7 @@ func TestAPIServerMCPEndToEnd(t *testing.T) {
 func TestPostMessage(t *testing.T) {
 	chat := NewChat()
 	api := NewAPIServer()
-	api.RegisterFloorAPI(chat)
+	api.RegisterFloorAPI(chat, &blueprint.Blueprint{})
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
@@ -140,7 +141,7 @@ func TestPostMessage(t *testing.T) {
 func TestPostMessageDefaultsFrom(t *testing.T) {
 	chat := NewChat()
 	api := NewAPIServer()
-	api.RegisterFloorAPI(chat)
+	api.RegisterFloorAPI(chat, &blueprint.Blueprint{})
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
@@ -166,7 +167,7 @@ func TestPostMessageDefaultsFrom(t *testing.T) {
 func TestPostMessageRejectsEmpty(t *testing.T) {
 	chat := NewChat()
 	api := NewAPIServer()
-	api.RegisterFloorAPI(chat)
+	api.RegisterFloorAPI(chat, &blueprint.Blueprint{})
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
@@ -190,7 +191,7 @@ func TestPostMessageRejectsEmpty(t *testing.T) {
 func TestGetMessages(t *testing.T) {
 	chat := NewChat()
 	api := NewAPIServer()
-	api.RegisterFloorAPI(chat)
+	api.RegisterFloorAPI(chat, &blueprint.Blueprint{})
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
@@ -229,7 +230,7 @@ func TestGetMessages(t *testing.T) {
 func TestSSEEvents(t *testing.T) {
 	chat := NewChat()
 	api := NewAPIServer()
-	api.RegisterFloorAPI(chat)
+	api.RegisterFloorAPI(chat, &blueprint.Blueprint{})
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
@@ -276,6 +277,62 @@ func TestSSEEvents(t *testing.T) {
 	}
 	if !strings.Contains(line, "sse test") {
 		t.Fatalf("expected content in event, got: %s", line)
+	}
+}
+
+func TestGetAgents(t *testing.T) {
+	bp := &blueprint.Blueprint{
+		Name:        "test-floor",
+		Description: "A test floor",
+		Agents: []blueprint.Agent{
+			{ID: "@planner", Name: "Planner", Activation: "always"},
+			{ID: "@coder", Name: "Coder", Type: "acp", Activation: "mention"},
+		},
+	}
+
+	chat := NewChat()
+	api := NewAPIServer()
+	api.RegisterFloorAPI(chat, bp)
+	if err := api.Start(":0"); err != nil {
+		t.Fatalf("failed to start: %v", err)
+	}
+	defer api.Stop()
+
+	resp, err := http.Get(api.BaseURL() + "/api/v1/agents")
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var result struct {
+		FloorName   string `json:"floor_name"`
+		Description string `json:"description"`
+		Agents      []struct {
+			ID         string `json:"id"`
+			Name       string `json:"name"`
+			Type       string `json:"type"`
+			Activation string `json:"activation"`
+		} `json:"agents"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+
+	if result.FloorName != "test-floor" {
+		t.Fatalf("expected floor_name 'test-floor', got %q", result.FloorName)
+	}
+	if len(result.Agents) != 2 {
+		t.Fatalf("expected 2 agents, got %d", len(result.Agents))
+	}
+	if result.Agents[0].ID != "@planner" || result.Agents[0].Type != "llm" {
+		t.Fatalf("unexpected first agent: %+v", result.Agents[0])
+	}
+	if result.Agents[1].ID != "@coder" || result.Agents[1].Type != "acp" {
+		t.Fatalf("unexpected second agent: %+v", result.Agents[1])
 	}
 }
 
