@@ -21,9 +21,13 @@ function colorForAgent(index) {
 <template>
   <header class="border-b border-slate-700 px-4 py-3 flex-shrink-0">
     <div class="flex items-center justify-between">
-      <div>
-        <h1 class="text-lg font-semibold text-slate-100">{{ floorName }}</h1>
-        <p v-if="description" class="text-sm text-slate-400">{{ description }}</p>
+      <div class="flex items-center gap-3">
+        <span class="text-xl font-bold tracking-tight text-slate-100">ofc<span class="ml-1">🎤</span></span>
+        <span class="text-slate-600">|</span>
+        <div>
+          <h1 class="text-sm font-semibold text-slate-300">{{ floorName }}</h1>
+          <p v-if="description" class="text-xs text-slate-500">{{ description }}</p>
+        </div>
       </div>
       <div class="flex gap-2">
         <span
