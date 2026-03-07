@@ -284,10 +284,15 @@ func handleGetMessages(chat *Chat) echo.HandlerFunc {
 // GET /api/v1/agents — return floor metadata and agent list.
 func handleGetAgents(bp *blueprint.Blueprint) echo.HandlerFunc {
 	type jsonAgent struct {
-		ID         string `json:"id"`
-		Name       string `json:"name"`
-		Type       string `json:"type"`
-		Activation string `json:"activation"`
+		ID         string   `json:"id"`
+		Name       string   `json:"name"`
+		Type       string   `json:"type"`
+		Activation string   `json:"activation"`
+		Model      string   `json:"model,omitempty"`
+		Command    string   `json:"command,omitempty"`
+		Furniture  []string `json:"furniture,omitempty"`
+		Prompt     string   `json:"prompt_summary,omitempty"` // first line only
+		Sandbox    bool     `json:"sandbox,omitempty"`
 	}
 	return func(c echo.Context) error {
 		agents := make([]jsonAgent, len(bp.Agents))
@@ -304,11 +309,30 @@ func handleGetAgents(bp *blueprint.Blueprint) echo.HandlerFunc {
 			if activation == "" {
 				activation = "always"
 			}
+			// Extract first non-empty line of prompt as summary
+			promptSummary := ""
+			if a.Prompt != "" {
+				for _, line := range strings.Split(a.Prompt, "\n") {
+					line = strings.TrimSpace(line)
+					if line != "" {
+						if len(line) > 120 {
+							line = line[:120] + "..."
+						}
+						promptSummary = line
+						break
+					}
+				}
+			}
 			agents[i] = jsonAgent{
 				ID:         a.ID,
 				Name:       name,
 				Type:       typ,
 				Activation: activation,
+				Model:      a.Model,
+				Command:    a.Command,
+				Furniture:  a.Furniture,
+				Prompt:     promptSummary,
+				Sandbox:    a.CanUseSandbox,
 			}
 		}
 		return c.JSON(http.StatusOK, map[string]interface{}{

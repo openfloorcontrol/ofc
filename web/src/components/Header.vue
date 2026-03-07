@@ -13,8 +13,20 @@ const agentColors = [
   'bg-red-500/20 text-red-400',
 ]
 
+const borderColors = [
+  'border-green-500/40',
+  'border-purple-500/40',
+  'border-yellow-500/40',
+  'border-blue-500/40',
+  'border-red-500/40',
+]
+
 function colorForAgent(index) {
   return agentColors[index % agentColors.length]
+}
+
+function borderForAgent(index) {
+  return borderColors[index % borderColors.length]
 }
 </script>
 
@@ -30,15 +42,52 @@ function colorForAgent(index) {
         </div>
       </div>
       <div class="flex gap-2">
-        <span
-          v-for="(agent, i) in agents"
-          :key="agent.id"
-          class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium"
-          :class="colorForAgent(i)"
-        >
-          {{ agent.id }}
-          <span class="ml-1 opacity-60">{{ agent.type }}</span>
-        </span>
+        <div v-for="(agent, i) in agents" :key="agent.id" class="relative group">
+          <span
+            class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium cursor-default"
+            :class="colorForAgent(i)"
+          >
+            {{ agent.id }}
+            <span class="ml-1 opacity-60">{{ agent.type }}</span>
+          </span>
+
+          <!-- Tooltip -->
+          <div
+            class="absolute right-0 top-full mt-2 w-64 rounded-lg border bg-slate-900 shadow-xl text-xs z-50 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-150"
+            :class="borderForAgent(i)"
+          >
+            <div class="px-3 py-2 border-b border-slate-800">
+              <div class="font-semibold text-slate-200">{{ agent.name || agent.id }}</div>
+              <div v-if="agent.prompt_summary" class="text-slate-500 mt-0.5 italic truncate">{{ agent.prompt_summary }}</div>
+            </div>
+            <div class="px-3 py-2 space-y-1 text-slate-400">
+              <div class="flex justify-between">
+                <span class="text-slate-500">Type</span>
+                <span class="text-slate-300">{{ agent.type }}</span>
+              </div>
+              <div class="flex justify-between">
+                <span class="text-slate-500">Activation</span>
+                <span class="text-slate-300">{{ agent.activation }}</span>
+              </div>
+              <div v-if="agent.model" class="flex justify-between">
+                <span class="text-slate-500">Model</span>
+                <span class="text-slate-300 truncate ml-2">{{ agent.model }}</span>
+              </div>
+              <div v-if="agent.command" class="flex justify-between">
+                <span class="text-slate-500">Command</span>
+                <span class="text-slate-300 font-mono truncate ml-2">{{ agent.command }}</span>
+              </div>
+              <div v-if="agent.furniture && agent.furniture.length > 0" class="flex justify-between">
+                <span class="text-slate-500">Furniture</span>
+                <span class="text-slate-300">{{ agent.furniture.join(', ') }}</span>
+              </div>
+              <div v-if="agent.sandbox" class="flex justify-between">
+                <span class="text-slate-500">Sandbox</span>
+                <span class="text-slate-300">enabled</span>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </header>
