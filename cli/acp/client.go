@@ -32,11 +32,15 @@ type FloorClient struct {
 
 	// Per-prompt state (set before each Prompt call, reset after)
 	OnToken      func(string)
-	OnToolCall   func(title string)
-	OnToolResult func(title, output string)
+	OnToolCall   func(id, title string)
+	OnToolOutput func(id, output string) // streaming output for in-flight tool call
+	OnToolResult func(id, title, output string)
 	ResponseText strings.Builder
 	Interactions []ToolInteraction
-	toolCalls    map[string]string // toolCallId → title, for tracking in-flight calls
+	toolCalls      map[string]string          // toolCallId → title
+	toolCallOutput map[string]*strings.Builder // toolCallId → accumulated output
+	lastToolCallID string                      // most recent tool_call ID (for terminal correlation)
+	termToolCalls  map[string]string           // terminalId → toolCallId
 
 	mu sync.Mutex
 }
@@ -47,10 +51,12 @@ var _ acpsdk.Client = (*FloorClient)(nil)
 // TerminalManager is always created — it supports both sandbox and host execution.
 func NewFloorClient(sb *sandbox.Sandbox, workspaceDir string) *FloorClient {
 	return &FloorClient{
-		Sandbox:      sb,
-		WorkspaceDir: workspaceDir,
-		Terminals:    NewTerminalManager(sb),
-		toolCalls:    make(map[string]string),
+		Sandbox:        sb,
+		WorkspaceDir:   workspaceDir,
+		Terminals:      NewTerminalManager(sb),
+		toolCalls:      make(map[string]string),
+		toolCallOutput: make(map[string]*strings.Builder),
+		termToolCalls:  make(map[string]string),
 	}
 }
 
@@ -61,6 +67,9 @@ func (c *FloorClient) Reset() {
 	c.ResponseText.Reset()
 	c.Interactions = nil
 	c.toolCalls = make(map[string]string)
+	c.toolCallOutput = make(map[string]*strings.Builder)
+	c.termToolCalls = make(map[string]string)
+	c.lastToolCallID = ""
 }
 
 func (c *FloorClient) debug(msg string) {
@@ -92,39 +101,56 @@ func (c *FloorClient) SessionUpdate(ctx context.Context, params acpsdk.SessionNo
 		}
 
 	case u.ToolCall != nil:
-		c.debug(fmt.Sprintf("tool_call: %s (%s)", u.ToolCall.Title, u.ToolCall.Status))
-		// ACP sends two tool_call events per call: first a short preview title,
-		// then a detailed title. Only emit OnToolCall for the first one;
-		// subsequent events for the same ID just update the tracked title.
 		tcID := string(u.ToolCall.ToolCallId)
+		c.debug(fmt.Sprintf("tool_call: %s id=%s (%s)", u.ToolCall.Title, tcID, u.ToolCall.Status))
 		c.mu.Lock()
-		_, seen := c.toolCalls[tcID]
 		c.toolCalls[tcID] = u.ToolCall.Title
+		c.lastToolCallID = tcID
 		c.mu.Unlock()
-		if !seen && c.OnToolCall != nil {
-			c.OnToolCall(u.ToolCall.Title)
+		if c.OnToolCall != nil {
+			c.OnToolCall(tcID, u.ToolCall.Title)
 		}
 
 	case u.ToolCallUpdate != nil:
+		tcID := string(u.ToolCallUpdate.ToolCallId)
 		status := ""
 		if u.ToolCallUpdate.Status != nil {
 			status = string(*u.ToolCallUpdate.Status)
 		}
-		c.debug(fmt.Sprintf("tool_call_update: %s status=%s", u.ToolCallUpdate.ToolCallId, status))
-		// When a tool call completes, record it as an interaction and print result
+
+		// Accumulate content from every update (not just completed)
+		text := extractToolCallText(u.ToolCallUpdate.Content)
+		c.mu.Lock()
+		if text != "" {
+			buf, ok := c.toolCallOutput[tcID]
+			if !ok {
+				buf = &strings.Builder{}
+				c.toolCallOutput[tcID] = buf
+			}
+			buf.WriteString(text)
+		}
+		c.mu.Unlock()
+
+		c.debug(fmt.Sprintf("tool_call_update: %s status=%s content_len=%d", tcID, status, len(text)))
+
+		// When completed, emit the accumulated output
 		if u.ToolCallUpdate.Status != nil && *u.ToolCallUpdate.Status == acpsdk.ToolCallStatusCompleted {
 			c.mu.Lock()
-			tcID := string(u.ToolCallUpdate.ToolCallId)
 			title := c.toolCalls[tcID]
-			output := extractToolCallText(u.ToolCallUpdate.Content)
+			output := ""
+			if buf, ok := c.toolCallOutput[tcID]; ok {
+				output = buf.String()
+			}
 			c.Interactions = append(c.Interactions, ToolInteraction{
 				Command: title,
 				Output:  output,
 			})
 			delete(c.toolCalls, tcID)
+			delete(c.toolCallOutput, tcID)
 			c.mu.Unlock()
+			c.debug(fmt.Sprintf("tool_call_completed: %s output_len=%d", tcID, len(output)))
 			if c.OnToolResult != nil {
-				c.OnToolResult(title, output)
+				c.OnToolResult(tcID, title, output)
 			}
 		}
 
@@ -254,6 +280,13 @@ func (c *FloorClient) CreateTerminal(ctx context.Context, params acpsdk.CreateTe
 		return acpsdk.CreateTerminalResponse{}, err
 	}
 
+	// Correlate this terminal with the most recent tool call
+	c.mu.Lock()
+	if c.lastToolCallID != "" {
+		c.termToolCalls[id] = c.lastToolCallID
+	}
+	c.mu.Unlock()
+
 	return acpsdk.CreateTerminalResponse{TerminalId: id}, nil
 }
 
@@ -261,6 +294,16 @@ func (c *FloorClient) TerminalOutput(ctx context.Context, params acpsdk.Terminal
 	output, truncated, err := c.Terminals.GetOutput(params.TerminalId)
 	if err != nil {
 		return acpsdk.TerminalOutputResponse{}, err
+	}
+
+	// Stream terminal output to the frontend
+	if output != "" && c.OnToolOutput != nil {
+		c.mu.Lock()
+		tcID := c.termToolCalls[params.TerminalId]
+		c.mu.Unlock()
+		if tcID != "" {
+			c.OnToolOutput(tcID, output)
+		}
 	}
 
 	return acpsdk.TerminalOutputResponse{
@@ -287,6 +330,9 @@ func (c *FloorClient) KillTerminalCommand(ctx context.Context, params acpsdk.Kil
 
 func (c *FloorClient) ReleaseTerminal(ctx context.Context, params acpsdk.ReleaseTerminalRequest) (acpsdk.ReleaseTerminalResponse, error) {
 	c.Terminals.Release(params.TerminalId)
+	c.mu.Lock()
+	delete(c.termToolCalls, params.TerminalId)
+	c.mu.Unlock()
 	return acpsdk.ReleaseTerminalResponse{}, nil
 }
 

@@ -55,12 +55,21 @@ type TokenStreamed struct {
 // ToolCallStarted indicates an agent started a tool call.
 type ToolCallStarted struct {
 	AgentID string
+	ID      string // unique tool call ID
 	Title   string
+}
+
+// ToolCallOutput streams output for an in-flight tool call (e.g. terminal output).
+type ToolCallOutput struct {
+	AgentID string
+	ID      string // matches ToolCallStarted.ID
+	Output  string
 }
 
 // ToolCallResult is the output of a completed tool call.
 type ToolCallResult struct {
 	AgentID string
+	ID      string // matches ToolCallStarted.ID
 	Title   string
 	Output  string
 }
@@ -96,7 +105,8 @@ func (UserCommand) eventMarker()    {}
 func (SystemInfo) eventMarker()     {}
 func (TokenStreamed) eventMarker()  {}
 func (ToolCallStarted) eventMarker() {}
-func (ToolCallResult) eventMarker() {}
+func (ToolCallOutput) eventMarker()  {}
+func (ToolCallResult) eventMarker()  {}
 func (AgentThinking) eventMarker()  {}
 func (AgentLabel) eventMarker()          {}
 func (FurnitureUpdated) eventMarker()    {}

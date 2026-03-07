@@ -40,11 +40,14 @@ func (a *ACPAgent) Run(ctx context.Context, floor *Floor) error {
 	client.OnToken = func(token string) {
 		floor.Chat.PostStream(TokenStreamed{AgentID: a.agent.ID, Token: token})
 	}
-	client.OnToolCall = func(title string) {
-		floor.Chat.PostStream(ToolCallStarted{AgentID: a.agent.ID, Title: title})
+	client.OnToolCall = func(id, title string) {
+		floor.Chat.PostStream(ToolCallStarted{AgentID: a.agent.ID, ID: id, Title: title})
 	}
-	client.OnToolResult = func(title, output string) {
-		floor.Chat.PostStream(ToolCallResult{AgentID: a.agent.ID, Title: title, Output: output})
+	client.OnToolOutput = func(id, output string) {
+		floor.Chat.PostStream(ToolCallOutput{AgentID: a.agent.ID, ID: id, Output: output})
+	}
+	client.OnToolResult = func(id, title, output string) {
+		floor.Chat.PostStream(ToolCallResult{AgentID: a.agent.ID, ID: id, Title: title, Output: output})
 	}
 
 	// Emit agent label before first token

@@ -23,28 +23,28 @@ const senderColor = computed(() => {
   return 'text-slate-400'
 })
 
-const renderedContent = computed(() => {
-  if (!props.message.tokens) return ''
-  const raw = marked.parse(props.message.tokens, { breaks: true })
-  return DOMPurify.sanitize(raw)
-})
+function renderMarkdown(text) {
+  if (!text) return ''
+  return DOMPurify.sanitize(marked.parse(text, { breaks: true }))
+}
 </script>
 
 <template>
   <div class="group">
     <div class="flex items-baseline gap-2 mb-1">
       <span class="text-sm font-semibold" :class="senderColor">{{ message.from }}</span>
-      <span class="inline-block w-2 h-4 bg-slate-400 animate-pulse rounded-sm" />
+      <span class="inline-block w-2 h-2 bg-slate-400 animate-pulse rounded-full" />
     </div>
 
-    <div v-if="message.toolCalls.length > 0" class="space-y-1 mb-2">
-      <ToolCall v-for="(tc, i) in message.toolCalls" :key="i" :toolCall="tc" />
-    </div>
-
-    <div
-      v-if="message.tokens"
-      class="prose prose-invert prose-sm max-w-none text-slate-200"
-      v-html="renderedContent"
-    />
+    <template v-for="(seg, i) in message.segments" :key="i">
+      <div
+        v-if="seg.type === 'text' && seg.content"
+        class="prose prose-invert prose-sm max-w-none text-slate-200 mb-2"
+        v-html="renderMarkdown(seg.content)"
+      />
+      <div v-else-if="seg.type === 'tool'" class="mb-2">
+        <ToolCall :toolCall="seg" />
+      </div>
+    </template>
   </div>
 </template>

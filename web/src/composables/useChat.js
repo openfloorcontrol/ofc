@@ -16,42 +16,74 @@ export function useChat() {
   const streamingMessage = ref(null)
   const state = ref('idle') // 'idle' | 'streaming'
 
+  // Helper: get or create the trailing text segment in the streaming message
+  function trailingTextSegment() {
+    const segs = streamingMessage.value.segments
+    if (segs.length === 0 || segs[segs.length - 1].type !== 'text') {
+      segs.push({ type: 'text', content: '' })
+    }
+    return segs[segs.length - 1]
+  }
+
   function handleEvent(event) {
     switch (event.type) {
       case 'agent_label':
         // Start streaming for this agent
         streamingMessage.value = {
           from: event.agent_id,
-          tokens: '',
-          toolCalls: [],
+          segments: [], // ordered: {type:'text', content} | {type:'tool', title, output, loading}
         }
         state.value = 'streaming'
         break
 
       case 'token':
         if (streamingMessage.value && streamingMessage.value.from === event.agent_id) {
-          streamingMessage.value.tokens += event.token
+          trailingTextSegment().content += event.token
         }
         break
 
       case 'tool_call_started':
         if (streamingMessage.value && streamingMessage.value.from === event.agent_id) {
-          streamingMessage.value.toolCalls.push({
-            title: event.title,
-            output: null,
-            loading: true,
-          })
+          // ACP may send multiple tool_call events for the same ID (title refinement).
+          // If a segment with this ID already exists, just update its title.
+          const existing = streamingMessage.value.segments.find(
+            (s) => s.type === 'tool' && s.id === event.id,
+          )
+          if (existing) {
+            existing.title = event.title
+          } else {
+            streamingMessage.value.segments.push({
+              type: 'tool',
+              id: event.id,
+              title: event.title,
+              output: null,
+              loading: true,
+            })
+          }
+        }
+        break
+
+      case 'tool_call_output':
+        if (streamingMessage.value && streamingMessage.value.from === event.agent_id) {
+          const seg = streamingMessage.value.segments.find(
+            (s) => s.type === 'tool' && s.id === event.id,
+          )
+          if (seg) {
+            seg.output = event.output
+          }
         }
         break
 
       case 'tool_call_result':
         if (streamingMessage.value && streamingMessage.value.from === event.agent_id) {
-          // Find the matching tool call (last one with this title still loading)
-          const tc = [...streamingMessage.value.toolCalls]
-            .reverse()
-            .find((t) => t.title === event.title && t.loading)
+          const tc = streamingMessage.value.segments.find(
+            (s) => s.type === 'tool' && s.id === event.id,
+          )
           if (tc) {
-            tc.output = event.output
+            tc.title = event.title
+            if (event.output) {
+              tc.output = event.output
+            }
             tc.loading = false
           }
         }
@@ -69,13 +101,13 @@ export function useChat() {
           toolInteractions: event.message.tool_interactions || [],
         }
 
-        // If we were streaming for this agent, merge tool calls
+        // If we were streaming for this agent, merge segments
         if (
           streamingMessage.value &&
           streamingMessage.value.from === event.message.from
         ) {
-          if (streamingMessage.value.toolCalls.length > 0) {
-            msg.toolCalls = streamingMessage.value.toolCalls
+          if (streamingMessage.value.segments.length > 0) {
+            msg.segments = streamingMessage.value.segments
           }
           streamingMessage.value = null
           state.value = 'idle'

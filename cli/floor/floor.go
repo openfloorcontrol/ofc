@@ -393,9 +393,20 @@ type observableFurniture struct {
 }
 
 // readOnlyTools are tool names that don't mutate state (no need to notify).
+// Covers both built-in (taskboard) and common external (filesystem MCP) tools.
 var readOnlyTools = map[string]bool{
-	"list_tasks": true,
-	"get_task":   true,
+	"list_tasks":               true,
+	"get_task":                 true,
+	"list_directory":           true,
+	"list_directory_with_sizes": true,
+	"directory_tree":           true,
+	"read_file":                true,
+	"read_text_file":           true,
+	"read_media_file":          true,
+	"read_multiple_files":      true,
+	"search_files":             true,
+	"get_file_info":            true,
+	"list_allowed_directories": true,
 }
 
 func (o *observableFurniture) Name() string             { return o.inner.Name() }

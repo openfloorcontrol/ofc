@@ -68,7 +68,7 @@ func (a *LLMAgent) Run(ctx context.Context, floor *Floor) error {
 		// Execute tool calls
 		expanded := a.expandToolCalls(floor, result.ToolCalls)
 		for _, ex := range expanded {
-			floor.Chat.PostStream(ToolCallResult{AgentID: a.agent.ID, Title: ex.Title, Output: ex.Output})
+			floor.Chat.PostStream(ToolCallResult{AgentID: a.agent.ID, ID: ex.Call.ID, Title: ex.Title, Output: ex.Output})
 
 			interactions = append(interactions, ToolInteraction{
 				Command: ex.Title,
@@ -263,7 +263,11 @@ func (a *LLMAgent) dispatchFurnitureCall(floor *Floor, tc llm.ToolCall, furnitur
 
 	var expanded []expandedCall
 	for i, args := range argsList {
-		floor.Chat.PostStream(ToolCallStarted{AgentID: a.agent.ID, Title: title})
+		callID := tc.ID
+		if i > 0 {
+			callID = fmt.Sprintf("%s_%d", tc.ID, i)
+		}
+		floor.Chat.PostStream(ToolCallStarted{AgentID: a.agent.ID, ID: callID, Title: title})
 
 		callResult, err := f.Call(toolName, args)
 		var output string

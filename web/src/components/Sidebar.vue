@@ -1,5 +1,6 @@
 <script setup>
 import TaskBoardPanel from './TaskBoardPanel.vue'
+import FileListPanel from './FileListPanel.vue'
 
 defineProps({
   furniture: { type: Array, default: () => [] },
@@ -10,6 +11,11 @@ defineProps({
 function isTaskBoard(item) {
   const toolNames = item.tools.map((t) => t.name)
   return toolNames.includes('list_tasks') && toolNames.includes('add_task')
+}
+
+function isFileSystem(item) {
+  const toolNames = item.tools.map((t) => t.name)
+  return toolNames.includes('list_directory')
 }
 </script>
 
@@ -22,7 +28,12 @@ function isTaskBoard(item) {
         :callTool="callTool"
         :refreshKey="refreshKey"
       />
-      <!-- Future: GenericFurniturePanel for unknown furniture types -->
+      <FileListPanel
+        v-else-if="isFileSystem(item)"
+        :furnitureName="item.name"
+        :callTool="callTool"
+        :refreshKey="refreshKey"
+      />
       <div v-else class="p-3">
         <h3 class="text-sm font-semibold text-slate-300 uppercase tracking-wide">
           {{ item.name }}

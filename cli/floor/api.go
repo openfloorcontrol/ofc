@@ -458,12 +458,21 @@ func sseEventJSON(ev ChatEvent) []byte {
 			payload = map[string]interface{}{
 				"type":     "tool_call_started",
 				"agent_id": se.AgentID,
+				"id":       se.ID,
 				"title":    se.Title,
+			}
+		case ToolCallOutput:
+			payload = map[string]interface{}{
+				"type":     "tool_call_output",
+				"agent_id": se.AgentID,
+				"id":       se.ID,
+				"output":   se.Output,
 			}
 		case ToolCallResult:
 			payload = map[string]interface{}{
 				"type":     "tool_call_result",
 				"agent_id": se.AgentID,
+				"id":       se.ID,
 				"title":    se.Title,
 				"output":   se.Output,
 			}

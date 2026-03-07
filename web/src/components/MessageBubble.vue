@@ -36,20 +36,35 @@ const renderedContent = computed(() => {
   return DOMPurify.sanitize(raw)
 })
 
-// Merge tool calls from streaming and tool interactions from final message
-const toolCalls = computed(() => {
-  if (props.message.toolCalls && props.message.toolCalls.length > 0) {
-    return props.message.toolCalls
+// Build ordered segments from streaming data or fall back to toolInteractions + content
+const segments = computed(() => {
+  // If we have streaming segments (interleaved text + tool calls), use those
+  if (props.message.segments && props.message.segments.length > 0) {
+    return props.message.segments
   }
+
+  // Fall back: toolInteractions from the final message (no ordering info)
+  const result = []
   if (props.message.toolInteractions && props.message.toolInteractions.length > 0) {
-    return props.message.toolInteractions.map((ti) => ({
-      title: ti.command || ti.Command,
-      output: ti.output || ti.Output,
-      loading: false,
-    }))
+    for (const ti of props.message.toolInteractions) {
+      result.push({
+        type: 'tool',
+        title: ti.command || ti.Command,
+        output: ti.output || ti.Output,
+        loading: false,
+      })
+    }
   }
-  return []
+  if (props.message.content) {
+    result.push({ type: 'text', content: props.message.content })
+  }
+  return result
 })
+
+function renderMarkdown(text) {
+  if (!text) return ''
+  return DOMPurify.sanitize(marked.parse(text, { breaks: true }))
+}
 </script>
 
 <template>
@@ -60,15 +75,15 @@ const toolCalls = computed(() => {
       <span v-if="message.isError" class="text-xs text-red-400">[ERROR]</span>
     </div>
 
-    <div v-if="toolCalls.length > 0" class="space-y-1 mb-2">
-      <ToolCall v-for="(tc, i) in toolCalls" :key="i" :toolCall="tc" />
-    </div>
-
-    <div
-      v-if="message.content && !message.isPass"
-      class="prose prose-invert prose-sm max-w-none text-slate-200"
-      :class="{ 'pl-0': isUser, 'pl-0': !isUser }"
-      v-html="renderedContent"
-    />
+    <template v-for="(seg, i) in segments" :key="i">
+      <div
+        v-if="seg.type === 'text' && seg.content && !message.isPass"
+        class="prose prose-invert prose-sm max-w-none text-slate-200 mb-2"
+        v-html="renderMarkdown(seg.content)"
+      />
+      <div v-else-if="seg.type === 'tool'" class="mb-2">
+        <ToolCall :toolCall="seg" />
+      </div>
+    </template>
   </div>
 </template>
