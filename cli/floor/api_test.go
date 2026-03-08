@@ -104,7 +104,7 @@ func TestAPIServerMCPEndToEnd(t *testing.T) {
 func TestPostMessage(t *testing.T) {
 	chat := NewChat()
 	api := NewAPIServer()
-	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil)
+	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil, func() string { return "" })
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestPostMessage(t *testing.T) {
 func TestPostMessageDefaultsFrom(t *testing.T) {
 	chat := NewChat()
 	api := NewAPIServer()
-	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil)
+	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil, func() string { return "" })
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestPostMessageDefaultsFrom(t *testing.T) {
 func TestPostMessageRejectsEmpty(t *testing.T) {
 	chat := NewChat()
 	api := NewAPIServer()
-	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil)
+	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil, func() string { return "" })
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestPostMessageRejectsEmpty(t *testing.T) {
 func TestGetMessages(t *testing.T) {
 	chat := NewChat()
 	api := NewAPIServer()
-	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil)
+	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil, func() string { return "" })
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestGetMessages(t *testing.T) {
 func TestSSEEvents(t *testing.T) {
 	chat := NewChat()
 	api := NewAPIServer()
-	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil)
+	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil, func() string { return "" })
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
@@ -292,7 +292,7 @@ func TestGetAgents(t *testing.T) {
 
 	chat := NewChat()
 	api := NewAPIServer()
-	api.RegisterFloorAPI(chat, bp, nil)
+	api.RegisterFloorAPI(chat, bp, nil, func() string { return "" })
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
@@ -340,7 +340,7 @@ func TestAuthMiddlewareBlocksWithoutToken(t *testing.T) {
 	chat := NewChat()
 	api := NewAPIServer()
 	api.SetAuthToken("test-secret-token")
-	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil)
+	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil, func() string { return "" })
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
@@ -385,7 +385,7 @@ func TestFurnitureCallProxy(t *testing.T) {
 
 	chat := NewChat()
 	api := NewAPIServer()
-	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, furMap)
+	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, furMap, func() string { return "" })
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
@@ -443,7 +443,7 @@ func TestAuthTokenEndpoint(t *testing.T) {
 	chat := NewChat()
 	api := NewAPIServer()
 	api.SetAuthToken("test-token-123")
-	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil)
+	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil, func() string { return "" })
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
@@ -478,7 +478,7 @@ func TestGetFurniture(t *testing.T) {
 
 	chat := NewChat()
 	api := NewAPIServer()
-	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, furMap)
+	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, furMap, func() string { return "" })
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
@@ -521,7 +521,7 @@ func TestGetFurniture(t *testing.T) {
 func TestGetFurnitureEmpty(t *testing.T) {
 	chat := NewChat()
 	api := NewAPIServer()
-	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil)
+	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil, func() string { return "" })
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}

@@ -97,6 +97,63 @@ func convertMCPTool(t *mcp.Tool) Tool {
 	}
 }
 
+// ReadFileRaw reads a file via the MCP server and returns raw bytes.
+// The caller provides the path exactly as the MCP server expects it.
+// Uses read_media_file (binary-safe) if available, otherwise read_file (text only).
+func (e *ExternalMCP) ReadFileRaw(path string) ([]byte, string, error) {
+	if e.hasTool("read_media_file") {
+		return e.callReadTool("read_media_file", path)
+	}
+	return e.callReadTool("read_file", path)
+}
+
+// hasTool checks if the MCP server advertises a tool by name.
+func (e *ExternalMCP) hasTool(name string) bool {
+	for _, t := range e.tools {
+		if t.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// callReadTool calls an MCP read tool and extracts content from the response.
+func (e *ExternalMCP) callReadTool(toolName, path string) ([]byte, string, error) {
+	result, err := e.session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      toolName,
+		Arguments: map[string]interface{}{"path": path},
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("%s %q on %q: %w", toolName, path, e.name, err)
+	}
+	if result.IsError {
+		return nil, "", fmt.Errorf("%s %q error: %s", toolName, path, extractTextContent(result.Content))
+	}
+
+	for _, c := range result.Content {
+		if ic, ok := c.(*mcp.ImageContent); ok {
+			// ic.Data is already raw bytes — Go's json decoder handles base64 for []byte fields
+			mimeType := ic.MIMEType
+			if mimeType == "" {
+				mimeType = "application/octet-stream"
+			}
+			return ic.Data, mimeType, nil
+		}
+		if ac, ok := c.(*mcp.AudioContent); ok {
+			mimeType := ac.MIMEType
+			if mimeType == "" {
+				mimeType = "application/octet-stream"
+			}
+			return ac.Data, mimeType, nil
+		}
+		if tc, ok := c.(*mcp.TextContent); ok {
+			return []byte(tc.Text), "text/plain", nil
+		}
+	}
+
+	return nil, "", fmt.Errorf("%s %q: no content in response", toolName, path)
+}
+
 // extractTextContent pulls text from MCP Content blocks.
 func extractTextContent(content []mcp.Content) string {
 	var parts []string

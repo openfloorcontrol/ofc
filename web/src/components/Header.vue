@@ -3,7 +3,11 @@ defineProps({
   floorName: { type: String, default: 'OFC' },
   description: { type: String, default: '' },
   agents: { type: Array, default: () => [] },
+  hasFurniture: { type: Boolean, default: false },
+  sidebarOpen: { type: Boolean, default: false },
 })
+
+defineEmits(['toggle-sidebar'])
 
 const agentColors = [
   'bg-green-500/20 text-green-400',
@@ -34,6 +38,20 @@ function borderForAgent(index) {
   <header class="border-b border-slate-700 px-4 py-3 flex-shrink-0">
     <div class="flex items-center justify-between">
       <div class="flex items-center gap-3">
+        <!-- Sidebar toggle (mobile only) -->
+        <button
+          v-if="hasFurniture"
+          class="md:hidden text-slate-400 hover:text-slate-200 transition-colors -ml-1 p-1"
+          @click="$emit('toggle-sidebar')"
+          :title="sidebarOpen ? 'Close sidebar' : 'Open sidebar'"
+        >
+          <svg v-if="!sidebarOpen" xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+          <svg v-else xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
         <span class="text-xl font-bold tracking-tight text-slate-100">ofc<span class="ml-1">🎤</span></span>
         <span class="text-slate-600">|</span>
         <div>
@@ -48,7 +66,7 @@ function borderForAgent(index) {
             :class="colorForAgent(i)"
           >
             {{ agent.id }}
-            <span class="ml-1 opacity-60">{{ agent.type }}</span>
+            <span class="ml-1 opacity-60 hidden sm:inline">{{ agent.type }}</span>
           </span>
 
           <!-- Tooltip -->

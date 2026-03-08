@@ -13,6 +13,7 @@ const floorName = ref('')
 const floorDescription = ref('')
 const agents = ref([])
 const furnitureRefreshKey = ref(0)
+const sidebarOpen = ref(false)
 
 const { messages, streamingMessage, isStreaming, handleEvent, loadHistory } = useChat()
 const { furniture, fetchFurniture, callTool } = useFurniture()
@@ -57,13 +58,28 @@ onMounted(async () => {
 
 <template>
   <div class="flex flex-col h-screen bg-slate-900">
-    <Header :floorName="floorName" :description="floorDescription" :agents="agents" />
-    <div class="flex flex-1 min-h-0">
+    <Header
+      :floorName="floorName"
+      :description="floorDescription"
+      :agents="agents"
+      :hasFurniture="furniture.length > 0"
+      :sidebarOpen="sidebarOpen"
+      @toggle-sidebar="sidebarOpen = !sidebarOpen"
+    />
+    <div class="flex flex-1 min-h-0 relative">
+      <!-- Mobile backdrop -->
+      <div
+        v-if="sidebarOpen && furniture.length > 0"
+        class="fixed inset-0 z-20 bg-black/50 md:hidden"
+        @click="sidebarOpen = false"
+      />
       <Sidebar
         v-if="furniture.length > 0"
         :furniture="furniture"
         :callTool="callTool"
         :refreshKey="furnitureRefreshKey"
+        :open="sidebarOpen"
+        @close="sidebarOpen = false"
       />
       <div class="flex flex-col flex-1 min-w-0">
         <ChatPanel

@@ -1,11 +1,30 @@
 <script setup>
 import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { getToken } from '../composables/useAuth.js'
 
 const props = defineProps({
   furnitureName: { type: String, required: true },
   callTool: { type: Function, required: true },
   refreshKey: { type: Number, default: 0 },
 })
+
+const imageExts = new Set(['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp'])
+
+function isImageFile(name) {
+  const dot = name.lastIndexOf('.')
+  if (dot < 0) return false
+  return imageExts.has(name.substring(dot).toLowerCase())
+}
+
+function fileUrl(name) {
+  const path = rootPath.value ? rootPath.value + '/' + name : name
+  const token = tokenRef.value
+  const tokenParam = token ? `?token=${encodeURIComponent(token)}` : ''
+  return `/api/v1/file/:${props.furnitureName}/${path}${tokenParam}`
+}
+
+const tokenRef = ref('')
+getToken().then((t) => { tokenRef.value = t })
 
 const entries = ref([])
 const loading = ref(false)
@@ -83,8 +102,16 @@ function dismissNew(entry) {
 
 async function openFile(entry) {
   if (entry.type === 'dir') return
+
+  // Images: show directly via file endpoint URL (no need to read content)
+  if (isImageFile(entry.name)) {
+    viewerFile.value = { name: entry.name, imageUrl: fileUrl(entry.name), content: null, error: null }
+    viewerLoading.value = false
+    return
+  }
+
   viewerLoading.value = true
-  viewerFile.value = { name: entry.name, content: null, error: null }
+  viewerFile.value = { name: entry.name, imageUrl: null, content: null, error: null }
   try {
     const path = rootPath.value ? rootPath.value + '/' + entry.name : entry.name
     let result
@@ -185,6 +212,7 @@ onMounted(async () => {
           <div class="flex-1 overflow-auto p-4">
             <div v-if="viewerLoading" class="text-xs text-slate-500">Loading...</div>
             <div v-else-if="viewerFile.error" class="text-xs text-red-400">{{ viewerFile.error }}</div>
+            <img v-else-if="viewerFile.imageUrl" :src="viewerFile.imageUrl" :alt="viewerFile.name" class="max-w-full rounded" />
             <pre v-else class="text-xs text-slate-300 font-mono whitespace-pre-wrap leading-relaxed">{{ viewerFile.content }}</pre>
           </div>
         </div>

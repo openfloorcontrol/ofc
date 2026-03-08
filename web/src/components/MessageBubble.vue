@@ -1,13 +1,14 @@
 <script setup>
 import { computed } from 'vue'
-import { marked } from 'marked'
-import DOMPurify from 'dompurify'
+import { useMarkdown } from '../composables/useMarkdown.js'
 import ToolCall from './ToolCall.vue'
 
 const props = defineProps({
   message: { type: Object, required: true },
   agents: { type: Array, default: () => [] },
 })
+
+const { renderMarkdown } = useMarkdown()
 
 const senderColors = {
   '@user': 'text-cyan-400',
@@ -29,12 +30,6 @@ const senderColor = computed(() => {
 })
 
 const isUser = computed(() => props.message.from === '@user')
-
-const renderedContent = computed(() => {
-  if (!props.message.content) return ''
-  const raw = marked.parse(props.message.content, { breaks: true })
-  return DOMPurify.sanitize(raw)
-})
 
 // Build ordered segments from streaming data or fall back to toolInteractions + content
 const segments = computed(() => {
@@ -61,10 +56,6 @@ const segments = computed(() => {
   return result
 })
 
-function renderMarkdown(text) {
-  if (!text) return ''
-  return DOMPurify.sanitize(marked.parse(text, { breaks: true }))
-}
 </script>
 
 <template>

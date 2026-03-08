@@ -1,13 +1,14 @@
 <script setup>
 import { computed } from 'vue'
-import { marked } from 'marked'
-import DOMPurify from 'dompurify'
+import { useMarkdown } from '../composables/useMarkdown.js'
 import ToolCall from './ToolCall.vue'
 
 const props = defineProps({
   message: { type: Object, required: true },
   agents: { type: Array, default: () => [] },
 })
+
+const { renderMarkdown } = useMarkdown()
 
 const agentColorList = [
   'text-green-400',
@@ -23,10 +24,6 @@ const senderColor = computed(() => {
   return 'text-slate-400'
 })
 
-function renderMarkdown(text) {
-  if (!text) return ''
-  return DOMPurify.sanitize(marked.parse(text, { breaks: true }))
-}
 </script>
 
 <template>

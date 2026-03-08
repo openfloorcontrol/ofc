@@ -7,8 +7,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"mime"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/labstack/echo/v4"
@@ -218,13 +221,15 @@ func (s *APIServer) BaseURL() string {
 }
 
 // RegisterFloorAPI adds message and furniture endpoints for the floor.
-func (s *APIServer) RegisterFloorAPI(chat *Chat, bp *blueprint.Blueprint, furnitureMap map[string]furniture.Furniture) {
+// workspacePath is a func so it can be resolved lazily (sandbox may start after registration).
+func (s *APIServer) RegisterFloorAPI(chat *Chat, bp *blueprint.Blueprint, furnitureMap map[string]furniture.Furniture, workspacePath func() string) {
 	s.echo.POST("/api/v1/messages", handlePostMessage(chat))
 	s.echo.GET("/api/v1/messages", handleGetMessages(chat))
 	s.echo.GET("/api/v1/events", handleSSEEvents(chat))
 	s.echo.GET("/api/v1/agents", handleGetAgents(bp))
 	s.echo.GET("/api/v1/furniture", handleGetFurniture(furnitureMap))
 	s.echo.POST("/api/v1/furniture/:name/call", handleFurnitureCall(furnitureMap))
+	s.echo.GET("/api/v1/file/*", handleServeFile(furnitureMap, workspacePath))
 	s.echo.GET("/api/v1/auth/token", handleAuthToken(s))
 }
 
@@ -408,6 +413,84 @@ func handleFurnitureCall(furnitureMap map[string]furniture.Furniture) echo.Handl
 		}
 
 		return c.JSON(http.StatusOK, map[string]interface{}{"result": result})
+	}
+}
+
+// GET /api/v1/file/* — unified file serving endpoint.
+// Path scheme:
+//   - ":furniture/path" → serve via furniture's FileReader (MCP)
+//   - "path"            → serve from workspace (sandbox dir or ./workspace)
+func handleServeFile(furnitureMap map[string]furniture.Furniture, workspacePath func() string) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		rawPath := c.Param("*")
+		if rawPath == "" {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "file path is required"})
+		}
+
+		// Furniture-qualified: ":name/path"
+		if strings.HasPrefix(rawPath, ":") {
+			slashIdx := strings.Index(rawPath, "/")
+			if slashIdx < 0 {
+				return c.JSON(http.StatusBadRequest, map[string]string{"error": "missing path after furniture name"})
+			}
+			furName := rawPath[1:slashIdx]
+			filePath := rawPath[slashIdx+1:]
+
+			fur, ok := furnitureMap[furName]
+			if !ok {
+				return c.JSON(http.StatusNotFound, map[string]string{"error": fmt.Sprintf("furniture %q not found", furName)})
+			}
+			fr, ok := fur.(furniture.FileReader)
+			if !ok {
+				return c.JSON(http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("furniture %q does not support file reading", furName)})
+			}
+
+			data, mimeType, err := fr.ReadFileRaw(filePath)
+			if err != nil {
+				return c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
+			}
+			if mimeType == "" || mimeType == "application/octet-stream" || mimeType == "text/plain" {
+				if detected := mime.TypeByExtension(filepath.Ext(filePath)); detected != "" {
+					mimeType = detected
+				}
+			}
+			c.Response().Header().Set("Cache-Control", "no-cache")
+			return c.Blob(http.StatusOK, mimeType, data)
+		}
+
+		// Bare path: serve from workspace
+		wsDirs := []string{}
+		if ws := workspacePath(); ws != "" {
+			wsDirs = append(wsDirs, ws)
+		}
+		wsDirs = append(wsDirs, "workspace") // convention fallback
+
+		for _, wsDir := range wsDirs {
+			absWS, err := filepath.Abs(wsDir)
+			if err != nil {
+				continue
+			}
+			absFile, err := filepath.Abs(filepath.Join(wsDir, rawPath))
+			if err != nil {
+				continue
+			}
+			// Path traversal guard
+			if !strings.HasPrefix(absFile, absWS+string(os.PathSeparator)) && absFile != absWS {
+				return c.JSON(http.StatusForbidden, map[string]string{"error": "path outside workspace"})
+			}
+			data, err := os.ReadFile(absFile)
+			if err != nil {
+				continue
+			}
+			mimeType := mime.TypeByExtension(filepath.Ext(rawPath))
+			if mimeType == "" {
+				mimeType = "application/octet-stream"
+			}
+			c.Response().Header().Set("Cache-Control", "no-cache")
+			return c.Blob(http.StatusOK, mimeType, data)
+		}
+
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "file not found"})
 	}
 }
 

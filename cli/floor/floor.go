@@ -97,6 +97,14 @@ func (f *Floor) GetAgentContext(agentID string) *AgentContext {
 	return f.AgentContexts[agentID]
 }
 
+// WorkspacePath returns the sandbox workspace directory, or "" if no sandbox.
+func (f *Floor) WorkspacePath() string {
+	if f.Sandbox != nil {
+		return f.Sandbox.WorkspaceDir
+	}
+	return ""
+}
+
 // AgentRoom returns the room ID an agent is in ("" = main floor).
 func (f *Floor) AgentRoom(agentID string) string {
 	return f.agentRoom[agentID]
@@ -277,7 +285,7 @@ func (f *Floor) Start(renderInfo func(string)) error {
 	}
 
 	// Register floor API (furniture map is populated later but closures capture the reference)
-	f.APIServer.RegisterFloorAPI(f.Chat, f.Blueprint, f.Furniture)
+	f.APIServer.RegisterFloorAPI(f.Chat, f.Blueprint, f.Furniture, f.WorkspacePath)
 
 	// 2. Sandbox
 	var sandboxWS *blueprint.Workstation
@@ -411,6 +419,14 @@ var readOnlyTools = map[string]bool{
 
 func (o *observableFurniture) Name() string             { return o.inner.Name() }
 func (o *observableFurniture) Tools() []furniture.Tool   { return o.inner.Tools() }
+
+// ReadFileRaw forwards to the inner furniture if it implements FileReader.
+func (o *observableFurniture) ReadFileRaw(path string) ([]byte, string, error) {
+	if fr, ok := o.inner.(furniture.FileReader); ok {
+		return fr.ReadFileRaw(path)
+	}
+	return nil, "", fmt.Errorf("furniture %q does not support file reading", o.inner.Name())
+}
 func (o *observableFurniture) Call(toolName string, args map[string]interface{}) (interface{}, error) {
 	result, err := o.inner.Call(toolName, args)
 	if err == nil && !readOnlyTools[toolName] {

@@ -74,7 +74,7 @@ func setupTestFloor(t *testing.T, bp *blueprint.Blueprint, agents map[string]Age
 	floor := NewFloor(bp)
 
 	api := NewAPIServer()
-	api.RegisterFloorAPI(floor.Chat, bp, nil)
+	api.RegisterFloorAPI(floor.Chat, bp, nil, func() string { return "" })
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start API server: %v", err)
 	}

@@ -25,6 +25,13 @@ type Furniture interface {
 	Call(toolName string, args map[string]interface{}) (interface{}, error)
 }
 
+// FileReader is an optional interface for furniture that can serve raw file data.
+// Only ExternalMCP implements this — used by the API server to serve images
+// and other binary files from MCP filesystem servers.
+type FileReader interface {
+	ReadFileRaw(path string) (data []byte, mimeType string, err error)
+}
+
 // ErrUnknownTool is returned when a tool name is not recognized.
 type ErrUnknownTool struct {
 	Furniture string
