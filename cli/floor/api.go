@@ -528,10 +528,11 @@ func handleSSEEvents(chat *Chat) echo.HandlerFunc {
 				if !ok {
 					return nil
 				}
-				data := sseEventJSON(ev)
-				if data == nil {
+				payload := EventJSON(ev)
+				if payload == nil {
 					continue
 				}
+				data, _ := json.Marshal(payload)
 				fmt.Fprintf(c.Response(), "data: %s\n\n", data)
 				c.Response().Flush()
 			}
@@ -539,13 +540,13 @@ func handleSSEEvents(chat *Chat) echo.HandlerFunc {
 	}
 }
 
-// sseEventJSON converts a ChatEvent to a JSON byte slice for SSE.
-func sseEventJSON(ev ChatEvent) []byte {
-	var payload interface{}
-
+// EventJSON converts a ChatEvent to a JSON-serializable map.
+// Returns nil for events that should not be serialized (e.g. UserCommandEvent).
+// Used by SSE endpoint and JSON frontend.
+func EventJSON(ev ChatEvent) map[string]interface{} {
 	switch e := ev.(type) {
 	case MessagePosted:
-		payload = map[string]interface{}{
+		return map[string]interface{}{
 			"type": "message_posted",
 			"message": map[string]interface{}{
 				"from":              e.Message.From,
@@ -556,27 +557,27 @@ func sseEventJSON(ev ChatEvent) []byte {
 	case StreamEvent:
 		switch se := e.Event.(type) {
 		case TokenStreamed:
-			payload = map[string]interface{}{
+			return map[string]interface{}{
 				"type":     "token",
 				"agent_id": se.AgentID,
 				"token":    se.Token,
 			}
 		case ToolCallStarted:
-			payload = map[string]interface{}{
+			return map[string]interface{}{
 				"type":     "tool_call_started",
 				"agent_id": se.AgentID,
 				"id":       se.ID,
 				"title":    se.Title,
 			}
 		case ToolCallOutput:
-			payload = map[string]interface{}{
+			return map[string]interface{}{
 				"type":     "tool_call_output",
 				"agent_id": se.AgentID,
 				"id":       se.ID,
 				"output":   se.Output,
 			}
 		case ToolCallResult:
-			payload = map[string]interface{}{
+			return map[string]interface{}{
 				"type":     "tool_call_result",
 				"agent_id": se.AgentID,
 				"id":       se.ID,
@@ -584,12 +585,17 @@ func sseEventJSON(ev ChatEvent) []byte {
 				"output":   se.Output,
 			}
 		case AgentLabel:
-			payload = map[string]interface{}{
+			return map[string]interface{}{
 				"type":     "agent_label",
 				"agent_id": se.AgentID,
 			}
+		case AgentThinking:
+			return map[string]interface{}{
+				"type":     "agent_thinking",
+				"agent_id": se.AgentID,
+			}
 		case FurnitureUpdated:
-			payload = map[string]interface{}{
+			return map[string]interface{}{
 				"type": "furniture_updated",
 				"name": se.Name,
 			}
@@ -597,17 +603,17 @@ func sseEventJSON(ev ChatEvent) []byte {
 			return nil
 		}
 	case AgentFinished:
-		payload = map[string]interface{}{
+		return map[string]interface{}{
 			"type":     "agent_finished",
 			"agent_id": e.AgentID,
 		}
 	case AgentPassedEvent:
-		payload = map[string]interface{}{
+		return map[string]interface{}{
 			"type":     "agent_passed",
 			"agent_id": e.AgentID,
 		}
 	case AgentErrorEvent:
-		payload = map[string]interface{}{
+		return map[string]interface{}{
 			"type":     "agent_error",
 			"agent_id": e.AgentID,
 			"error":    e.Err.Error(),
@@ -615,7 +621,4 @@ func sseEventJSON(ev ChatEvent) []byte {
 	default:
 		return nil
 	}
-
-	data, _ := json.Marshal(payload)
-	return data
 }

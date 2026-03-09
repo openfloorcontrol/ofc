@@ -18,6 +18,7 @@ var (
 	useTUI        bool
 	useWeb        bool
 	webPort       int
+	useJSON       bool
 )
 
 var runCmd = &cobra.Command{
@@ -39,7 +40,9 @@ var runCmd = &cobra.Command{
 			initialPrompt = args[0]
 		}
 
-		if useTUI {
+		if useJSON {
+			runJSON(bp, initialPrompt)
+		} else if useTUI {
 			runTUI(bp, initialPrompt)
 		} else {
 			runCLI(bp, initialPrompt)
@@ -126,6 +129,30 @@ func runTUI(bp *blueprint.Blueprint, initialPrompt string) {
 	}
 }
 
+func runJSON(bp *blueprint.Blueprint, initialPrompt string) {
+	frontend := floor.NewJSONFrontend(logFile, debug)
+
+	f := floor.NewFloor(bp)
+	if debug {
+		f.DebugFunc = frontend.Debug
+	}
+	f.LogWriter = frontend.LogWriter()
+
+	ctrl := floor.NewController(bp)
+	if debug {
+		ctrl.DebugFunc = frontend.Debug
+	}
+
+	agents := buildAgents(bp)
+
+	if err := frontend.RunLoop(f, ctrl, agents, initialPrompt); err != nil {
+		if err.Error() != "stop" {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	}
+}
+
 // buildAgents creates Agent instances from the blueprint.
 func buildAgents(bp *blueprint.Blueprint) map[string]floor.Agent {
 	agents := make(map[string]floor.Agent)
@@ -148,4 +175,5 @@ func init() {
 	runCmd.Flags().BoolVar(&useTUI, "tui", false, "Use terminal UI with split layout")
 	runCmd.Flags().BoolVar(&useWeb, "web", false, "Enable web UI (serves web/dist/ on --port)")
 	runCmd.Flags().IntVar(&webPort, "port", 8080, "Port for web UI (used with --web)")
+	runCmd.Flags().BoolVar(&useJSON, "json", false, "Output events as JSONL to stdout")
 }
