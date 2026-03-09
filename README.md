@@ -180,6 +180,37 @@ The floor runs an HTTP API server for external integration:
 | `/api/v1/floors/{f}/mcp/{name}/` | Streamable HTTP MCP for furniture |
 | `/api/v1/floors/{f}/sse/{name}/` | SSE MCP for furniture |
 
+### SSE Event Protocol
+
+The `GET /api/v1/events` endpoint streams Server-Sent Events as JSON. This is the integration point for building custom frontends. Each event has a `type` field:
+
+**Message lifecycle:**
+
+| Event | Fields | Description |
+|-------|--------|-------------|
+| `agent_label` | `agent_id` | Agent is about to stream — render its name label |
+| `token` | `agent_id`, `token` | Streaming text token from an agent |
+| `tool_call_started` | `agent_id`, `id`, `title` | Agent started a tool call |
+| `tool_call_output` | `agent_id`, `id`, `output` | Incremental output from a running tool |
+| `tool_call_result` | `agent_id`, `id`, `title`, `output` | Tool call completed with result |
+| `agent_finished` | `agent_id` | Agent finished streaming (end of turn) |
+| `message_posted` | `message` | Final message posted to chat (with `from`, `content`, `tool_interactions`) |
+
+**Turn-taking:**
+
+| Event | Fields | Description |
+|-------|--------|-------------|
+| `agent_passed` | `agent_id` | Agent declined to respond (`[PASS]`) |
+| `agent_error` | `agent_id`, `error` | Agent encountered an error |
+
+**Furniture:**
+
+| Event | Fields | Description |
+|-------|--------|-------------|
+| `furniture_updated` | `name` | A furniture's state changed (refresh task boards, file lists, etc.) |
+
+A typical agent turn produces: `agent_label` → `token`* → (`tool_call_started` → `tool_call_output`* → `tool_call_result`)* → `token`* → `agent_finished` → `message_posted`.
+
 ## Examples
 
 | Example | Description |
