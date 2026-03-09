@@ -139,7 +139,9 @@ furniture:
 
 ### External MCP servers
 
-External MCP servers are wrapped as furniture. OFC spawns the process, discovers tools, and proxies calls:
+External MCP servers are wrapped as furniture. Two connection modes:
+
+**Subprocess (stdio)** — OFC spawns the process and connects via stdin/stdout:
 
 ```yaml
 furniture:
@@ -149,14 +151,24 @@ furniture:
     args: ["-y", "@modelcontextprotocol/server-filesystem", "./workspace"]
 ```
 
+**URL (HTTP)** — OFC connects to an already-running MCP server:
+
+```yaml
+furniture:
+  - name: remote-tools
+    type: mcp
+    url: http://localhost:3001/mcp
+```
+
 ### Furniture fields
 
 | Field | Default | Description |
 |-------|---------|-------------|
 | `name` | *required* | Identifier used in agent `furniture` lists |
 | `type` | *required* | `"taskboard"` (built-in) or `"mcp"` (external MCP server) |
-| `command` | | Command to launch the MCP server (required for `type: mcp`) |
+| `command` | | Command to launch the MCP server (stdio transport) |
 | `args` | `[]` | Arguments for the command |
+| `url` | | URL of an already-running MCP server (HTTP transport) |
 | `config` | `{}` | Type-specific key-value configuration |
 
 ### Agent access

@@ -19,7 +19,7 @@ Multi-agent coordination is working end-to-end with LLM (OpenAI-compatible) and 
 - **TUI frontend** — Bubble Tea split-layout terminal UI (`--tui`).
 - **Web frontend** — Vue + Tailwind chat UI (`--web`) with SSE-driven streaming, furniture sidebar (task boards, file lists), inline image rendering from agent markdown, responsive design, token-based auth.
 - **Furniture system** — Shared interactive objects (task boards, external MCP servers) exposed via API server. LLM agents get namespaced tool injection; ACP agents get MCP pass-through with capability-based transport selection.
-- **External MCP servers** — Spawn MCP server subprocesses (`type: mcp` with `command`/`args`), discover tools, proxy calls. Binary file serving via `FileReader` interface.
+- **External MCP servers** — Connect to MCP servers via subprocess (`command`/`args`) or HTTP (`url`). Tool discovery, call proxying, binary file serving via `FileReader` interface.
 - **File serving** — Unified `/api/v1/file/*` endpoint serving workspace files and furniture-qualified paths with MIME detection.
 - **Integration tests** — Full-pipeline tests over HTTP: agent triggering, mention delegation, PASS semantics, SSE streaming, rooms, furniture proxy.
 - **Homebrew distribution** — `brew install openfloorcontrol/tap/ofc` (macOS + Linux, Intel + ARM).
@@ -37,7 +37,6 @@ Multi-agent coordination is working end-to-end with LLM (OpenAI-compatible) and 
 
 - [ ] Per-agent access control at the tool/function level
 - [ ] Furniture persistence (currently in-memory only)
-- [ ] External MCP servers via URL (connect to already-running servers)
 - [ ] Explore shared artifacts (documents, knowledge bases)
 
 ### Collaboration Modes

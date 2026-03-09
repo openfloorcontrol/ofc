@@ -11,45 +11,70 @@ import (
 )
 
 // ExternalMCP implements the Furniture interface by proxying to an external
-// MCP server subprocess via stdio. OFC spawns the process, connects as an
-// MCP client, discovers tools, and forwards Call() invocations.
+// MCP server. Supports two connection modes:
+//   - Subprocess via stdio (NewExternalMCP)
+//   - Already-running server via HTTP (NewExternalMCPFromURL)
 type ExternalMCP struct {
 	name    string
 	session *mcp.ClientSession
 	tools   []Tool // cached from tools/list at startup
 }
 
-// NewExternalMCP spawns an external MCP server process and connects to it.
-// It performs the MCP handshake and discovers available tools.
-func NewExternalMCP(ctx context.Context, name, command string, args []string) (*ExternalMCP, error) {
-	cmd := exec.Command(command, args...)
-	transport := &mcp.CommandTransport{Command: cmd}
-
-	client := mcp.NewClient(&mcp.Implementation{
+// newClient creates a shared MCP client instance.
+func newClient() *mcp.Client {
+	return mcp.NewClient(&mcp.Implementation{
 		Name:    "ofc",
 		Version: "0.1.0",
 	}, nil)
+}
 
-	session, err := client.Connect(ctx, transport, nil)
-	if err != nil {
-		return nil, fmt.Errorf("connect to MCP server %q (%s): %w", name, command, err)
-	}
-
-	// Discover tools
+// discoverTools lists tools from a connected session.
+func discoverTools(ctx context.Context, session *mcp.ClientSession, name string) ([]Tool, error) {
 	var tools []Tool
 	for tool, err := range session.Tools(ctx, nil) {
 		if err != nil {
-			session.Close()
 			return nil, fmt.Errorf("list tools for MCP server %q: %w", name, err)
 		}
 		tools = append(tools, convertMCPTool(tool))
 	}
+	return tools, nil
+}
 
-	return &ExternalMCP{
-		name:    name,
-		session: session,
-		tools:   tools,
-	}, nil
+// NewExternalMCP spawns an external MCP server process and connects via stdio.
+func NewExternalMCP(ctx context.Context, name, command string, args []string) (*ExternalMCP, error) {
+	cmd := exec.Command(command, args...)
+	transport := &mcp.CommandTransport{Command: cmd}
+
+	session, err := newClient().Connect(ctx, transport, nil)
+	if err != nil {
+		return nil, fmt.Errorf("connect to MCP server %q (%s): %w", name, command, err)
+	}
+
+	tools, err := discoverTools(ctx, session, name)
+	if err != nil {
+		session.Close()
+		return nil, err
+	}
+
+	return &ExternalMCP{name: name, session: session, tools: tools}, nil
+}
+
+// NewExternalMCPFromURL connects to an already-running MCP server via HTTP.
+func NewExternalMCPFromURL(ctx context.Context, name, url string) (*ExternalMCP, error) {
+	transport := &mcp.StreamableClientTransport{Endpoint: url}
+
+	session, err := newClient().Connect(ctx, transport, nil)
+	if err != nil {
+		return nil, fmt.Errorf("connect to MCP server %q (%s): %w", name, url, err)
+	}
+
+	tools, err := discoverTools(ctx, session, name)
+	if err != nil {
+		session.Close()
+		return nil, err
+	}
+
+	return &ExternalMCP{name: name, session: session, tools: tools}, nil
 }
 
 func (e *ExternalMCP) Name() string  { return e.name }

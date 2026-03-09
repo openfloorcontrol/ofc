@@ -117,15 +117,15 @@ furniture:
     command: npx
     args: ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
 
-  # URL-based: OFC connects to an already-running server
-  - name: github
+  # URL-based: OFC connects to an already-running server via HTTP
+  - name: remote-tools
     type: mcp
-    url: http://localhost:3000/sse
+    url: http://localhost:3001/mcp
 ```
 
 The `ExternalMCP` implementation:
 
-1. Connects to the external server (stdio subprocess or SSE/HTTP URL)
+1. Connects to the external server (stdio subprocess or Streamable HTTP URL)
 2. Calls `tools/list` to discover available tools
 3. Implements `Furniture.Tools()` from the discovered tool list
 4. Implements `Furniture.Call()` by proxying to `tools/call`
@@ -206,7 +206,6 @@ agents:
 ## What's Next
 
 - [ ] Advanced MCP features (progress notifications, resource subscriptions, logging)
-- [ ] External MCP servers via URL (connect to already-running servers)
 - [ ] Per-agent access control at the tool level
 - [ ] Furniture persistence (TaskBoard is in-memory only)
 - [ ] Stdio bridge for ACP agents that only support stdio MCP

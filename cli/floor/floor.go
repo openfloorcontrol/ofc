@@ -539,8 +539,11 @@ func createFurniture(ctx context.Context, fd blueprint.FurnitureDef) (furniture.
 	case "taskboard":
 		return furniture.NewTaskBoard(), nil
 	case "mcp":
+		if fd.URL != "" {
+			return furniture.NewExternalMCPFromURL(ctx, fd.Name, fd.URL)
+		}
 		if fd.Command == "" {
-			return nil, fmt.Errorf("mcp furniture %q requires a command", fd.Name)
+			return nil, fmt.Errorf("mcp furniture %q requires a command or url", fd.Name)
 		}
 		return furniture.NewExternalMCP(ctx, fd.Name, fd.Command, fd.Args)
 	default:

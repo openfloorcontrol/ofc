@@ -1,0 +1,1 @@
+Our investors asked for a projection for the year ahead. Can you have a look, there are some sales numbers in sales.csv?

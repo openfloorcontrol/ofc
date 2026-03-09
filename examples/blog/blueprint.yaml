@@ -1,0 +1,21 @@
+name: blog-coder
+description: "Single coder agent for blog post experiments"
+
+defaults:
+  endpoint: http://localhost:11434/v1
+  model: glm-4.7:cloud
+
+agents:
+  - id: "@code"
+    name: "Coder"
+    activation: always
+    can_use_sandbox: true
+    temperature: 0.2
+    prompt_file: prompt.txt
+
+workstations:
+  - type: sandbox
+    name: python-sandbox
+    image: python:3.11-slim
+    dockerfile: ./sandbox/Dockerfile
+    mount: ./workspace:/workspace
