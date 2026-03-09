@@ -158,7 +158,11 @@ furniture:
   - name: remote-tools
     type: mcp
     url: http://localhost:3001/mcp
+    headers:
+      Authorization: "Bearer ${MCP_TOKEN}"
 ```
+
+Header values support `${VAR}` environment variable expansion.
 
 ### Furniture fields
 
@@ -169,6 +173,7 @@ furniture:
 | `command` | | Command to launch the MCP server (stdio transport) |
 | `args` | `[]` | Arguments for the command |
 | `url` | | URL of an already-running MCP server (HTTP transport) |
+| `headers` | `{}` | HTTP headers for URL connections (supports `${VAR}` env expansion) |
 | `config` | `{}` | Type-specific key-value configuration |
 
 ### Agent access

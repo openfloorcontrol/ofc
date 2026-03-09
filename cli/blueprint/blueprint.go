@@ -50,6 +50,7 @@ type FurnitureDef struct {
 	Command string            `yaml:"command,omitempty"` // executable for external MCP servers (stdio)
 	Args    []string          `yaml:"args,omitempty"`    // arguments for external MCP command
 	URL     string            `yaml:"url,omitempty"`     // URL for already-running MCP servers (HTTP)
+	Headers map[string]string `yaml:"headers,omitempty"` // HTTP headers (supports ${VAR} env expansion)
 	Config  map[string]string `yaml:"config,omitempty"`  // type-specific configuration
 }
 

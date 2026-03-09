@@ -4,11 +4,27 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// headerTransport wraps an http.RoundTripper to inject custom headers.
+type headerTransport struct {
+	base    http.RoundTripper
+	headers map[string]string
+}
+
+func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
+	for k, v := range t.headers {
+		req.Header.Set(k, v)
+	}
+	return t.base.RoundTrip(req)
+}
 
 // ExternalMCP implements the Furniture interface by proxying to an external
 // MCP server. Supports two connection modes:
@@ -60,8 +76,22 @@ func NewExternalMCP(ctx context.Context, name, command string, args []string) (*
 }
 
 // NewExternalMCPFromURL connects to an already-running MCP server via HTTP.
-func NewExternalMCPFromURL(ctx context.Context, name, url string) (*ExternalMCP, error) {
+// Headers are added to every request (values support ${VAR} env expansion).
+func NewExternalMCPFromURL(ctx context.Context, name, url string, headers map[string]string) (*ExternalMCP, error) {
 	transport := &mcp.StreamableClientTransport{Endpoint: url}
+
+	if len(headers) > 0 {
+		expanded := make(map[string]string, len(headers))
+		for k, v := range headers {
+			expanded[k] = os.ExpandEnv(v)
+		}
+		transport.HTTPClient = &http.Client{
+			Transport: &headerTransport{
+				base:    http.DefaultTransport,
+				headers: expanded,
+			},
+		}
+	}
 
 	session, err := newClient().Connect(ctx, transport, nil)
 	if err != nil {
