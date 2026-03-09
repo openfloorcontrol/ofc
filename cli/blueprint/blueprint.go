@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -92,6 +93,22 @@ func Load(path string) (*Blueprint, error) {
 				return nil, fmt.Errorf("agent %s: reading prompt_file: %w", bp.Agents[i].ID, err)
 			}
 			bp.Agents[i].Prompt = string(data)
+		}
+	}
+
+	// Resolve workstation paths relative to blueprint directory
+	for i := range bp.Workstations {
+		ws := &bp.Workstations[i]
+		if ws.Dockerfile != "" && !filepath.IsAbs(ws.Dockerfile) {
+			ws.Dockerfile = filepath.Join(bpDir, ws.Dockerfile)
+		}
+		if ws.Mount != "" {
+			// Mount format: "host:container" — resolve host part
+			parts := strings.SplitN(ws.Mount, ":", 2)
+			if len(parts) == 2 && !filepath.IsAbs(parts[0]) {
+				parts[0] = filepath.Join(bpDir, parts[0])
+				ws.Mount = parts[0] + ":" + parts[1]
+			}
 		}
 	}
 

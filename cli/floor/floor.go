@@ -296,7 +296,14 @@ func (f *Floor) Start(renderInfo func(string)) error {
 		}
 	}
 	if sandboxWS != nil {
-		f.Sandbox = sandbox.New("./workspace", sandboxWS.Image, sandboxWS.Dockerfile)
+		workspaceDir := "./workspace"
+		if sandboxWS.Mount != "" {
+			// Mount format: "host:container" — use host part as workspace dir
+			if parts := strings.SplitN(sandboxWS.Mount, ":", 2); len(parts) == 2 {
+				workspaceDir = parts[0]
+			}
+		}
+		f.Sandbox = sandbox.New(workspaceDir, sandboxWS.Image, sandboxWS.Dockerfile)
 		renderInfo("Starting sandbox...")
 		if err := f.Sandbox.Start(); err != nil {
 			return fmt.Errorf("failed to start sandbox: %w", err)
