@@ -10,7 +10,12 @@ OFC (Open Floor Control) enables multiple AI agents to collaborate in structured
 
 ### Install
 
-Build from source:
+Via Homebrew:
+```bash
+brew install openfloorcontrol/tap/ofc
+```
+
+Or build from source:
 ```bash
 cd cli && go build -o ofc .
 ```
@@ -34,6 +39,11 @@ The `data-analysis-acp` example uses an LLM analyst with a Claude Code coder (vi
 ```bash
 cd examples/data-analysis-acp
 ofc run
+```
+
+Add `--web` to open the web UI:
+```bash
+ofc run --web
 ```
 
 ### Requirements
@@ -93,9 +103,26 @@ See [BLUEPRINT.md](BLUEPRINT.md) for the full reference.
 - **Rooms**: Isolated sub-conversations for focused work (`/room #name @agent1 @agent2 prompt`)
 - **AgentContext**: Per-agent message streams — each agent sees their own view of the conversation
 
-## Commands
+## CLI
 
-During a conversation:
+```
+ofc run [prompt]        Run a floor (optional initial prompt)
+ofc init [name]         Create a new blueprint template
+ofc version             Print version info
+```
+
+### Flags for `ofc run`
+
+| Flag | Description |
+|------|-------------|
+| `--file`, `-f` | Blueprint file path (default: `blueprint.yaml`) |
+| `--debug` | Enable debug output |
+| `--log <file>` | Log output to file (plain text, no colors) |
+| `--tui` | Terminal UI with split layout |
+| `--web` | Web UI with chat, furniture panels, inline images |
+| `--port` | Web UI port (default: `8080`) |
+
+### Commands during a conversation
 
 | Command | Description |
 |---------|-------------|
@@ -104,11 +131,21 @@ During a conversation:
 | `/room #name @agent1 @agent2 [prompt]` | Create a room — agents work together, auto-return when done |
 | `/room close #name` | Manually close a room |
 
+## Web UI
+
+Launch with `ofc run --web` to open a browser-based interface:
+
+- **Chat panel** with streaming agent responses and markdown rendering
+- **Furniture sidebar** with live task board and file list panels
+- **Inline images** — agents write standard markdown (`![chart](chart.png)`) and images render directly in chat
+- **Responsive design** — works on desktop and mobile
+- **Auth** — token-based, auto-injected for the local session
+
 ## Architecture
 
 ```
 cli/
-├── cmd/           # CLI commands (run, init)
+├── cmd/           # CLI commands (run, init, version)
 ├── floor/         # Core floor engine
 │   ├── floor.go           # Floor: shared state, rooms, lifecycle
 │   ├── controller.go      # Controller: turn-taking logic, command handling
@@ -117,7 +154,7 @@ cli/
 │   ├── room.go            # Room: isolated sub-conversations
 │   ├── agent_llm.go       # LLM agent (OpenAI-compatible)
 │   ├── agent_acp.go       # ACP agent (Claude Code, etc.)
-│   ├── api.go             # HTTP API: messages, SSE events, MCP
+│   ├── api.go             # HTTP API: messages, SSE events, MCP, file serving
 │   ├── cli.go             # CLI frontend
 │   └── tui.go             # TUI frontend (bubbletea)
 ├── blueprint/     # YAML loading, agent/workstation config
@@ -135,6 +172,11 @@ The floor runs an HTTP API server for external integration:
 | `POST /api/v1/messages` | Inject a message into the floor |
 | `GET /api/v1/messages` | Read message history |
 | `GET /api/v1/events` | SSE stream of all chat events |
+| `GET /api/v1/agents` | Floor metadata and agent list |
+| `GET /api/v1/furniture` | List furniture with their tools |
+| `POST /api/v1/furniture/:name/call` | Proxy a tool call to furniture |
+| `GET /api/v1/file/*` | Serve files (workspace or `:furniture/path`) |
+| `GET /api/v1/auth/token` | Auth token (loopback only) |
 | `/api/v1/floors/{f}/mcp/{name}/` | Streamable HTTP MCP for furniture |
 | `/api/v1/floors/{f}/sse/{name}/` | SSE MCP for furniture |
 
@@ -146,10 +188,13 @@ The floor runs an HTTP API server for external integration:
 | `data-analysis-acp/` | LLM analyst + Claude Code coder with filesystem MCP |
 | `taskboard/` | LLM agents with shared task board furniture |
 | `taskboard-acp/` | LLM planner + Claude Code coder with task board |
+| `blog/` | Single LLM coder — swap prompt files to experiment |
+| `everything/` | External MCP test server demo |
+| `acp-test/` | ACP agent with sandbox |
+| `chaindepth/` | Delegation chain depth test |
 
 ## Links
 
-- Protocol spec (aspirational): [history/PROTOCOL.md](history/PROTOCOL.md)
 - Blueprint reference: [BLUEPRINT.md](BLUEPRINT.md)
 - Furniture architecture: [FURNITURE.md](FURNITURE.md)
 - Building blocks: [BUILDING-BLOCKS.md](BUILDING-BLOCKS.md)

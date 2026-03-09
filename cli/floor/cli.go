@@ -288,6 +288,10 @@ func (f *CLIFrontend) renderStream(ev Event, roomID string) {
 		f.out.Print("%s", e.Token)
 	case ToolCallStarted:
 		f.out.Print("\n%s  ▶ %s%s\n", Dim, e.Title, Reset)
+	case ToolCallOutput:
+		if e.Output != "" {
+			f.out.Print("%s  %s%s", Dim, e.Output, Reset)
+		}
 	case ToolCallResult:
 		if e.Output != "" {
 			display := e.Output
@@ -296,6 +300,8 @@ func (f *CLIFrontend) renderStream(ev Event, roomID string) {
 			}
 			f.out.Print("%s  %s%s\n", Dim, display, Reset)
 		}
+	case AgentThinking:
+		f.out.Terminal("%s  thinking...%s", Dim, Reset)
 	}
 }
 

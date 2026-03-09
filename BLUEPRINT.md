@@ -37,7 +37,8 @@ workstations:
 | `description` | no | Short description of the floor |
 | `defaults` | no | Default `endpoint` and `model` for all agents |
 | `agents` | yes | List of agents on this floor |
-| `workstations` | no | List of workstations (tools) available |
+| `furniture` | no | List of shared furniture (task boards, MCP servers) |
+| `workstations` | no | List of workstations (sandboxed environments) |
 
 ## Agents
 
@@ -124,9 +125,57 @@ The path is relative to the blueprint file's directory. Absolute paths also work
 | `args` | `[]` | Arguments for the command |
 | `env` | `{}` | Environment variables (supports `${VAR}` expansion) |
 
+## Furniture
+
+Furniture are shared interactive objects on the floor — task boards, file systems, external APIs. Agents interact with them via tool calls. OFC proxies all interactions for access control and observability.
+
+### Built-in types
+
+```yaml
+furniture:
+  - name: tasks
+    type: taskboard    # in-memory task board (list, add, update, get)
+```
+
+### External MCP servers
+
+External MCP servers are wrapped as furniture. OFC spawns the process, discovers tools, and proxies calls:
+
+```yaml
+furniture:
+  - name: fs
+    type: mcp
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "./workspace"]
+```
+
+### Furniture fields
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `name` | *required* | Identifier used in agent `furniture` lists |
+| `type` | *required* | `"taskboard"` (built-in) or `"mcp"` (external MCP server) |
+| `command` | | Command to launch the MCP server (required for `type: mcp`) |
+| `args` | `[]` | Arguments for the command |
+| `config` | `{}` | Type-specific key-value configuration |
+
+### Agent access
+
+Agents declare which furniture they can use via the `furniture` field:
+
+```yaml
+agents:
+  - id: "@planner"
+    furniture: [tasks]           # can only access task board
+  - id: "@coder"
+    furniture: [tasks, fs]       # can access task board and filesystem
+```
+
+LLM agents get furniture tools injected as function calls, namespaced as `{furniture}__{tool}` (e.g. `tasks__add_task`). ACP agents receive MCP server URLs and connect themselves.
+
 ## Workstations
 
-Workstations are shared tools available to agents on the floor.
+Workstations are sandboxed environments for code execution.
 
 ### Sandbox
 
@@ -230,9 +279,14 @@ agents:
     can_use_sandbox: true
     temperature: 0.2
     tool_context: full
+    furniture: [tasks]
     prompt: |
       You are @code, an expert programmer.
       Implement what's asked. Keep responses SHORT.
+
+furniture:
+  - name: tasks
+    type: taskboard
 
 workstations:
   - type: sandbox
