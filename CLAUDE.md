@@ -152,6 +152,7 @@ agents:
 
 - `FURNITURE.md` — Furniture architecture (proxy principle, two agent paths, MCP transport)
 - `BLUEPRINT.md` — Blueprint YAML reference
+- `TESTING.md` — Testing guide (`--json`, `ofc eval`, `ofctest` package)
 - `ROADMAP.md` — Project roadmap
 - `BUILDING-BLOCKS.md` — Research notes on ACP, MCP, KAOS protocol stack
 - `history/PROTOCOL.md` — Early protocol specification (historical)
