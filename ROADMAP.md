@@ -22,6 +22,8 @@ Multi-agent coordination is working end-to-end with LLM (OpenAI-compatible) and 
 - **External MCP servers** — Connect to MCP servers via subprocess (`command`/`args`) or HTTP (`url`). Tool discovery, call proxying, binary file serving via `FileReader` interface.
 - **File serving** — Unified `/api/v1/file/*` endpoint serving workspace files and furniture-qualified paths with MIME detection.
 - **Integration tests** — Full-pipeline tests over HTTP: agent triggering, mention delegation, PASS semantics, SSE streaming, rooms, furniture proxy.
+- **JSONL output** — `--json` flag for machine-readable event output, foundation for testing and evaluation.
+- **HTTP MCP auth** — `headers` field with `${VAR}` env expansion for authenticated MCP servers.
 - **Homebrew distribution** — `brew install openfloorcontrol/tap/ofc` (macOS + Linux, Intel + ARM).
 
 ---
@@ -43,6 +45,13 @@ Multi-agent coordination is working end-to-end with LLM (OpenAI-compatible) and 
 
 - [ ] Define how prompting strategies enable different modes without protocol changes
 - [ ] Free conversation, brainstorming, debate/adversarial patterns
+
+### Testing & Evaluation
+
+- [ ] `ofc eval` — pipe text/JSONL to an LLM with an evaluation prompt, get structured score + reasoning. The evaluation primitive.
+- [ ] `ofctest` Go package — `Run()` a blueprint in-process, collect events, mechanical assertions (`AssertToolCalled`, `AssertAgentSpoke`, `AssertNoErrors`) + LLM evaluation via `Eval()`. Powers `go test` for Go developers and OFC's own integration tests.
+- [ ] `ofc test` — CLI test runner reading test specs from YAML. Wraps `ofctest` for non-Go users who just have a blueprint. Mechanical assertions + eval prompts, no code required.
+- [ ] Use `ofctest` for OFC's own integration tests (dogfooding).
 
 ### Distribution & Scaling
 
