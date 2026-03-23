@@ -64,6 +64,7 @@ type Floor struct {
 	unified       chan TaggedEvent          // merged event channel (lazy, set by StartUnified)
 	ListenAddr    string                   // API server listen address (default ":0" for auto)
 	ServeWebDist  bool                     // serve web/dist/ as static files
+	ExternalURL   string                   // override base URL in printed web UI link (for reverse proxies)
 	DebugFunc     func(string)
 	LogWriter     io.Writer
 	StderrWriter  io.Writer // where ACP subprocess stderr goes
@@ -332,12 +333,28 @@ func (f *Floor) Start(renderInfo func(string)) error {
 	if listenAddr == "" {
 		listenAddr = ":0"
 	}
+	// Bind to localhost by default for security (token-authenticated API)
+	if f.ServeWebDist && !strings.Contains(listenAddr, "127.0.0.1") && !strings.Contains(listenAddr, "localhost") {
+		// Replace ":port" with "127.0.0.1:port"
+		if strings.HasPrefix(listenAddr, ":") {
+			listenAddr = "127.0.0.1" + listenAddr
+		}
+	}
 	if err := f.APIServer.Start(listenAddr); err != nil {
 		return fmt.Errorf("failed to start API server: %w", err)
 	}
 	renderInfo(fmt.Sprintf("API server at %s", f.APIServer.BaseURL()))
 	if f.ServeWebDist {
-		renderInfo(fmt.Sprintf("Web UI at %s", f.APIServer.BaseURL()))
+		baseURL := f.APIServer.BaseURL()
+		if f.ExternalURL != "" {
+			baseURL = strings.TrimSuffix(f.ExternalURL, "/")
+		}
+		token := f.APIServer.AuthToken()
+		if token != "" {
+			renderInfo(fmt.Sprintf("Web UI at %s?token=%s", baseURL, token))
+		} else {
+			renderInfo(fmt.Sprintf("Web UI at %s", baseURL))
+		}
 	}
 
 	// 6. ACP agent sessions

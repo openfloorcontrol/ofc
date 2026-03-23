@@ -18,6 +18,7 @@ var (
 	useTUI        bool
 	useWeb        bool
 	webPort       int
+	webHostname   string
 	useJSON       bool
 )
 
@@ -63,6 +64,7 @@ func runCLI(bp *blueprint.Blueprint, initialPrompt string) {
 	if useWeb {
 		f.ListenAddr = fmt.Sprintf(":%d", webPort)
 		f.ServeWebDist = true
+		f.ExternalURL = webHostname
 		frontend.Headless = true
 	}
 
@@ -175,5 +177,6 @@ func init() {
 	runCmd.Flags().BoolVar(&useTUI, "tui", false, "Use terminal UI with split layout")
 	runCmd.Flags().BoolVar(&useWeb, "web", false, "Enable web UI (serves web/dist/ on --port)")
 	runCmd.Flags().IntVar(&webPort, "port", 8080, "Port for web UI (used with --web)")
+	runCmd.Flags().StringVar(&webHostname, "hostname", "", "External URL for web UI (e.g. https://myhost.dev), overrides localhost in printed URL")
 	runCmd.Flags().BoolVar(&useJSON, "json", false, "Output events as JSONL to stdout")
 }

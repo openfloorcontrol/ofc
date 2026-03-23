@@ -14,21 +14,21 @@ const floorDescription = ref('')
 const agents = ref([])
 const furnitureRefreshKey = ref(0)
 const sidebarOpen = ref(false)
+const authError = ref('')
 
 const { messages, streamingMessage, isStreaming, handleEvent, loadHistory } = useChat()
 const { furniture, fetchFurniture, callTool } = useFurniture()
 const sse = useSSE('/api/v1/events', getToken)
 
 async function fetchMetadata() {
-  try {
-    const resp = await apiFetch('/api/v1/agents')
-    const data = await resp.json()
-    floorName.value = data.floor_name || 'OFC'
-    floorDescription.value = data.description || ''
-    agents.value = data.agents || []
-  } catch {
-    floorName.value = 'OFC'
+  const resp = await apiFetch('/api/v1/agents')
+  if (resp.status === 401) {
+    throw new Error('unauthorized')
   }
+  const data = await resp.json()
+  floorName.value = data.floor_name || 'OFC'
+  floorDescription.value = data.description || ''
+  agents.value = data.agents || []
 }
 
 async function sendMessage(content) {
@@ -49,15 +49,36 @@ function handleEventWithRefresh(event) {
 }
 
 onMounted(async () => {
-  await fetchMetadata()
-  await Promise.all([loadHistory(), fetchFurniture()])
-  sse.onEvent(handleEventWithRefresh)
-  sse.connect()
+  try {
+    await fetchMetadata()
+    await Promise.all([loadHistory(), fetchFurniture()])
+    sse.onEvent(handleEventWithRefresh)
+    sse.connect()
+  } catch (err) {
+    if (err.message === 'unauthorized') {
+      authError.value = 'Authentication required. Open the URL with token from the ofc console output.'
+    } else {
+      authError.value = 'Cannot connect to ofc server. Is it running?'
+    }
+  }
 })
 </script>
 
 <template>
   <div class="flex flex-col h-screen bg-slate-900">
+    <!-- Auth/connection error overlay -->
+    <div v-if="authError" class="flex items-center justify-center h-screen">
+      <div class="text-center max-w-md px-6">
+        <div class="text-4xl mb-4">🔒</div>
+        <h2 class="text-xl font-semibold text-slate-200 mb-2">Cannot connect</h2>
+        <p class="text-slate-400">{{ authError }}</p>
+        <p class="text-slate-500 text-sm mt-4">
+          The URL should look like:<br>
+          <code class="text-slate-400">http://127.0.0.1:8080?token=...</code>
+        </p>
+      </div>
+    </div>
+    <template v-else>
     <Header
       :floorName="floorName"
       :description="floorDescription"
@@ -90,5 +111,6 @@ onMounted(async () => {
         <InputBar :disabled="false" @send="sendMessage" />
       </div>
     </div>
+    </template>
   </div>
 </template>

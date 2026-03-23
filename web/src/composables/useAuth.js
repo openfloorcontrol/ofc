@@ -1,29 +1,19 @@
 let cachedToken = null
 
 /**
- * Get the auth token.
- * Production: injected into HTML by Go server as window.__OFC_TOKEN.
- * Dev mode: fetched from localhost-only /api/v1/auth/token endpoint.
+ * Get the auth token from the URL query parameter.
+ * The server prints a URL like http://127.0.0.1:8080?token=abc123
+ * on the console at startup (Jupyter-style).
  */
 export async function getToken() {
   if (cachedToken) return cachedToken
 
-  // Production: token injected into HTML by Go
-  if (window.__OFC_TOKEN) {
-    cachedToken = window.__OFC_TOKEN
+  // Read token from URL query parameter
+  const params = new URLSearchParams(window.location.search)
+  const token = params.get('token')
+  if (token) {
+    cachedToken = token
     return cachedToken
-  }
-
-  // Dev mode: fetch from localhost-only endpoint
-  try {
-    const resp = await fetch('/api/v1/auth/token')
-    if (resp.ok) {
-      const data = await resp.json()
-      cachedToken = data.token
-      return cachedToken
-    }
-  } catch {
-    // no token available
   }
 
   return ''

@@ -69,7 +69,7 @@ func GenerateToken() string {
 
 // authMiddleware checks for a valid auth token on /api/* routes.
 // Accepts Authorization: Bearer <token> header or ?token=<token> query param.
-// Skips non-API routes (static files) and the token endpoint itself.
+// Skips non-API routes (static files serve without auth — not sensitive).
 func authMiddleware(token string) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
@@ -77,11 +77,6 @@ func authMiddleware(token string) echo.MiddlewareFunc {
 
 			// Skip non-API routes (static files)
 			if !strings.HasPrefix(path, "/api/") {
-				return next(c)
-			}
-
-			// Skip the token endpoint (has its own loopback check)
-			if path == "/api/v1/auth/token" {
 				return next(c)
 			}
 
@@ -124,16 +119,10 @@ func (s *APIServer) RegisterFurniture(floor, name string, mcpSrv *mcp.Server) {
 }
 
 // ServeStaticWeb serves the web/dist/ directory as static files with SPA fallback.
-// If auth is enabled, injects the token into index.html.
 func (s *APIServer) ServeStaticWeb(webFS fs.FS) {
-	// Read index.html and optionally inject auth token
 	indexHTML, err := fs.ReadFile(webFS, "index.html")
 	if err != nil {
 		indexHTML = []byte("<html><body>index.html not found</body></html>")
-	}
-	if s.authToken != "" {
-		tokenScript := fmt.Sprintf(`<script>window.__OFC_TOKEN="%s"</script></head>`, s.authToken)
-		indexHTML = []byte(strings.Replace(string(indexHTML), "</head>", tokenScript, 1))
 	}
 
 	fileServer := http.FileServer(http.FS(webFS))
@@ -230,7 +219,6 @@ func (s *APIServer) RegisterFloorAPI(chat *Chat, bp *blueprint.Blueprint, furnit
 	s.echo.GET("/api/v1/furniture", handleGetFurniture(furnitureMap))
 	s.echo.POST("/api/v1/furniture/:name/call", handleFurnitureCall(furnitureMap))
 	s.echo.GET("/api/v1/file/*", handleServeFile(furnitureMap, workspacePath))
-	s.echo.GET("/api/v1/auth/token", handleAuthToken(s))
 }
 
 // POST /api/v1/messages — inject a message into the floor chat.
@@ -491,19 +479,6 @@ func handleServeFile(furnitureMap map[string]furniture.Furniture, workspacePath 
 		}
 
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "file not found"})
-	}
-}
-
-// GET /api/v1/auth/token — returns the auth token (loopback only, for dev mode).
-func handleAuthToken(s *APIServer) echo.HandlerFunc {
-	return func(c echo.Context) error {
-		// Only allow from loopback addresses
-		ip := c.RealIP()
-		if ip != "127.0.0.1" && ip != "::1" && ip != "localhost" {
-			return c.JSON(http.StatusForbidden, map[string]string{"error": "only available from localhost"})
-		}
-
-		return c.JSON(http.StatusOK, map[string]interface{}{"token": s.authToken})
 	}
 }
 

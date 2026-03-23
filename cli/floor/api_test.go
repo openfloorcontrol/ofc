@@ -439,7 +439,7 @@ func TestFurnitureCallProxy(t *testing.T) {
 	}
 }
 
-func TestAuthTokenEndpoint(t *testing.T) {
+func TestAuthMiddleware(t *testing.T) {
 	chat := NewChat()
 	api := NewAPIServer()
 	api.SetAuthToken("test-token-123")
@@ -449,26 +449,36 @@ func TestAuthTokenEndpoint(t *testing.T) {
 	}
 	defer api.Stop()
 
-	// Token endpoint should be accessible without auth (it's exempted)
-	resp, err := http.Get(api.BaseURL() + "/api/v1/auth/token")
+	// Unauthenticated request should be rejected
+	resp, err := http.Get(api.BaseURL() + "/api/v1/agents")
 	if err != nil {
 		t.Fatalf("GET failed: %v", err)
 	}
-	defer resp.Body.Close()
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", resp.StatusCode)
+	}
 
-	// Should succeed from localhost (test runs locally)
+	// Request with Bearer token should succeed
+	req, _ := http.NewRequest("GET", api.BaseURL()+"/api/v1/agents", nil)
+	req.Header.Set("Authorization", "Bearer test-token-123")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET with token failed: %v", err)
+	}
+	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", resp.StatusCode)
+		t.Fatalf("expected 200 with valid token, got %d", resp.StatusCode)
 	}
 
-	var result struct {
-		Token string `json:"token"`
+	// Request with query param token should succeed
+	resp, err = http.Get(api.BaseURL() + "/api/v1/agents?token=test-token-123")
+	if err != nil {
+		t.Fatalf("GET with query token failed: %v", err)
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		t.Fatalf("decode failed: %v", err)
-	}
-	if result.Token != "test-token-123" {
-		t.Fatalf("expected token 'test-token-123', got %q", result.Token)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 with query token, got %d", resp.StatusCode)
 	}
 }
 
