@@ -1,13 +1,30 @@
 <script setup>
-defineProps({
+import { ref } from 'vue'
+
+const props = defineProps({
   floorName: { type: String, default: 'OFC' },
   description: { type: String, default: '' },
   agents: { type: Array, default: () => [] },
+  messages: { type: Array, default: () => [] },
   hasFurniture: { type: Boolean, default: false },
   sidebarOpen: { type: Boolean, default: false },
 })
 
 defineEmits(['toggle-sidebar'])
+
+const copied = ref(false)
+
+function copyConversation() {
+  const lines = props.messages
+    .filter(m => !m.isPass)
+    .map(m => `**[${m.from}]:** ${m.content}`)
+    .join('\n\n')
+
+  navigator.clipboard.writeText(lines).then(() => {
+    copied.value = true
+    setTimeout(() => { copied.value = false }, 2000)
+  })
+}
 
 const agentColors = [
   'bg-green-500/20 text-green-400',
@@ -59,7 +76,21 @@ function borderForAgent(index) {
           <p v-if="description" class="text-xs text-slate-500">{{ description }}</p>
         </div>
       </div>
-      <div class="flex gap-2">
+      <div class="flex items-center gap-2">
+        <!-- Copy conversation button -->
+        <button
+          v-if="messages.length > 0"
+          @click="copyConversation"
+          class="text-slate-500 hover:text-slate-300 transition-colors p-1 rounded"
+          :title="copied ? 'Copied!' : 'Copy conversation as markdown'"
+        >
+          <svg v-if="!copied" xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+          </svg>
+          <svg v-else xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+          </svg>
+        </button>
         <div v-for="(agent, i) in agents" :key="agent.id" class="relative group">
           <span
             class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium cursor-default"

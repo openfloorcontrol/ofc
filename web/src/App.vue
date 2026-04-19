@@ -83,6 +83,7 @@ onMounted(async () => {
       :floorName="floorName"
       :description="floorDescription"
       :agents="agents"
+      :messages="messages"
       :hasFurniture="furniture.length > 0"
       :sidebarOpen="sidebarOpen"
       @toggle-sidebar="sidebarOpen = !sidebarOpen"
