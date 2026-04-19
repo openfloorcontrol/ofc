@@ -17,6 +17,7 @@ type Agent struct {
 	Type        string            `yaml:"type"`    // "llm" (default) or "acp"
 	Model       string            `yaml:"model"`
 	Endpoint    string            `yaml:"endpoint"`
+	APIKey      string            `yaml:"api_key,omitempty"` // supports ${VAR} env expansion
 	Command     string            `yaml:"command"` // ACP: command to launch agent
 	Args        []string          `yaml:"args"`    // ACP: args for the command
 	Env         map[string]string `yaml:"env"`     // ACP: env vars for agent process
@@ -42,6 +43,7 @@ type Workstation struct {
 type Defaults struct {
 	Endpoint string `yaml:"endpoint"`
 	Model    string `yaml:"model"`
+	APIKey   string `yaml:"api_key,omitempty"` // supports ${VAR} env expansion
 }
 
 // FurnitureDef configures a piece of furniture on the floor.
@@ -112,6 +114,9 @@ func Load(path string) (*Blueprint, error) {
 		}
 	}
 
+	// Expand environment variables in API keys
+	bp.Defaults.APIKey = os.ExpandEnv(bp.Defaults.APIKey)
+
 	// Apply defaults
 	for i := range bp.Agents {
 		if bp.Agents[i].Endpoint == "" {
@@ -119,6 +124,11 @@ func Load(path string) (*Blueprint, error) {
 		}
 		if bp.Agents[i].Model == "" {
 			bp.Agents[i].Model = bp.Defaults.Model
+		}
+		if bp.Agents[i].APIKey == "" {
+			bp.Agents[i].APIKey = bp.Defaults.APIKey
+		} else {
+			bp.Agents[i].APIKey = os.ExpandEnv(bp.Agents[i].APIKey)
 		}
 		if bp.Agents[i].Temperature == 0 {
 			bp.Agents[i].Temperature = 0.7

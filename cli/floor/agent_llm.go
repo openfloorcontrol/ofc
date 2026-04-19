@@ -27,7 +27,7 @@ func (a *LLMAgent) AgentID() string { return a.agent.ID }
 // Run executes one LLM agent turn: build context, call LLM, handle tool calls,
 // post results to Chat. Blocks until complete.
 func (a *LLMAgent) Run(ctx context.Context, floor *Floor) error {
-	client := llm.NewClient(a.agent.Endpoint, "")
+	client := llm.NewClient(a.agent.Endpoint, a.agent.APIKey)
 	messages := a.buildContext(floor)
 	tools := a.buildTools(floor)
 
