@@ -21,8 +21,12 @@ type AgentSession struct {
 
 // NewAgentSession launches an ACP agent process and establishes a connection.
 // stderrWriter receives the agent's stderr output. If nil, defaults to os.Stderr.
-func NewAgentSession(command string, args []string, env map[string]string, client *FloorClient, stderrWriter io.Writer) (*AgentSession, error) {
+// If cwd is non-empty, the subprocess runs in that directory.
+func NewAgentSession(command string, args []string, env map[string]string, client *FloorClient, stderrWriter io.Writer, cwd string) (*AgentSession, error) {
 	cmd := exec.Command(command, args...)
+	if cwd != "" {
+		cmd.Dir = cwd
+	}
 	if stderrWriter != nil {
 		cmd.Stderr = stderrWriter
 	} else {

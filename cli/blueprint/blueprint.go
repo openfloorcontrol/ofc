@@ -111,6 +111,12 @@ type Blueprint struct {
 	Agents       []Agent        `yaml:"agents"`
 	Workstations []Workstation  `yaml:"workstations"`
 	Furniture    []FurnitureDef `yaml:"furniture,omitempty"`
+
+	// Dir is the absolute directory containing the blueprint file.
+	// Used as the cwd for subprocesses (MCP servers, ACP agents) so that
+	// relative paths in command/args resolve correctly regardless of where
+	// `ofc` is invoked from. Set automatically by Load.
+	Dir string `yaml:"-"`
 }
 
 // Load reads a blueprint from a YAML file
@@ -127,6 +133,11 @@ func Load(path string) (*Blueprint, error) {
 
 	// Resolve prompt files relative to blueprint directory, then expand templates
 	bpDir := filepath.Dir(path)
+	if absDir, err := filepath.Abs(bpDir); err == nil {
+		bp.Dir = absDir
+	} else {
+		bp.Dir = bpDir
+	}
 	for i := range bp.Agents {
 		if bp.Agents[i].PromptFile != "" {
 			if bp.Agents[i].Prompt != "" {

@@ -65,6 +65,28 @@ func TestExpandPromptTemplate_ParseError(t *testing.T) {
 	}
 }
 
+func TestLoad_DirIsAbsolute(t *testing.T) {
+	dir := t.TempDir()
+	bpYAML := "name: test\nagents: []\n"
+	bpPath := filepath.Join(dir, "blueprint.yaml")
+	if err := os.WriteFile(bpPath, []byte(bpYAML), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pass a relative-looking path; Load should still resolve Dir absolutely.
+	cwd, _ := os.Getwd()
+	defer os.Chdir(cwd)
+	os.Chdir(dir)
+
+	bp, err := Load("blueprint.yaml")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !filepath.IsAbs(bp.Dir) {
+		t.Errorf("expected absolute Dir, got: %q", bp.Dir)
+	}
+}
+
 func TestLoad_PromptTemplate(t *testing.T) {
 	dir := t.TempDir()
 	catalog := filepath.Join(dir, "catalog.md")

@@ -398,7 +398,7 @@ func (f *Floor) initFurniture(renderInfo func(string)) error {
 
 	ctx := context.Background()
 	for _, fd := range f.Blueprint.Furniture {
-		fur, err := createFurniture(ctx, fd)
+		fur, err := createFurniture(ctx, fd, f.Blueprint.Dir)
 		if err != nil {
 			return fmt.Errorf("failed to create furniture %q: %w", fd.Name, err)
 		}
@@ -481,7 +481,7 @@ func (f *Floor) startACPAgent(agent blueprint.Agent, renderInfo func(string)) er
 		stderrW = nil // will use os.Stderr in NewAgentSession
 	}
 
-	session, err := acpclient.NewAgentSession(agent.Command, agent.Args, agent.Env, client, stderrW)
+	session, err := acpclient.NewAgentSession(agent.Command, agent.Args, agent.Env, client, stderrW, f.Blueprint.Dir)
 	if err != nil {
 		return fmt.Errorf("failed to start ACP agent %s: %w", agent.ID, err)
 	}
@@ -558,7 +558,8 @@ func (f *Floor) debug(format string, args ...any) {
 }
 
 // createFurniture instantiates a furniture from its blueprint definition.
-func createFurniture(ctx context.Context, fd blueprint.FurnitureDef) (furniture.Furniture, error) {
+// bpDir is the absolute blueprint directory, used as cwd for stdio MCP subprocesses.
+func createFurniture(ctx context.Context, fd blueprint.FurnitureDef, bpDir string) (furniture.Furniture, error) {
 	switch fd.Type {
 	case "taskboard":
 		return furniture.NewTaskBoard(), nil
@@ -569,7 +570,7 @@ func createFurniture(ctx context.Context, fd blueprint.FurnitureDef) (furniture.
 		if fd.Command == "" {
 			return nil, fmt.Errorf("mcp furniture %q requires a command or url", fd.Name)
 		}
-		return furniture.NewExternalMCP(ctx, fd.Name, fd.Command, fd.Args)
+		return furniture.NewExternalMCP(ctx, fd.Name, fd.Command, fd.Args, bpDir)
 	default:
 		return nil, fmt.Errorf("unknown furniture type %q", fd.Type)
 	}

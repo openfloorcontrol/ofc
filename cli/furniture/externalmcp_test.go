@@ -13,7 +13,7 @@ func TestExternalMCP_Everything(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	ext, err := NewExternalMCP(ctx, "everything", "npx", []string{"-y", "@modelcontextprotocol/server-everything"})
+	ext, err := NewExternalMCP(ctx, "everything", "npx", []string{"-y", "@modelcontextprotocol/server-everything"}, "")
 	if err != nil {
 		t.Fatalf("NewExternalMCP: %v", err)
 	}

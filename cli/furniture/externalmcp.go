@@ -57,8 +57,13 @@ func discoverTools(ctx context.Context, session *mcp.ClientSession, name string)
 }
 
 // NewExternalMCP spawns an external MCP server process and connects via stdio.
-func NewExternalMCP(ctx context.Context, name, command string, args []string) (*ExternalMCP, error) {
+// If cwd is non-empty, the subprocess runs in that directory (used to resolve
+// relative paths in command/args against the blueprint's location).
+func NewExternalMCP(ctx context.Context, name, command string, args []string, cwd string) (*ExternalMCP, error) {
 	cmd := exec.Command(command, args...)
+	if cwd != "" {
+		cmd.Dir = cwd
+	}
 	transport := &mcp.CommandTransport{Command: cmd}
 
 	session, err := newClient().Connect(ctx, transport, nil)
