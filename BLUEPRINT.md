@@ -95,6 +95,37 @@ agents:
 
 The path is relative to the blueprint file's directory. Absolute paths also work.
 
+### Prompt templating
+
+Prompts (inline or from `prompt_file`) support Go templates with `<% %>` delimiters.
+Useful for embedding generated content like product catalogs, environment-driven config,
+or shared instruction blocks across agents.
+
+Available functions:
+
+| Function | Description |
+|----------|-------------|
+| `readfile "path"` | Read a file. Paths are relative to the blueprint directory; absolute paths also work. |
+| `env "VAR"` | Read an environment variable. |
+
+Example:
+
+```yaml
+agents:
+  - id: "@hiro"
+    prompt: |
+      You are an expert camera shop owner.
+
+      Available products in the shop:
+      <% readfile "data/catalog.md" %>
+
+      Today's location: <% env "SHOP_LOCATION" %>
+```
+
+The `<% %>` delimiters were chosen instead of the default `{{ }}` to avoid conflicts with
+LLM prompt content (Ollama Modelfiles, Jinja examples, etc.). Prompts with no `<%` marker
+are passed through unchanged — there's no overhead for non-templated prompts.
+
 ### Agent fields
 
 | Field | Default | Description |

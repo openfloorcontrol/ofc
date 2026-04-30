@@ -2,13 +2,59 @@
 package blueprint
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"text/template"
 
 	"gopkg.in/yaml.v3"
 )
+
+// expandPromptTemplate expands Go template syntax in a prompt using <% %> delimiters.
+// Returns the input unchanged if no <% marker is found (zero overhead for plain prompts).
+//
+// Available functions:
+//   - readfile "path" — read a file (paths relative to blueprint directory)
+//   - env "VAR"      — read an environment variable
+//
+// Example:
+//
+//	You are a camera expert.
+//
+//	Available products:
+//	<% readfile "data/catalog.md" %>
+func expandPromptTemplate(prompt string, bpDir string) (string, error) {
+	if !strings.Contains(prompt, "<%") {
+		return prompt, nil
+	}
+
+	funcs := template.FuncMap{
+		"readfile": func(path string) (string, error) {
+			if !filepath.IsAbs(path) {
+				path = filepath.Join(bpDir, path)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return "", err
+			}
+			return string(data), nil
+		},
+		"env": os.Getenv,
+	}
+
+	tmpl, err := template.New("prompt").Delims("<%", "%>").Funcs(funcs).Parse(prompt)
+	if err != nil {
+		return "", fmt.Errorf("parse template: %w", err)
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, nil); err != nil {
+		return "", fmt.Errorf("execute template: %w", err)
+	}
+	return buf.String(), nil
+}
 
 // Agent configuration
 type Agent struct {
@@ -79,7 +125,7 @@ func Load(path string) (*Blueprint, error) {
 		return nil, err
 	}
 
-	// Resolve prompt files relative to blueprint directory
+	// Resolve prompt files relative to blueprint directory, then expand templates
 	bpDir := filepath.Dir(path)
 	for i := range bp.Agents {
 		if bp.Agents[i].PromptFile != "" {
@@ -95,6 +141,13 @@ func Load(path string) (*Blueprint, error) {
 				return nil, fmt.Errorf("agent %s: reading prompt_file: %w", bp.Agents[i].ID, err)
 			}
 			bp.Agents[i].Prompt = string(data)
+		}
+		if bp.Agents[i].Prompt != "" {
+			expanded, err := expandPromptTemplate(bp.Agents[i].Prompt, bpDir)
+			if err != nil {
+				return nil, fmt.Errorf("agent %s: prompt template: %w", bp.Agents[i].ID, err)
+			}
+			bp.Agents[i].Prompt = expanded
 		}
 	}
 
