@@ -49,53 +49,46 @@ type Frame struct {
 	Callee string // e.g. "@code"
 }
 
-// Floor is the shared space: Chat + Furniture + infrastructure.
-// It doesn't know about AI or turn-taking — that's the Controller's job.
+// Floor is the long-lived shared space for one or more Sessions.
+// It owns furniture instances, sandbox, ACP subprocesses, and the API server —
+// everything that's shared across conversations on the same blueprint instance.
+// Per-conversation state (chat log, agent memory, rooms) lives in Session.
 type Floor struct {
-	Chat          *Chat
-	Blueprint     *blueprint.Blueprint
-	Sandbox       *sandbox.Sandbox
-	Furniture     map[string]furniture.Furniture
-	APIServer     *APIServer
+	Blueprint       *blueprint.Blueprint
+	Sandbox         *sandbox.Sandbox
+	Furniture       map[string]furniture.Furniture
+	APIServer       *APIServer
 	ACPSubprocesses map[string]*acpclient.Subprocess
-	AgentContexts   map[string]*AgentContext // per-agent context accumulators
-	Rooms         map[string]*Room         // active rooms by ID
-	agentRoom     map[string]string        // agentID → roomID ("" = main floor)
-	unified       chan TaggedEvent          // merged event channel (lazy, set by StartUnified)
-	ListenAddr    string                   // API server listen address (default ":0" for auto)
-	ServeWebDist  bool                     // serve web/dist/ as static files
-	ExternalURL   string                   // override base URL in printed web UI link (for reverse proxies)
-	DebugFunc     func(string)
-	LogWriter     io.Writer
-	StderrWriter  io.Writer // where ACP subprocess stderr goes
+
+	// Sessions on this Floor. In v1 there is always one default session
+	// keyed as "default", created by NewFloor.
+	Sessions map[string]*Session
+
+	ListenAddr   string // API server listen address (default ":0" for auto)
+	ServeWebDist bool   // serve web/dist/ as static files
+	ExternalURL  string // override base URL in printed web UI link (for reverse proxies)
+	DebugFunc    func(string)
+	LogWriter    io.Writer
+	StderrWriter io.Writer // where ACP subprocess stderr goes
 }
 
-// NewFloor creates a Floor from a blueprint.
-// Creates AgentContexts for all agents and registers them as Chat listeners.
+// NewFloor creates a Floor from a blueprint and a default Session.
 func NewFloor(bp *blueprint.Blueprint) *Floor {
-	chat := NewChat()
-	agentContexts := make(map[string]*AgentContext, len(bp.Agents))
-	for _, agent := range bp.Agents {
-		ac := NewAgentContext(agent.ID)
-		agentContexts[agent.ID] = ac
-		chat.AddListener(ac)
-	}
-
-	return &Floor{
-		Chat:          chat,
-		Blueprint:     bp,
-		Furniture:     make(map[string]furniture.Furniture),
+	f := &Floor{
+		Blueprint:       bp,
+		Furniture:       make(map[string]furniture.Furniture),
 		ACPSubprocesses: make(map[string]*acpclient.Subprocess),
-		AgentContexts:   agentContexts,
-		Rooms:         make(map[string]*Room),
-		agentRoom:     make(map[string]string),
-		DebugFunc:     func(string) {},
+		Sessions:        make(map[string]*Session),
+		DebugFunc:       func(string) {},
 	}
+	f.Sessions["default"] = NewSession("default", f)
+	return f
 }
 
-// GetAgentContext returns the context for the given agent, or nil if not found.
-func (f *Floor) GetAgentContext(agentID string) *AgentContext {
-	return f.AgentContexts[agentID]
+// DefaultSession returns the floor's default session.
+// In v1 every floor has exactly one session, created at NewFloor time.
+func (f *Floor) DefaultSession() *Session {
+	return f.Sessions["default"]
 }
 
 // WorkspacePath returns the sandbox workspace directory, or "" if no sandbox.
@@ -104,160 +97,6 @@ func (f *Floor) WorkspacePath() string {
 		return f.Sandbox.WorkspaceDir
 	}
 	return ""
-}
-
-// AgentRoom returns the room ID an agent is in ("" = main floor).
-func (f *Floor) AgentRoom(agentID string) string {
-	return f.agentRoom[agentID]
-}
-
-// CreateRoom creates an isolated sub-conversation room.
-// Moves the specified agents' listeners from their current Chat to the room's Chat,
-// and inserts system messages into each agent's context about the transition.
-func (f *Floor) CreateRoom(roomID, creator string, agentIDs []string, prompt string) (*Room, error) {
-	if _, exists := f.Rooms[roomID]; exists {
-		return nil, fmt.Errorf("room %s already exists", roomID)
-	}
-
-	// Validate all agents exist
-	for _, aid := range agentIDs {
-		if _, ok := f.AgentContexts[aid]; !ok {
-			return nil, fmt.Errorf("unknown agent %s", aid)
-		}
-		if existing := f.agentRoom[aid]; existing != "" {
-			return nil, fmt.Errorf("agent %s is already in room %s", aid, existing)
-		}
-	}
-
-	room := NewRoom(roomID, creator, agentIDs, prompt, f.Blueprint)
-	f.Rooms[roomID] = room
-
-	// Build participant list for system message
-	var participantNames []string
-	for _, aid := range agentIDs {
-		participantNames = append(participantNames, aid)
-	}
-
-	// Move agents: switch listeners from current Chat to room Chat
-	for _, aid := range agentIDs {
-		ac := f.AgentContexts[aid]
-
-		// Remove listener from main floor Chat
-		f.Chat.RemoveListener(ac)
-
-		// Add listener to room Chat
-		room.Chat.AddListener(ac)
-
-		// Insert system message about the room transition
-		ac.AppendSystem(fmt.Sprintf("You moved to room %s with %s. Messages here are private to this room.",
-			roomID, joinAgentIDs(participantNames, aid)))
-
-		f.agentRoom[aid] = roomID
-	}
-
-	// Start forwarding room events to unified channel (if active)
-	if f.unified != nil {
-		go f.forwardRoomEvents(room)
-	}
-
-	f.debug("created room %s with agents %v", roomID, agentIDs)
-	return room, nil
-}
-
-// CloseRoom closes a room and moves agents back to the main floor.
-// Posts a summary to the main floor Chat.
-func (f *Floor) CloseRoom(roomID string) error {
-	room, ok := f.Rooms[roomID]
-	if !ok {
-		return fmt.Errorf("room %s not found", roomID)
-	}
-	if room.IsClosed() {
-		return fmt.Errorf("room %s is already closed", roomID)
-	}
-
-	// Build summary from room history
-	history := room.Chat.History()
-	var summary string
-	if len(history) > 0 {
-		last := history[len(history)-1]
-		summary = fmt.Sprintf("[Room %s closed] Last message from %s: %s", roomID, last.From, last.Content)
-	} else {
-		summary = fmt.Sprintf("[Room %s closed] No messages were exchanged.", roomID)
-	}
-
-	// Move agents back to main floor
-	for aid := range room.AgentIDs {
-		ac := f.AgentContexts[aid]
-
-		// Remove listener from room Chat
-		room.Chat.RemoveListener(ac)
-
-		// Add listener back to main floor Chat
-		f.Chat.AddListener(ac)
-
-		// Insert system message about returning
-		ac.AppendSystem(fmt.Sprintf("Room %s closed. You are back on the main floor.", roomID))
-
-		delete(f.agentRoom, aid)
-	}
-
-	// Close the room (stops its Chat, terminates event forwarding)
-	room.Close(summary)
-
-	// Post summary to main floor
-	f.Chat.Post(ChatMessage{
-		From:    "@system",
-		Content: summary,
-	})
-
-	f.debug("closed room %s", roomID)
-	return nil
-}
-
-// ViewForRoom returns a lightweight Floor copy where Chat points to the room's Chat.
-// Agents running in a room use this so their Chat.Post() goes to the room.
-// Shares Sandbox, Furniture, ACPSubprocesses, and AgentContexts with the parent.
-func (f *Floor) ViewForRoom(room *Room) *Floor {
-	return &Floor{
-		Chat:          room.Chat,
-		Blueprint:     f.Blueprint,
-		Sandbox:       f.Sandbox,
-		Furniture:     f.Furniture,
-		ACPSubprocesses: f.ACPSubprocesses,
-		AgentContexts: f.AgentContexts,
-		Rooms:         f.Rooms,
-		agentRoom:     f.agentRoom,
-		DebugFunc:     f.DebugFunc,
-		LogWriter:     f.LogWriter,
-		StderrWriter:  f.StderrWriter,
-	}
-}
-
-// StartUnified creates a merged event channel that receives events from
-// the main floor Chat and all active rooms. Returns the channel.
-// Room events are tagged with their RoomID; main floor events have RoomID "".
-func (f *Floor) StartUnified() <-chan TaggedEvent {
-	f.unified = make(chan TaggedEvent, 64)
-
-	// Forward main floor events
-	go func() {
-		for ev := range f.Chat.Events() {
-			f.unified <- TaggedEvent{RoomID: "", Event: ev}
-		}
-		close(f.unified)
-	}()
-
-	return f.unified
-}
-
-// forwardRoomEvents forwards events from a room's Chat to the unified channel.
-// Terminates when the room's Chat is closed.
-func (f *Floor) forwardRoomEvents(room *Room) {
-	for ev := range room.Chat.Events() {
-		if f.unified != nil {
-			f.unified <- TaggedEvent{RoomID: room.ID, Event: ev}
-		}
-	}
 }
 
 // joinAgentIDs formats a list of agent IDs, excluding one (the agent itself).
@@ -285,8 +124,9 @@ func (f *Floor) Start(renderInfo func(string)) error {
 		f.APIServer.SetAuthToken(token)
 	}
 
-	// Register floor API (furniture map is populated later but closures capture the reference)
-	f.APIServer.RegisterFloorAPI(f.Chat, f.Blueprint, f.Furniture, f.WorkspacePath)
+	// Register floor API against the default session's chat.
+	// (In v1 the API is session-scoped to default; multi-session URL paths come later.)
+	f.APIServer.RegisterFloorAPI(f.DefaultSession().Chat, f.Blueprint, f.Furniture, f.WorkspacePath)
 
 	// 2. Sandbox
 	var sandboxWS *blueprint.Workstation
@@ -387,7 +227,9 @@ func (f *Floor) Stop() {
 	if f.Sandbox != nil {
 		f.Sandbox.Stop()
 	}
-	f.Chat.Close()
+	for _, sess := range f.Sessions {
+		sess.Close()
+	}
 }
 
 // initFurniture creates furniture instances and registers them on the API server.
@@ -402,8 +244,10 @@ func (f *Floor) initFurniture(renderInfo func(string)) error {
 		if err != nil {
 			return fmt.Errorf("failed to create furniture %q: %w", fd.Name, err)
 		}
-		// Wrap so all Call() invocations emit FurnitureUpdated events
-		fur = &observableFurniture{inner: fur, chat: f.Chat}
+		// Wrap so all Call() invocations emit FurnitureUpdated events on the
+		// default session's chat. (v1: one session; later, observability
+		// will route per-session.)
+		fur = &observableFurniture{inner: fur, chat: f.DefaultSession().Chat}
 		f.Furniture[fd.Name] = fur
 		renderInfo(fmt.Sprintf("Furniture ready: %s (%s)", fd.Name, fd.Type))
 	}

@@ -17,40 +17,40 @@ import (
 // testAgent is a fake agent with a configurable response function.
 type testAgent struct {
 	id       string
-	response func(floor *Floor) string // return "" to pass
+	response func(sess *Session) string // return "" to pass
 }
 
 func (a *testAgent) AgentID() string { return a.id }
 
-func (a *testAgent) Run(ctx context.Context, floor *Floor) error {
-	resp := a.response(floor)
+func (a *testAgent) Run(ctx context.Context, sess *Session) error {
+	resp := a.response(sess)
 	if resp == "" {
-		floor.Chat.PostEvent(AgentPassedEvent{AgentID: a.id})
+		sess.Chat.PostEvent(AgentPassedEvent{AgentID: a.id})
 		return nil
 	}
-	floor.Chat.Post(ChatMessage{From: a.id, Content: resp})
+	sess.Chat.Post(ChatMessage{From: a.id, Content: resp})
 	return nil
 }
 
 // testLoop is a minimal event loop — the core of CLIFrontend.RunLoop
 // without terminal I/O. Runs until ctx is cancelled.
-func testLoop(ctx context.Context, floor *Floor, ctrl *Controller, agents map[string]Agent) {
+func testLoop(ctx context.Context, sess *Session, ctrl *Controller, agents map[string]Agent) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case ev, ok := <-floor.Chat.Events():
+		case ev, ok := <-sess.Chat.Events():
 			if !ok {
 				return
 			}
 			var decision Decision
 			switch e := ev.(type) {
 			case MessagePosted:
-				decision = ctrl.Decide(floor.Chat, e)
+				decision = ctrl.Decide(sess.Chat, e)
 			case AgentPassedEvent:
-				decision = ctrl.Decide(floor.Chat, e)
+				decision = ctrl.Decide(sess.Chat, e)
 			case AgentErrorEvent:
-				decision = ctrl.Decide(floor.Chat, e)
+				decision = ctrl.Decide(sess.Chat, e)
 			default:
 				continue
 			}
@@ -58,7 +58,7 @@ func testLoop(ctx context.Context, floor *Floor, ctrl *Controller, agents map[st
 				agent, ok := agents[decision.AgentID]
 				if ok {
 					go func() {
-						_ = agent.Run(ctx, floor)
+						_ = agent.Run(ctx, sess)
 					}()
 				}
 			}
@@ -72,9 +72,10 @@ func setupTestFloor(t *testing.T, bp *blueprint.Blueprint, agents map[string]Age
 	t.Helper()
 
 	floor := NewFloor(bp)
+	sess := floor.DefaultSession()
 
 	api := NewAPIServer()
-	api.RegisterFloorAPI(floor.Chat, bp, nil, func() string { return "" })
+	api.RegisterFloorAPI(sess.Chat, bp, nil, func() string { return "" })
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start API server: %v", err)
 	}
@@ -82,12 +83,12 @@ func setupTestFloor(t *testing.T, bp *blueprint.Blueprint, agents map[string]Age
 
 	ctrl := NewController(bp)
 	ctx, cancel := context.WithCancel(context.Background())
-	go testLoop(ctx, floor, ctrl, agents)
+	go testLoop(ctx, sess, ctrl, agents)
 
 	cleanup := func() {
 		cancel()
 		api.Stop()
-		floor.Chat.Close()
+		sess.Close()
 	}
 
 	return api.BaseURL(), cleanup
@@ -156,8 +157,8 @@ func TestIntegrationPostMessageTriggersAgent(t *testing.T) {
 	agents := map[string]Agent{
 		"@echo": &testAgent{
 			id: "@echo",
-			response: func(floor *Floor) string {
-				history := floor.Chat.History()
+			response: func(sess *Session) string {
+				history := sess.Chat.History()
 				last := history[len(history)-1]
 				return "echo: " + last.Content
 			},
@@ -191,7 +192,7 @@ func TestIntegrationMentionDelegation(t *testing.T) {
 	agents := map[string]Agent{
 		"@lead": &testAgent{
 			id: "@lead",
-			response: func(floor *Floor) string {
+			response: func(sess *Session) string {
 				leadTurns++
 				if leadTurns == 1 {
 					return "asking @helper? for help"
@@ -201,7 +202,7 @@ func TestIntegrationMentionDelegation(t *testing.T) {
 		},
 		"@helper": &testAgent{
 			id: "@helper",
-			response: func(floor *Floor) string {
+			response: func(sess *Session) string {
 				return "helped!"
 			},
 		},
@@ -239,11 +240,11 @@ func TestIntegrationAgentPass(t *testing.T) {
 	agents := map[string]Agent{
 		"@a": &testAgent{
 			id:       "@a",
-			response: func(floor *Floor) string { return "" }, // pass
+			response: func(sess *Session) string { return "" }, // pass
 		},
 		"@b": &testAgent{
 			id: "@b",
-			response: func(floor *Floor) string {
+			response: func(sess *Session) string {
 				return "I'm here"
 			},
 		},
@@ -270,7 +271,7 @@ func TestIntegrationSSEStream(t *testing.T) {
 	agents := map[string]Agent{
 		"@bot": &testAgent{
 			id: "@bot",
-			response: func(floor *Floor) string {
+			response: func(sess *Session) string {
 				return "bot reply"
 			},
 		},
@@ -328,8 +329,8 @@ func TestIntegrationWebhookFromExternalAgent(t *testing.T) {
 	agents := map[string]Agent{
 		"@bot": &testAgent{
 			id: "@bot",
-			response: func(floor *Floor) string {
-				history := floor.Chat.History()
+			response: func(sess *Session) string {
+				history := sess.Chat.History()
 				last := history[len(history)-1]
 				return fmt.Sprintf("got message from %s: %s", last.From, last.Content)
 			},
@@ -475,8 +476,8 @@ func TestIntegrationMultipleMessages(t *testing.T) {
 	agents := map[string]Agent{
 		"@echo": &testAgent{
 			id: "@echo",
-			response: func(floor *Floor) string {
-				history := floor.Chat.History()
+			response: func(sess *Session) string {
+				history := sess.Chat.History()
 				last := history[len(history)-1]
 				return "echo: " + last.Content
 			},

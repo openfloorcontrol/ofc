@@ -48,8 +48,10 @@ func RunOnce(cfg RunOnceConfig) (*RunOnceResult, error) {
 	}
 	defer floor.Stop()
 
+	sess := floor.DefaultSession()
+
 	// Post user input
-	floor.Chat.Post(ChatMessage{From: "@user", Content: cfg.Input})
+	sess.Chat.Post(ChatMessage{From: "@user", Content: cfg.Input})
 
 	// Build and run the agent synchronously
 	var agent Agent
@@ -60,12 +62,12 @@ func RunOnce(cfg RunOnceConfig) (*RunOnceResult, error) {
 		agent = NewLLMAgent(agentDef)
 	}
 
-	if err := agent.Run(context.Background(), floor); err != nil {
+	if err := agent.Run(context.Background(), sess); err != nil {
 		return nil, fmt.Errorf("agent %s: %w", cfg.AgentID, err)
 	}
 
 	// Find the agent's response in chat history
-	history := floor.Chat.History()
+	history := sess.Chat.History()
 	for i := len(history) - 1; i >= 0; i-- {
 		if history[i].From == cfg.AgentID {
 			return &RunOnceResult{

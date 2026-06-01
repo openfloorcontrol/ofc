@@ -54,24 +54,26 @@ func runFloor(t *testing.T, bp *blueprint.Blueprint, prompt string) *FloorResult
 		}
 	}
 
+	sess := f.DefaultSession()
+
 	// Post initial prompt
-	f.Chat.PostUserInput(prompt)
+	sess.Chat.PostUserInput(prompt)
 
 	result := &FloorResult{bp: bp}
-	unified := f.StartUnified()
+	unified := sess.StartUnified()
 
 	for tagged := range unified {
 		roomID := tagged.RoomID
 		ev := tagged.Event
 
-		eventCtrl, eventFloor := ctrl, f
+		eventCtrl, eventSess := ctrl, sess
 		if roomID != "" {
-			room, ok := f.Rooms[roomID]
+			room, ok := sess.Rooms[roomID]
 			if !ok {
 				continue
 			}
 			eventCtrl = room.Controller
-			eventFloor = f.ViewForRoom(room)
+			eventSess = sess.ForRoom(room)
 		}
 
 		// Collect event
@@ -85,7 +87,7 @@ func runFloor(t *testing.T, bp *blueprint.Blueprint, prompt string) *FloorResult
 		// Drive the controller
 		switch ev.(type) {
 		case floor.MessagePosted, floor.AgentPassedEvent, floor.AgentErrorEvent:
-			decision := eventCtrl.Decide(eventFloor.Chat, ev)
+			decision := eventCtrl.Decide(eventSess.Chat, ev)
 
 			switch decision.Action {
 			case "trigger":
@@ -95,22 +97,22 @@ func runFloor(t *testing.T, bp *blueprint.Blueprint, prompt string) *FloorResult
 				}
 				ctx := context.Background()
 				go func() {
-					agent.Run(ctx, eventFloor)
+					agent.Run(ctx, eventSess)
 				}()
 
 			case "wait":
 				if roomID == "" {
 					// One-shot: agents are done
-					result.Messages = f.Chat.History()
+					result.Messages = sess.Chat.History()
 					return result
 				}
 
 			case "stop":
-				result.Messages = f.Chat.History()
+				result.Messages = sess.Chat.History()
 				return result
 			}
 
-			if info := floor.TryAutoCloseRoom(roomID, decision, f, ctrl); info != "" {
+			if info := floor.TryAutoCloseRoom(roomID, decision, sess, ctrl); info != "" {
 				result.Events = append(result.Events, map[string]interface{}{
 					"type": "system_info",
 					"text": info,
@@ -119,7 +121,7 @@ func runFloor(t *testing.T, bp *blueprint.Blueprint, prompt string) *FloorResult
 		}
 	}
 
-	result.Messages = f.Chat.History()
+	result.Messages = sess.Chat.History()
 	return result
 }
 

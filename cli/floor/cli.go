@@ -77,11 +77,13 @@ func (f *CLIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 		go f.readStdinLoop(floor, readyForInput)
 	}
 
+	sess := floor.DefaultSession()
+
 	// If initial prompt, post it as @user (or handle as command)
 	if initialPrompt != "" {
 		f.renderStream(AgentLabel{AgentID: "@user"}, "")
 		f.renderStream(TokenStreamed{AgentID: "@user", Token: initialPrompt + "\n"}, "")
-		floor.Chat.PostUserInput(initialPrompt)
+		sess.Chat.PostUserInput(initialPrompt)
 	} else if !f.Headless {
 		// No initial prompt — ready for user input immediately
 		readyForInput <- struct{}{}
@@ -101,37 +103,37 @@ func (f *CLIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 		}
 	}
 
-	// Use unified event channel — merges main floor + all room events
-	unified := floor.StartUnified()
+	// Use unified event channel — merges main session chat + all room events
+	unified := sess.StartUnified()
 
 	// Main event loop — flat, no recursion
 	for tagged := range unified {
 		roomID := tagged.RoomID
 		ev := tagged.Event
 
-		// Resolve which Controller and Floor view to use
-		eventCtrl, eventFloor := ctrl, floor
+		// Resolve which Controller and Session view to use
+		eventCtrl, eventSess := ctrl, sess
 		if roomID != "" {
-			room, ok := floor.Rooms[roomID]
+			room, ok := sess.Rooms[roomID]
 			if !ok {
 				continue // room closed, stale event
 			}
 			eventCtrl = room.Controller
-			eventFloor = floor.ViewForRoom(room)
+			eventSess = sess.ForRoom(room)
 		}
 
 		switch e := ev.(type) {
 		case MessagePosted:
 			f.renderMessagePosted(e)
 
-			decision := eventCtrl.Decide(eventFloor.Chat, e)
-			if err := f.handleDecision(eventFloor, eventCtrl, agents, decision, &cancelAgent); err != nil {
+			decision := eventCtrl.Decide(eventSess.Chat, e)
+			if err := f.handleDecision(eventSess, eventCtrl, agents, decision, &cancelAgent); err != nil {
 				return err
 			}
 			if oneShot && roomID == "" && decision.Action == "wait" {
 				return nil
 			}
-			if info := TryAutoCloseRoom(roomID, decision, floor, ctrl); info != "" {
+			if info := TryAutoCloseRoom(roomID, decision, sess, ctrl); info != "" {
 				f.renderSystemInfo(info)
 			}
 			signalReady(roomID, decision)
@@ -150,14 +152,14 @@ func (f *CLIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 			}
 			f.out.Terminal("%s%s[%s]:%s [PASS]\n", Bold, f.agentColor(e.AgentID), label, Reset)
 
-			decision := eventCtrl.Decide(eventFloor.Chat, e)
-			if err := f.handleDecision(eventFloor, eventCtrl, agents, decision, &cancelAgent); err != nil {
+			decision := eventCtrl.Decide(eventSess.Chat, e)
+			if err := f.handleDecision(eventSess, eventCtrl, agents, decision, &cancelAgent); err != nil {
 				return err
 			}
 			if oneShot && roomID == "" && decision.Action == "wait" {
 				return nil
 			}
-			if info := TryAutoCloseRoom(roomID, decision, floor, ctrl); info != "" {
+			if info := TryAutoCloseRoom(roomID, decision, sess, ctrl); info != "" {
 				f.renderSystemInfo(info)
 			}
 			signalReady(roomID, decision)
@@ -167,14 +169,14 @@ func (f *CLIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 			f.out.AgentLabel(e.AgentID, f.agentColor(e.AgentID))
 			f.out.Print("[ERROR: %v]\n", e.Err)
 
-			decision := eventCtrl.Decide(eventFloor.Chat, e)
-			if err := f.handleDecision(eventFloor, eventCtrl, agents, decision, &cancelAgent); err != nil {
+			decision := eventCtrl.Decide(eventSess.Chat, e)
+			if err := f.handleDecision(eventSess, eventCtrl, agents, decision, &cancelAgent); err != nil {
 				return err
 			}
 			signalReady(roomID, decision)
 
 		case UserCommandEvent:
-			decision := HandleCommand(e.Command, floor, ctrl)
+			decision := HandleCommand(e.Command, sess, ctrl)
 			switch decision.Action {
 			case "stop":
 				f.out.Print("\n%sGoodbye! ofc. 🎤%s\n", Dim, Reset)
@@ -194,7 +196,7 @@ func (f *CLIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 }
 
 // handleDecision acts on a Controller Decision by dispatching agents.
-func (f *CLIFrontend) handleDecision(floor *Floor, ctrl *Controller, agents map[string]Agent, d Decision, cancelAgent *context.CancelFunc) error {
+func (f *CLIFrontend) handleDecision(sess *Session, ctrl *Controller, agents map[string]Agent, d Decision, cancelAgent *context.CancelFunc) error {
 	switch d.Action {
 	case "trigger":
 		agent, ok := agents[d.AgentID]
@@ -213,7 +215,7 @@ func (f *CLIFrontend) handleDecision(floor *Floor, ctrl *Controller, agents map[
 		// Run agent in goroutine
 		go func() {
 			defer cancel()
-			agent.Run(ctx, floor)
+			agent.Run(ctx, sess)
 			// Agent.Run() posts MessagePosted (or AgentPassedEvent/AgentErrorEvent) to Chat.
 			// The main loop will pick it up and call Decide again.
 		}()
@@ -232,10 +234,11 @@ func (f *CLIFrontend) handleDecision(floor *Floor, ctrl *Controller, agents map[
 	return nil
 }
 
-// readStdinLoop reads lines from stdin and posts them to Chat.
+// readStdinLoop reads lines from stdin and posts them to the default session's Chat.
 // Waits for readyForInput before showing the prompt (so it doesn't
 // appear while agents are streaming).
 func (f *CLIFrontend) readStdinLoop(floor *Floor, readyForInput chan struct{}) {
+	sess := floor.DefaultSession()
 	for range readyForInput {
 		f.out.Print("\n")
 		f.out.AgentLabel("@user", f.agentColor("@user"))
@@ -243,7 +246,7 @@ func (f *CLIFrontend) readStdinLoop(floor *Floor, readyForInput chan struct{}) {
 		input, err := f.reader.ReadString('\n')
 		if err != nil {
 			f.out.Print("%s[Interrupted]%s\n", Dim, Reset)
-			floor.Chat.PostEvent(UserCommandEvent{Command: "/quit"})
+			sess.Chat.PostEvent(UserCommandEvent{Command: "/quit"})
 			return
 		}
 
@@ -259,7 +262,7 @@ func (f *CLIFrontend) readStdinLoop(floor *Floor, readyForInput chan struct{}) {
 			continue
 		}
 
-		floor.Chat.PostUserInput(text)
+		sess.Chat.PostUserInput(text)
 	}
 }
 

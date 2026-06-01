@@ -193,12 +193,12 @@ func (c *Controller) debug(format string, args ...any) {
 // TryAutoCloseRoom checks if a room should auto-close after a decision.
 // Ad-hoc rooms auto-close when the controller returns "wait" (all agents done).
 // Returns info text if the room was closed, empty string otherwise.
-func TryAutoCloseRoom(roomID string, d Decision, floor *Floor, ctrl *Controller) string {
+func TryAutoCloseRoom(roomID string, d Decision, sess *Session, ctrl *Controller) string {
 	if roomID == "" || d.Action != "wait" {
 		return ""
 	}
 
-	room, ok := floor.Rooms[roomID]
+	room, ok := sess.Rooms[roomID]
 	if !ok || room.IsClosed() {
 		return ""
 	}
@@ -208,18 +208,18 @@ func TryAutoCloseRoom(roomID string, d Decision, floor *Floor, ctrl *Controller)
 		delete(ctrl.RoomBound, aid)
 	}
 
-	if err := floor.CloseRoom(roomID); err != nil {
+	if err := sess.CloseRoom(roomID); err != nil {
 		return fmt.Sprintf("Failed to auto-close room %s: %v", roomID, err)
 	}
 
 	return fmt.Sprintf("Room %s finished, agents returned to main floor", roomID)
 }
 
-// HandleCommand parses and executes a user command.
+// HandleCommand parses and executes a user command against the given session.
 // This is the single place where all slash commands are parsed.
 // Side effects (room creation, chat clearing) happen here;
 // result events are posted to Chat for frontends to render.
-func HandleCommand(command string, floor *Floor, ctrl *Controller) Decision {
+func HandleCommand(command string, sess *Session, ctrl *Controller) Decision {
 	args := strings.Fields(command)
 	if len(args) == 0 {
 		return Decision{Action: "error", Info: "Empty command"}
@@ -230,13 +230,13 @@ func HandleCommand(command string, floor *Floor, ctrl *Controller) Decision {
 		return Decision{Action: "stop"}
 
 	case "/clear":
-		floor.Chat.Clear()
+		sess.Chat.Clear()
 		ctrl.CallStack = nil
 		ctrl.passedAgents = make(map[string]bool)
 		return Decision{Action: "clear"}
 
 	case "/room":
-		return handleRoomCommand(args, floor, ctrl)
+		return handleRoomCommand(args, sess, ctrl)
 
 	default:
 		return Decision{Action: "error", Info: fmt.Sprintf("Unknown command: %s", command)}
@@ -244,7 +244,7 @@ func HandleCommand(command string, floor *Floor, ctrl *Controller) Decision {
 }
 
 // handleRoomCommand handles /room subcommands.
-func handleRoomCommand(args []string, floor *Floor, ctrl *Controller) Decision {
+func handleRoomCommand(args []string, sess *Session, ctrl *Controller) Decision {
 	if len(args) < 2 {
 		return Decision{Action: "error", Info: "Usage: /room #name @agent1 @agent2 [prompt] or /room close #name"}
 	}
@@ -259,7 +259,7 @@ func handleRoomCommand(args []string, floor *Floor, ctrl *Controller) Decision {
 			roomID = "#" + roomID
 		}
 
-		room, ok := floor.Rooms[roomID]
+		room, ok := sess.Rooms[roomID]
 		if !ok {
 			return Decision{Action: "error", Info: fmt.Sprintf("Room %s not found", roomID)}
 		}
@@ -269,7 +269,7 @@ func handleRoomCommand(args []string, floor *Floor, ctrl *Controller) Decision {
 			delete(ctrl.RoomBound, aid)
 		}
 
-		if err := floor.CloseRoom(roomID); err != nil {
+		if err := sess.CloseRoom(roomID); err != nil {
 			return Decision{Action: "error", Info: fmt.Sprintf("Failed to close room: %v", err)}
 		}
 
@@ -299,7 +299,7 @@ func handleRoomCommand(args []string, floor *Floor, ctrl *Controller) Decision {
 		return Decision{Action: "error", Info: "Usage: /room #name @agent1 @agent2 [prompt]"}
 	}
 
-	room, err := floor.CreateRoom(roomID, "@user", agentIDs, prompt)
+	room, err := sess.CreateRoom(roomID, "@user", agentIDs, prompt)
 	if err != nil {
 		return Decision{Action: "error", Info: fmt.Sprintf("Failed to create room: %v", err)}
 	}

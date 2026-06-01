@@ -25,18 +25,18 @@ func NewLLMAgent(agent *blueprint.Agent) *LLMAgent {
 func (a *LLMAgent) AgentID() string { return a.agent.ID }
 
 // Run executes one LLM agent turn: build context, call LLM, handle tool calls,
-// post results to Chat. Blocks until complete.
-func (a *LLMAgent) Run(ctx context.Context, floor *Floor) error {
+// post results to the session's chat. Blocks until complete.
+func (a *LLMAgent) Run(ctx context.Context, sess *Session) error {
 	client := llm.NewClient(a.agent.Endpoint, a.agent.APIKey)
-	messages := a.buildContext(floor)
-	tools := a.buildTools(floor)
+	messages := a.buildContext(sess)
+	tools := a.buildTools(sess)
 
 	var fullResponse strings.Builder
 	var interactions []ToolInteraction
 	maxIterations := 10
 
 	// Emit agent label before first token
-	floor.Chat.PostStream(AgentLabel{AgentID: a.agent.ID})
+	sess.Chat.PostStream(AgentLabel{AgentID: a.agent.ID})
 
 	for i := 0; i < maxIterations; i++ {
 		// Check for cancellation
@@ -47,10 +47,10 @@ func (a *LLMAgent) Run(ctx context.Context, floor *Floor) error {
 		}
 
 		result, err := client.ChatStream(a.agent.Model, messages, a.agent.Temperature, tools, func(token string) {
-			floor.Chat.PostStream(TokenStreamed{AgentID: a.agent.ID, Token: token})
+			sess.Chat.PostStream(TokenStreamed{AgentID: a.agent.ID, Token: token})
 		})
 		if err != nil {
-			floor.Chat.PostEvent(AgentErrorEvent{
+			sess.Chat.PostEvent(AgentErrorEvent{
 				AgentID: a.agent.ID,
 				Err:     err,
 				Partial: fullResponse.String(),
@@ -66,9 +66,9 @@ func (a *LLMAgent) Run(ctx context.Context, floor *Floor) error {
 		}
 
 		// Execute tool calls
-		expanded := a.expandToolCalls(floor, result.ToolCalls)
+		expanded := a.expandToolCalls(sess, result.ToolCalls)
 		for _, ex := range expanded {
-			floor.Chat.PostStream(ToolCallResult{AgentID: a.agent.ID, ID: ex.Call.ID, Title: ex.Title, Output: ex.Output})
+			sess.Chat.PostStream(ToolCallResult{AgentID: a.agent.ID, ID: ex.Call.ID, Title: ex.Title, Output: ex.Output})
 
 			interactions = append(interactions, ToolInteraction{
 				Command: ex.Title,
@@ -91,12 +91,12 @@ func (a *LLMAgent) Run(ctx context.Context, floor *Floor) error {
 
 	// Check for [PASS] or empty response (LLM returned nothing)
 	if strings.Contains(strings.ToLower(content), "[pass]") || (strings.TrimSpace(content) == "" && len(interactions) == 0) {
-		floor.Chat.PostEvent(AgentPassedEvent{AgentID: a.agent.ID})
+		sess.Chat.PostEvent(AgentPassedEvent{AgentID: a.agent.ID})
 		return nil
 	}
 
 	// Post the final message to chat
-	floor.Chat.Post(ChatMessage{
+	sess.Chat.Post(ChatMessage{
 		From:             a.agent.ID,
 		Content:          content,
 		ToolInteractions: interactions,
@@ -107,17 +107,17 @@ func (a *LLMAgent) Run(ctx context.Context, floor *Floor) error {
 // buildContext converts the agent's accumulated context to LLM messages,
 // applying tool_context filtering. Reads from AgentContext if available,
 // falls back to Chat.History() for test agents without a context.
-func (a *LLMAgent) buildContext(floor *Floor) []llm.Message {
+func (a *LLMAgent) buildContext(sess *Session) []llm.Message {
 	messages := []llm.Message{
 		{Role: "system", Content: a.agent.Prompt},
 	}
 
 	// Use AgentContext if available, fall back to Chat.History()
 	var chatMsgs []*ChatMessage
-	if ac := floor.GetAgentContext(a.agent.ID); ac != nil {
+	if ac := sess.GetAgentContext(a.agent.ID); ac != nil {
 		chatMsgs = ac.Entries()
 	} else {
-		history := floor.Chat.History()
+		history := sess.Chat.History()
 		chatMsgs = make([]*ChatMessage, len(history))
 		for i := range history {
 			chatMsgs[i] = &history[i]
@@ -197,13 +197,13 @@ func (a *LLMAgent) buildContext(floor *Floor) []llm.Message {
 }
 
 // buildTools constructs the tool list for this agent.
-func (a *LLMAgent) buildTools(floor *Floor) []llm.Tool {
+func (a *LLMAgent) buildTools(sess *Session) []llm.Tool {
 	var tools []llm.Tool
-	if a.agent.CanUseSandbox && floor.Sandbox != nil {
+	if a.agent.CanUseSandbox && sess.Floor.Sandbox != nil {
 		tools = append(tools, llm.BashTool)
 	}
 	for _, fname := range a.agent.Furniture {
-		f, ok := floor.Furniture[fname]
+		f, ok := sess.Floor.Furniture[fname]
 		if !ok {
 			continue
 		}
@@ -215,33 +215,33 @@ func (a *LLMAgent) buildTools(floor *Floor) []llm.Tool {
 }
 
 // expandToolCalls processes tool calls, splitting concatenated JSON arguments.
-func (a *LLMAgent) expandToolCalls(floor *Floor, toolCalls []llm.ToolCall) []expandedCall {
+func (a *LLMAgent) expandToolCalls(sess *Session, toolCalls []llm.ToolCall) []expandedCall {
 	var result []expandedCall
 	for _, tc := range toolCalls {
-		result = append(result, a.dispatchToolCall(floor, tc)...)
+		result = append(result, a.dispatchToolCall(sess, tc)...)
 	}
 	return result
 }
 
 // dispatchToolCall executes a tool call.
-func (a *LLMAgent) dispatchToolCall(floor *Floor, tc llm.ToolCall) []expandedCall {
+func (a *LLMAgent) dispatchToolCall(sess *Session, tc llm.ToolCall) []expandedCall {
 	name := tc.Function.Name
 
 	// Check for furniture tool (namespaced as furniture__tool)
 	if parts := strings.SplitN(name, "__", 2); len(parts) == 2 {
-		return a.dispatchFurnitureCall(floor, tc, parts[0], parts[1])
+		return a.dispatchFurnitureCall(sess, tc, parts[0], parts[1])
 	}
 
 	// Default: bash tool
 	if name == "bash" {
-		return a.dispatchBashCall(floor.Sandbox, tc)
+		return a.dispatchBashCall(sess.Floor.Sandbox, tc)
 	}
 
 	return []expandedCall{{Call: tc, Title: name, Output: fmt.Sprintf("[ERROR: unknown tool %q]", name)}}
 }
 
-func (a *LLMAgent) dispatchFurnitureCall(floor *Floor, tc llm.ToolCall, furnitureName, toolName string) []expandedCall {
-	f, ok := floor.Furniture[furnitureName]
+func (a *LLMAgent) dispatchFurnitureCall(sess *Session, tc llm.ToolCall, furnitureName, toolName string) []expandedCall {
+	f, ok := sess.Floor.Furniture[furnitureName]
 	if !ok {
 		return []expandedCall{{
 			Call:   tc,
@@ -267,7 +267,7 @@ func (a *LLMAgent) dispatchFurnitureCall(floor *Floor, tc llm.ToolCall, furnitur
 		if i > 0 {
 			callID = fmt.Sprintf("%s_%d", tc.ID, i)
 		}
-		floor.Chat.PostStream(ToolCallStarted{AgentID: a.agent.ID, ID: callID, Title: title})
+		sess.Chat.PostStream(ToolCallStarted{AgentID: a.agent.ID, ID: callID, Title: title})
 
 		callResult, err := f.Call(toolName, args)
 		var output string

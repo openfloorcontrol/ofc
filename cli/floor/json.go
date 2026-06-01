@@ -82,30 +82,32 @@ func (j *JSONFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string
 		"furniture": furnitureNames,
 	})
 
+	sess := floor.DefaultSession()
+
 	// Post initial prompt
 	if initialPrompt != "" {
-		floor.Chat.PostUserInput(initialPrompt)
+		sess.Chat.PostUserInput(initialPrompt)
 	}
 
 	oneShot := initialPrompt != "" && !IsCommand(initialPrompt)
 
 	var cancelAgent context.CancelFunc
 
-	unified := floor.StartUnified()
+	unified := sess.StartUnified()
 
 	for tagged := range unified {
 		roomID := tagged.RoomID
 		ev := tagged.Event
 
-		// Resolve which Controller and Floor view to use
-		eventCtrl, eventFloor := ctrl, floor
+		// Resolve which Controller and Session view to use
+		eventCtrl, eventSess := ctrl, sess
 		if roomID != "" {
-			room, ok := floor.Rooms[roomID]
+			room, ok := sess.Rooms[roomID]
 			if !ok {
 				continue
 			}
 			eventCtrl = room.Controller
-			eventFloor = floor.ViewForRoom(room)
+			eventSess = sess.ForRoom(room)
 		}
 
 		// Serialize and emit the event
@@ -120,15 +122,15 @@ func (j *JSONFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string
 		// Handle controller decisions (same logic as CLI)
 		switch ev.(type) {
 		case MessagePosted, AgentPassedEvent, AgentErrorEvent:
-			decision := eventCtrl.Decide(eventFloor.Chat, ev)
+			decision := eventCtrl.Decide(eventSess.Chat, ev)
 
 			switch decision.Action {
 			case "trigger":
 				agent, ok := agents[decision.AgentID]
 				if !ok {
 					j.emit(map[string]interface{}{
-						"type":  "system_info",
-						"text":  fmt.Sprintf("unknown agent %s", decision.AgentID),
+						"type": "system_info",
+						"text": fmt.Sprintf("unknown agent %s", decision.AgentID),
 					})
 					continue
 				}
@@ -136,7 +138,7 @@ func (j *JSONFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string
 				cancelAgent = cancel
 				go func() {
 					defer cancel()
-					agent.Run(ctx, eventFloor)
+					agent.Run(ctx, eventSess)
 				}()
 
 			case "wait":
@@ -150,7 +152,7 @@ func (j *JSONFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string
 				return nil
 			}
 
-			if info := TryAutoCloseRoom(roomID, decision, floor, ctrl); info != "" {
+			if info := TryAutoCloseRoom(roomID, decision, sess, ctrl); info != "" {
 				j.emit(map[string]interface{}{
 					"type": "system_info",
 					"text": info,
@@ -159,7 +161,7 @@ func (j *JSONFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string
 
 		case UserCommandEvent:
 			cmd := ev.(UserCommandEvent)
-			decision := HandleCommand(cmd.Command, floor, ctrl)
+			decision := HandleCommand(cmd.Command, sess, ctrl)
 			switch decision.Action {
 			case "stop":
 				j.emit(map[string]interface{}{"type": "floor_stopped"})

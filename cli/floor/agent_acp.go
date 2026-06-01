@@ -23,42 +23,42 @@ func (a *ACPAgent) AgentID() string { return a.agent.ID }
 
 // Run executes one ACP agent turn: build context, prompt session, post results.
 // Blocks until complete.
-func (a *ACPAgent) Run(ctx context.Context, floor *Floor) error {
-	session, ok := floor.ACPSubprocesses[a.agent.ID]
+func (a *ACPAgent) Run(ctx context.Context, sess *Session) error {
+	subproc, ok := sess.Floor.ACPSubprocesses[a.agent.ID]
 	if !ok {
-		floor.Chat.PostEvent(AgentErrorEvent{
+		sess.Chat.PostEvent(AgentErrorEvent{
 			AgentID: a.agent.ID,
-			Err:     fmt.Errorf("no ACP session for agent %s", a.agent.ID),
+			Err:     fmt.Errorf("no ACP subprocess for agent %s", a.agent.ID),
 		})
-		return fmt.Errorf("no ACP session for agent %s", a.agent.ID)
+		return fmt.Errorf("no ACP subprocess for agent %s", a.agent.ID)
 	}
 
-	client := session.Client
+	client := subproc.Client
 	client.Reset()
 
 	// Wire ACP callbacks to stream events
 	client.OnToken = func(token string) {
-		floor.Chat.PostStream(TokenStreamed{AgentID: a.agent.ID, Token: token})
+		sess.Chat.PostStream(TokenStreamed{AgentID: a.agent.ID, Token: token})
 	}
 	client.OnToolCall = func(id, title string) {
-		floor.Chat.PostStream(ToolCallStarted{AgentID: a.agent.ID, ID: id, Title: title})
+		sess.Chat.PostStream(ToolCallStarted{AgentID: a.agent.ID, ID: id, Title: title})
 	}
 	client.OnToolOutput = func(id, output string) {
-		floor.Chat.PostStream(ToolCallOutput{AgentID: a.agent.ID, ID: id, Output: output})
+		sess.Chat.PostStream(ToolCallOutput{AgentID: a.agent.ID, ID: id, Output: output})
 	}
 	client.OnToolResult = func(id, title, output string) {
-		floor.Chat.PostStream(ToolCallResult{AgentID: a.agent.ID, ID: id, Title: title, Output: output})
+		sess.Chat.PostStream(ToolCallResult{AgentID: a.agent.ID, ID: id, Title: title, Output: output})
 	}
 
 	// Emit agent label before first token
-	floor.Chat.PostStream(AgentLabel{AgentID: a.agent.ID})
+	sess.Chat.PostStream(AgentLabel{AgentID: a.agent.ID})
 
-	blocks := a.buildACPContext(floor)
-	floor.debug("ACP prompt for %s (%d blocks)", a.agent.ID, len(blocks))
+	blocks := a.buildACPContext(sess)
+	sess.Floor.debug("ACP prompt for %s (%d blocks)", a.agent.ID, len(blocks))
 
-	stopReason, err := session.Prompt(ctx, blocks)
+	stopReason, err := subproc.Prompt(ctx, blocks)
 	if err != nil {
-		floor.Chat.PostEvent(AgentErrorEvent{
+		sess.Chat.PostEvent(AgentErrorEvent{
 			AgentID: a.agent.ID,
 			Err:     fmt.Errorf("ACP prompt failed: %w", err),
 			Partial: client.ResponseText.String(),
@@ -80,12 +80,12 @@ func (a *ACPAgent) Run(ctx context.Context, floor *Floor) error {
 
 	// Check for [PASS]
 	if strings.Contains(strings.ToLower(content), "[pass]") {
-		floor.Chat.PostEvent(AgentPassedEvent{AgentID: a.agent.ID})
+		sess.Chat.PostEvent(AgentPassedEvent{AgentID: a.agent.ID})
 		return nil
 	}
 
 	// Post the final message to chat
-	floor.Chat.Post(ChatMessage{
+	sess.Chat.Post(ChatMessage{
 		From:             a.agent.ID,
 		Content:          content,
 		ToolInteractions: interactions,
@@ -97,19 +97,19 @@ func (a *ACPAgent) Run(ctx context.Context, floor *Floor) error {
 // Uses AgentContext.Delta() to send only new messages since the last prompt.
 // ACP agents maintain their own session state, so we skip the agent's own
 // messages (it already remembers them) and only send the system prompt once.
-func (a *ACPAgent) buildACPContext(floor *Floor) []acpsdk.ContentBlock {
+func (a *ACPAgent) buildACPContext(sess *Session) []acpsdk.ContentBlock {
 	var blocks []acpsdk.ContentBlock
 
 	// Use AgentContext delta if available, fall back to full history
 	var chatMsgs []*ChatMessage
 	var isFirstPrompt bool
 
-	if ac := floor.GetAgentContext(a.agent.ID); ac != nil {
+	if ac := sess.GetAgentContext(a.agent.ID); ac != nil {
 		chatMsgs = ac.Delta()
 		isFirstPrompt = (ac.Len() == len(chatMsgs)) // all entries are new = first prompt
 	} else {
 		// Fallback for contexts without AgentContext
-		history := floor.Chat.History()
+		history := sess.Chat.History()
 		chatMsgs = make([]*ChatMessage, len(history))
 		for i := range history {
 			chatMsgs[i] = &history[i]
@@ -152,7 +152,7 @@ func (a *ACPAgent) buildACPContext(floor *Floor) []acpsdk.ContentBlock {
 	blocks = append(blocks, acpsdk.TextBlock("Your turn to respond."))
 
 	// Mark all entries as sent so next Delta() only returns new messages
-	if ac := floor.GetAgentContext(a.agent.ID); ac != nil {
+	if ac := sess.GetAgentContext(a.agent.ID); ac != nil {
 		ac.MarkSent()
 	}
 
