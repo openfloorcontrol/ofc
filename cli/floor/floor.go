@@ -57,8 +57,8 @@ type Floor struct {
 	Sandbox       *sandbox.Sandbox
 	Furniture     map[string]furniture.Furniture
 	APIServer     *APIServer
-	ACPSessions   map[string]*acpclient.AgentSession
-	AgentContexts map[string]*AgentContext // per-agent context accumulators
+	ACPSubprocesses map[string]*acpclient.Subprocess
+	AgentContexts   map[string]*AgentContext // per-agent context accumulators
 	Rooms         map[string]*Room         // active rooms by ID
 	agentRoom     map[string]string        // agentID → roomID ("" = main floor)
 	unified       chan TaggedEvent          // merged event channel (lazy, set by StartUnified)
@@ -85,8 +85,8 @@ func NewFloor(bp *blueprint.Blueprint) *Floor {
 		Chat:          chat,
 		Blueprint:     bp,
 		Furniture:     make(map[string]furniture.Furniture),
-		ACPSessions:   make(map[string]*acpclient.AgentSession),
-		AgentContexts: agentContexts,
+		ACPSubprocesses: make(map[string]*acpclient.Subprocess),
+		AgentContexts:   agentContexts,
 		Rooms:         make(map[string]*Room),
 		agentRoom:     make(map[string]string),
 		DebugFunc:     func(string) {},
@@ -216,14 +216,14 @@ func (f *Floor) CloseRoom(roomID string) error {
 
 // ViewForRoom returns a lightweight Floor copy where Chat points to the room's Chat.
 // Agents running in a room use this so their Chat.Post() goes to the room.
-// Shares Sandbox, Furniture, ACPSessions, and AgentContexts with the parent.
+// Shares Sandbox, Furniture, ACPSubprocesses, and AgentContexts with the parent.
 func (f *Floor) ViewForRoom(room *Room) *Floor {
 	return &Floor{
 		Chat:          room.Chat,
 		Blueprint:     f.Blueprint,
 		Sandbox:       f.Sandbox,
 		Furniture:     f.Furniture,
-		ACPSessions:   f.ACPSessions,
+		ACPSubprocesses: f.ACPSubprocesses,
 		AgentContexts: f.AgentContexts,
 		Rooms:         f.Rooms,
 		agentRoom:     f.agentRoom,
@@ -372,9 +372,9 @@ func (f *Floor) Start(renderInfo func(string)) error {
 
 // Stop tears down ACP sessions, furniture, API server, and sandbox.
 func (f *Floor) Stop() {
-	for id, session := range f.ACPSessions {
-		f.debug("closing ACP session for %s", id)
-		session.Close()
+	for id, sub := range f.ACPSubprocesses {
+		f.debug("closing ACP subprocess for %s", id)
+		sub.Close()
 	}
 	if f.APIServer != nil {
 		f.APIServer.Stop()
@@ -478,10 +478,10 @@ func (f *Floor) startACPAgent(agent blueprint.Agent, renderInfo func(string)) er
 
 	stderrW := f.StderrWriter
 	if stderrW == nil {
-		stderrW = nil // will use os.Stderr in NewAgentSession
+		stderrW = nil // will use os.Stderr in NewSubprocess
 	}
 
-	session, err := acpclient.NewAgentSession(agent.Command, agent.Args, agent.Env, client, stderrW, f.Blueprint.Dir)
+	session, err := acpclient.NewSubprocess(agent.Command, agent.Args, agent.Env, client, stderrW, f.Blueprint.Dir)
 	if err != nil {
 		return fmt.Errorf("failed to start ACP agent %s: %w", agent.ID, err)
 	}
@@ -497,13 +497,13 @@ func (f *Floor) startACPAgent(agent blueprint.Agent, renderInfo func(string)) er
 		return fmt.Errorf("failed to create session for ACP agent %s: %w", agent.ID, err)
 	}
 
-	f.ACPSessions[agent.ID] = session
+	f.ACPSubprocesses[agent.ID] = session
 	renderInfo(fmt.Sprintf("ACP agent %s ready", agent.ID))
 	return nil
 }
 
 // buildACPMCPServers builds the MCP server list for an ACP agent.
-func (f *Floor) buildACPMCPServers(agent blueprint.Agent, session *acpclient.AgentSession) []acpsdk.McpServer {
+func (f *Floor) buildACPMCPServers(agent blueprint.Agent, session *acpclient.Subprocess) []acpsdk.McpServer {
 	if f.APIServer == nil || len(agent.Furniture) == 0 {
 		return nil
 	}

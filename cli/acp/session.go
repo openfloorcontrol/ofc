@@ -10,8 +10,10 @@ import (
 	acpsdk "github.com/coder/acp-go-sdk"
 )
 
-// AgentSession manages the lifecycle of one ACP agent connection.
-type AgentSession struct {
+// Subprocess manages the lifecycle of one ACP agent subprocess + connection.
+// Named "Subprocess" rather than "Session" to avoid conflict with floor.Session
+// (the conversation-level concept). This wraps the ACP protocol session.
+type Subprocess struct {
 	Conn            *acpsdk.ClientSideConnection
 	SessionID       acpsdk.SessionId
 	Cmd             *exec.Cmd
@@ -19,10 +21,10 @@ type AgentSession struct {
 	McpCapabilities acpsdk.McpCapabilities // from agent init response
 }
 
-// NewAgentSession launches an ACP agent process and establishes a connection.
+// NewSubprocess launches an ACP agent process and establishes a connection.
 // stderrWriter receives the agent's stderr output. If nil, defaults to os.Stderr.
 // If cwd is non-empty, the subprocess runs in that directory.
-func NewAgentSession(command string, args []string, env map[string]string, client *FloorClient, stderrWriter io.Writer, cwd string) (*AgentSession, error) {
+func NewSubprocess(command string, args []string, env map[string]string, client *FloorClient, stderrWriter io.Writer, cwd string) (*Subprocess, error) {
 	cmd := exec.Command(command, args...)
 	if cwd != "" {
 		cmd.Dir = cwd
@@ -56,7 +58,7 @@ func NewAgentSession(command string, args []string, env map[string]string, clien
 
 	conn := acpsdk.NewClientSideConnection(client, stdin, stdout)
 
-	return &AgentSession{
+	return &Subprocess{
 		Conn:   conn,
 		Cmd:    cmd,
 		Client: client,
@@ -64,7 +66,7 @@ func NewAgentSession(command string, args []string, env map[string]string, clien
 }
 
 // Initialize performs the ACP handshake, advertising filesystem and terminal capabilities.
-func (s *AgentSession) Initialize(ctx context.Context) error {
+func (s *Subprocess) Initialize(ctx context.Context) error {
 	resp, err := s.Conn.Initialize(ctx, acpsdk.InitializeRequest{
 		ProtocolVersion: acpsdk.ProtocolVersionNumber,
 		ClientCapabilities: acpsdk.ClientCapabilities{
@@ -90,7 +92,7 @@ func (s *AgentSession) Initialize(ctx context.Context) error {
 
 // StartSession creates a new ACP session with the given working directory.
 // mcpServers are MCP servers to make available to the agent.
-func (s *AgentSession) StartSession(ctx context.Context, cwd string, mcpServers []acpsdk.McpServer) error {
+func (s *Subprocess) StartSession(ctx context.Context, cwd string, mcpServers []acpsdk.McpServer) error {
 	if mcpServers == nil {
 		mcpServers = []acpsdk.McpServer{}
 	}
@@ -110,7 +112,7 @@ func (s *AgentSession) StartSession(ctx context.Context, cwd string, mcpServers 
 // Prompt sends content blocks to the agent and blocks until it finishes.
 // Streaming happens via the Client's SessionUpdate callback.
 // Returns the stop reason.
-func (s *AgentSession) Prompt(ctx context.Context, blocks []acpsdk.ContentBlock) (acpsdk.StopReason, error) {
+func (s *Subprocess) Prompt(ctx context.Context, blocks []acpsdk.ContentBlock) (acpsdk.StopReason, error) {
 	resp, err := s.Conn.Prompt(ctx, acpsdk.PromptRequest{
 		SessionId: s.SessionID,
 		Prompt:    blocks,
@@ -122,7 +124,7 @@ func (s *AgentSession) Prompt(ctx context.Context, blocks []acpsdk.ContentBlock)
 }
 
 // Close kills the agent process and waits for cleanup.
-func (s *AgentSession) Close() error {
+func (s *Subprocess) Close() error {
 	if s.Cmd != nil && s.Cmd.Process != nil {
 		_ = s.Cmd.Process.Kill()
 		_ = s.Cmd.Wait()

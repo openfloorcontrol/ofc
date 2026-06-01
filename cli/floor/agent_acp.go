@@ -24,7 +24,7 @@ func (a *ACPAgent) AgentID() string { return a.agent.ID }
 // Run executes one ACP agent turn: build context, prompt session, post results.
 // Blocks until complete.
 func (a *ACPAgent) Run(ctx context.Context, floor *Floor) error {
-	session, ok := floor.ACPSessions[a.agent.ID]
+	session, ok := floor.ACPSubprocesses[a.agent.ID]
 	if !ok {
 		floor.Chat.PostEvent(AgentErrorEvent{
 			AgentID: a.agent.ID,
