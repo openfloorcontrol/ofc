@@ -291,7 +291,9 @@ Current → Target. `[x]` marks transformations already shipped.
 | `acp.AgentSession`               | `acp.Subprocess` (rename)       | `[x]` Renamed |
 | `floor.Session.Chat`             | `floor.Session.Rooms["#main"]`  | `[ ]` Main chat becomes default room (step 3) |
 | `floor.Chat`                     | `floor.Room`                    | `[ ]` Unified into single type (step 3) |
-| Blueprint loader                 | Sequence of mutation calls       | `[ ]` No separate code path (step 2) |
+| Blueprint loader                 | Sequence of mutation calls       | `[x]` Applied via AddAgent/AddFurniture (step 2) |
+| `Controller(*Blueprint)`         | `NewController(*Floor)`         | `[x]` Shipped (step 2) |
+| `Floor.Blueprint.Agents`         | `Floor.Agents` (live, mutable)  | `[x]` Shipped (step 2) |
 
 ## Staging
 
@@ -305,9 +307,9 @@ Pure plumbing. No persistence, no behavior change. Establishes the layering the 
   Splits per-conversation state (Chat, Rooms, AgentContexts, agentRoom) out of Floor. Floor gains `Sessions` map with a single `"default"` entry. `Agent.Run(ctx, *Floor)` becomes `Agent.Run(ctx, *Session)`. `Session.ForRoom` replaces `Floor.ViewForRoom`. `HandleCommand`/`TryAutoCloseRoom` take `*Session`. `acp.AgentSession` renamed to `acp.Subprocess` to free the word.
   *Landed:* commits `bebd8ba`, `3f9d0ef`, `404bd0b`. Plus the design doc itself at `35b84a6`.
 
-- [ ] **Step 2 — Floor mutation primitives + blueprint-as-mutations.**
-  Add `addAgent`, `addFurniture`, `removeAgent`, `removeFurniture`, `updateAgent`, `setBlueprintMeta` methods on Floor. Refactor blueprint loader so that constructing a Floor from a blueprint is a sequence of mutation calls — no separate "blueprint loading" code path. Single mutation goroutine for serialization.
-  *Why now:* this is the load-bearing piece for the DOM model. All later API-driven mutations (REST, web UI) build on these primitives. Blueprint loading exercising them validates the primitives are correct.
+- [x] **Step 2 — Floor mutation primitives + blueprint-as-mutations.**
+  Added `AddAgent`, `RemoveAgent`, `UpdateAgent`, `AddFurniture`, `RemoveFurniture`, `SetBlueprintMeta` methods on Floor. Floor gained a live mutable `Agents []blueprint.Agent` slice — Blueprint is now strictly the loaded YAML template. Blueprint loading is no longer a separate code path: `NewFloor` applies LLM agents immediately; `Start()` brings up API/sandbox and then calls `AddFurniture` / `AddAgent` for infra-dependent pieces. Controller switches from `*Blueprint` to `*Floor`; room controllers use `NewControllerForRoom` with an `AllowedIDs` filter so they see the live floor agent set restricted to room members. Mutations serialized by `sync.Mutex` (TODO: upgrade to a single-writer queue when a REST mutation API arrives).
+  *Landed:* commit `21f1e18`.
 
 - [ ] **Step 3 — Unify `Chat` and `Room` into a single type.**
   `#main` becomes just a room inside the session. The Session holds `Rooms map[string]*Room` with `#main` always present. Eliminates the current asymmetry between "the main chat" and "rooms"; collapses two types into one. Mostly cosmetic but the cleanup pays off when sessions persist.
