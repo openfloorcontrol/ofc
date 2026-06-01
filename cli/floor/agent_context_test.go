@@ -4,7 +4,7 @@ import "testing"
 
 func TestAgentContextAccumulatesMessages(t *testing.T) {
 	ac := NewAgentContext("@test")
-	chat := NewChat()
+	chat := NewRoom("#test")
 	chat.AddListener(ac)
 	defer chat.Close()
 
@@ -25,7 +25,7 @@ func TestAgentContextAccumulatesMessages(t *testing.T) {
 
 func TestAgentContextMultipleMessages(t *testing.T) {
 	ac := NewAgentContext("@test")
-	chat := NewChat()
+	chat := NewRoom("#test")
 	chat.AddListener(ac)
 	defer chat.Close()
 
@@ -47,7 +47,7 @@ func TestAgentContextMultipleMessages(t *testing.T) {
 
 func TestAgentContextDelta(t *testing.T) {
 	ac := NewAgentContext("@test")
-	chat := NewChat()
+	chat := NewRoom("#test")
 	chat.AddListener(ac)
 	defer chat.Close()
 
@@ -108,7 +108,7 @@ func TestAgentContextAppendSystem(t *testing.T) {
 
 func TestAgentContextClear(t *testing.T) {
 	ac := NewAgentContext("@test")
-	chat := NewChat()
+	chat := NewRoom("#test")
 	chat.AddListener(ac)
 	defer chat.Close()
 
@@ -135,7 +135,7 @@ func TestAgentContextClear(t *testing.T) {
 
 func TestChatClearNotifiesListeners(t *testing.T) {
 	ac := NewAgentContext("@test")
-	chat := NewChat()
+	chat := NewRoom("#test")
 	chat.AddListener(ac)
 	defer chat.Close()
 
@@ -157,7 +157,7 @@ func TestAgentContextPointerStability(t *testing.T) {
 	// Verify that messages accumulated via listener are the same pointers
 	// stored in the Chat (not copies).
 	ac := NewAgentContext("@test")
-	chat := NewChat()
+	chat := NewRoom("#test")
 	chat.AddListener(ac)
 	defer chat.Close()
 
@@ -181,7 +181,7 @@ func TestAgentContextPointerStability(t *testing.T) {
 
 func TestAgentContextRemoveListener(t *testing.T) {
 	ac := NewAgentContext("@test")
-	chat := NewChat()
+	chat := NewRoom("#test")
 	chat.AddListener(ac)
 	defer chat.Close()
 
@@ -207,7 +207,7 @@ func TestAgentContextRemoveListener(t *testing.T) {
 func TestMultipleAgentContextsOnSameChat(t *testing.T) {
 	ac1 := NewAgentContext("@agent1")
 	ac2 := NewAgentContext("@agent2")
-	chat := NewChat()
+	chat := NewRoom("#test")
 	chat.AddListener(ac1)
 	chat.AddListener(ac2)
 	defer chat.Close()

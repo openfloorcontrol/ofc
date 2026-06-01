@@ -141,7 +141,7 @@ func (t *TUIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 				t.program.Send(tuiDisplayMsg{Event: AgentLabel{AgentID: "@user"}})
 				t.program.Send(tuiDisplayMsg{Event: TokenStreamed{AgentID: "@user", Token: initialPrompt + "\n"}})
 			}
-			sess.Chat.PostUserInput(initialPrompt)
+			sess.MainRoom.PostUserInput(initialPrompt)
 		}
 
 		var cancelAgent context.CancelFunc
@@ -167,7 +167,7 @@ func (t *TUIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 			switch e := ev.(type) {
 			case MessagePosted:
 				t.logChatEvent(ev)
-				decision := eventCtrl.Decide(eventSess.Chat, e)
+				decision := eventCtrl.Decide(eventSess.MainRoom, e)
 				t.dispatchDecision(eventSess, agents, decision, &cancelAgent)
 				if info := TryAutoCloseRoom(roomID, decision, sess, ctrl); info != "" {
 					if t.program != nil {
@@ -191,7 +191,7 @@ func (t *TUIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 					t.program.Send(tuiPassedMsg{AgentID: e.AgentID})
 				}
 				t.out.Log("[%s]: [PASS]\n", e.AgentID)
-				decision := eventCtrl.Decide(eventSess.Chat, e)
+				decision := eventCtrl.Decide(eventSess.MainRoom, e)
 				t.dispatchDecision(eventSess, agents, decision, &cancelAgent)
 				if info := TryAutoCloseRoom(roomID, decision, sess, ctrl); info != "" {
 					if t.program != nil {
@@ -204,7 +204,7 @@ func (t *TUIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 					t.program.Send(tuiErrorMsg{AgentID: e.AgentID, Err: e.Err})
 				}
 				t.out.Log("[ERROR from %s: %v]\n", e.AgentID, e.Err)
-				decision := eventCtrl.Decide(eventSess.Chat, e)
+				decision := eventCtrl.Decide(eventSess.MainRoom, e)
 				t.dispatchDecision(eventSess, agents, decision, &cancelAgent)
 
 			case UserCommandEvent:
@@ -292,7 +292,7 @@ type tuiModel struct {
 	viewport viewport.Model
 	textarea textarea.Model
 	content  strings.Builder
-	chat     *Chat // set before program starts
+	chat     *Room // set before program starts
 	colorMap map[string]string
 	ready    bool
 	width    int
@@ -300,7 +300,7 @@ type tuiModel struct {
 }
 
 // SetChat sets the Chat reference for posting user messages.
-func (m *tuiModel) SetChat(chat *Chat) {
+func (m *tuiModel) SetChat(chat *Room) {
 	m.chat = chat
 }
 

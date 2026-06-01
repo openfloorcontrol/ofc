@@ -111,7 +111,7 @@ func runTUI(bp *blueprint.Blueprint, initialPrompt string) {
 	agents := buildAgents(bp)
 
 	// Set up Bubble Tea
-	model.SetChat(f.DefaultSession().Chat)
+	model.SetChat(f.DefaultSession().MainRoom)
 	p := tea.NewProgram(model,
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),

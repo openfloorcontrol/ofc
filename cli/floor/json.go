@@ -86,7 +86,7 @@ func (j *JSONFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string
 
 	// Post initial prompt
 	if initialPrompt != "" {
-		sess.Chat.PostUserInput(initialPrompt)
+		sess.MainRoom.PostUserInput(initialPrompt)
 	}
 
 	oneShot := initialPrompt != "" && !IsCommand(initialPrompt)
@@ -122,7 +122,7 @@ func (j *JSONFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string
 		// Handle controller decisions (same logic as CLI)
 		switch ev.(type) {
 		case MessagePosted, AgentPassedEvent, AgentErrorEvent:
-			decision := eventCtrl.Decide(eventSess.Chat, ev)
+			decision := eventCtrl.Decide(eventSess.MainRoom, ev)
 
 			switch decision.Action {
 			case "trigger":

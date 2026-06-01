@@ -83,7 +83,7 @@ func (f *CLIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 	if initialPrompt != "" {
 		f.renderStream(AgentLabel{AgentID: "@user"}, "")
 		f.renderStream(TokenStreamed{AgentID: "@user", Token: initialPrompt + "\n"}, "")
-		sess.Chat.PostUserInput(initialPrompt)
+		sess.MainRoom.PostUserInput(initialPrompt)
 	} else if !f.Headless {
 		// No initial prompt — ready for user input immediately
 		readyForInput <- struct{}{}
@@ -126,7 +126,7 @@ func (f *CLIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 		case MessagePosted:
 			f.renderMessagePosted(e)
 
-			decision := eventCtrl.Decide(eventSess.Chat, e)
+			decision := eventCtrl.Decide(eventSess.MainRoom, e)
 			if err := f.handleDecision(eventSess, eventCtrl, agents, decision, &cancelAgent); err != nil {
 				return err
 			}
@@ -152,7 +152,7 @@ func (f *CLIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 			}
 			f.out.Terminal("%s%s[%s]:%s [PASS]\n", Bold, f.agentColor(e.AgentID), label, Reset)
 
-			decision := eventCtrl.Decide(eventSess.Chat, e)
+			decision := eventCtrl.Decide(eventSess.MainRoom, e)
 			if err := f.handleDecision(eventSess, eventCtrl, agents, decision, &cancelAgent); err != nil {
 				return err
 			}
@@ -169,7 +169,7 @@ func (f *CLIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 			f.out.AgentLabel(e.AgentID, f.agentColor(e.AgentID))
 			f.out.Print("[ERROR: %v]\n", e.Err)
 
-			decision := eventCtrl.Decide(eventSess.Chat, e)
+			decision := eventCtrl.Decide(eventSess.MainRoom, e)
 			if err := f.handleDecision(eventSess, eventCtrl, agents, decision, &cancelAgent); err != nil {
 				return err
 			}
@@ -246,7 +246,7 @@ func (f *CLIFrontend) readStdinLoop(floor *Floor, readyForInput chan struct{}) {
 		input, err := f.reader.ReadString('\n')
 		if err != nil {
 			f.out.Print("%s[Interrupted]%s\n", Dim, Reset)
-			sess.Chat.PostEvent(UserCommandEvent{Command: "/quit"})
+			sess.MainRoom.PostEvent(UserCommandEvent{Command: "/quit"})
 			return
 		}
 
@@ -262,7 +262,7 @@ func (f *CLIFrontend) readStdinLoop(floor *Floor, readyForInput chan struct{}) {
 			continue
 		}
 
-		sess.Chat.PostUserInput(text)
+		sess.MainRoom.PostUserInput(text)
 	}
 }
 

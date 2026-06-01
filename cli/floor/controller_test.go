@@ -29,7 +29,7 @@ func requireDecision(t *testing.T, d Decision, action string, agentID string) {
 
 func TestDecideUserMessageTriggersAlwaysAgent(t *testing.T) {
 	ctrl := NewController(NewFloor(twoAgentBlueprint()))
-	chat := NewChat()
+	chat := NewRoom("#test")
 
 	chat.Post(ChatMessage{From: "@user", Content: "hello"})
 	d := ctrl.Decide(chat, MessagePosted{Message: ChatMessage{From: "@user", Content: "hello"}})
@@ -39,7 +39,7 @@ func TestDecideUserMessageTriggersAlwaysAgent(t *testing.T) {
 
 func TestDecideMentionDelegation(t *testing.T) {
 	ctrl := NewController(NewFloor(twoAgentBlueprint()))
-	chat := NewChat()
+	chat := NewRoom("#test")
 
 	// User says hello → @data wakes
 	chat.Post(ChatMessage{From: "@user", Content: "hello"})
@@ -59,7 +59,7 @@ func TestDecideMentionDelegation(t *testing.T) {
 
 func TestDecideStackPopReturns(t *testing.T) {
 	ctrl := NewController(NewFloor(twoAgentBlueprint()))
-	chat := NewChat()
+	chat := NewRoom("#test")
 
 	// User → @data
 	chat.Post(ChatMessage{From: "@user", Content: "hello"})
@@ -81,7 +81,7 @@ func TestDecideStackPopReturns(t *testing.T) {
 
 func TestDecideStackPopToUser(t *testing.T) {
 	ctrl := NewController(NewFloor(twoAgentBlueprint()))
-	chat := NewChat()
+	chat := NewRoom("#test")
 
 	// User mentions @code? directly
 	chat.Post(ChatMessage{From: "@user", Content: "@code? what is this?"})
@@ -96,7 +96,7 @@ func TestDecideStackPopToUser(t *testing.T) {
 
 func TestDecidePassExcludesAgent(t *testing.T) {
 	ctrl := NewController(NewFloor(twoAgentBlueprint()))
-	chat := NewChat()
+	chat := NewRoom("#test")
 
 	// User says hello → @data wakes
 	chat.Post(ChatMessage{From: "@user", Content: "hello"})
@@ -117,7 +117,7 @@ func TestDecidePassFallsToNextAlwaysAgent(t *testing.T) {
 		},
 	}
 	ctrl := NewController(NewFloor(bp))
-	chat := NewChat()
+	chat := NewRoom("#test")
 
 	// User says hello → @a
 	chat.Post(ChatMessage{From: "@user", Content: "hello"})
@@ -144,24 +144,24 @@ func TestDecideClearCommand(t *testing.T) {
 	sess := f.DefaultSession()
 
 	// Add some messages
-	sess.Chat.Post(ChatMessage{From: "@user", Content: "hello"})
-	ctrl.Decide(sess.Chat, MessagePosted{Message: ChatMessage{From: "@user", Content: "hello"}})
+	sess.MainRoom.Post(ChatMessage{From: "@user", Content: "hello"})
+	ctrl.Decide(sess.MainRoom, MessagePosted{Message: ChatMessage{From: "@user", Content: "hello"}})
 
-	if len(sess.Chat.History()) == 0 {
+	if len(sess.MainRoom.History()) == 0 {
 		t.Fatal("expected messages before clear")
 	}
 
 	d := HandleCommand("/clear", sess, ctrl)
 	requireDecision(t, d, "clear", "")
 
-	if len(sess.Chat.History()) != 0 {
-		t.Errorf("expected empty after clear, got %d", len(sess.Chat.History()))
+	if len(sess.MainRoom.History()) != 0 {
+		t.Errorf("expected empty after clear, got %d", len(sess.MainRoom.History()))
 	}
 }
 
 func TestDecideAgentError(t *testing.T) {
 	ctrl := NewController(NewFloor(twoAgentBlueprint()))
-	chat := NewChat()
+	chat := NewRoom("#test")
 
 	d := ctrl.Decide(chat, AgentErrorEvent{
 		AgentID: "@data",
@@ -172,7 +172,7 @@ func TestDecideAgentError(t *testing.T) {
 
 func TestDecideMentionsUserPauses(t *testing.T) {
 	ctrl := NewController(NewFloor(twoAgentBlueprint()))
-	chat := NewChat()
+	chat := NewRoom("#test")
 
 	// User says hello → @data
 	chat.Post(ChatMessage{From: "@user", Content: "hello"})
@@ -198,7 +198,7 @@ func TestDecideUnknownCommand(t *testing.T) {
 
 func TestDecideToolInteractionsPreserved(t *testing.T) {
 	ctrl := NewController(NewFloor(twoAgentBlueprint()))
-	chat := NewChat()
+	chat := NewRoom("#test")
 
 	chat.Post(ChatMessage{From: "@user", Content: "do something"})
 	ctrl.Decide(chat, MessagePosted{Message: ChatMessage{From: "@user", Content: "do something"}})

@@ -77,7 +77,7 @@ func (c *Controller) agents() []blueprint.Agent {
 
 // Decide processes a ChatEvent and returns what to do next.
 // It reads messages from the Chat rather than storing them internally.
-func (c *Controller) Decide(chat *Chat, ev ChatEvent) Decision {
+func (c *Controller) Decide(chat *Room, ev ChatEvent) Decision {
 	switch e := ev.(type) {
 	case MessagePosted:
 		if e.Message.From == "@user" {
@@ -110,7 +110,7 @@ func (c *Controller) Decide(chat *Chat, ev ChatEvent) Decision {
 }
 
 // decideNext uses the turn-taking algorithm to pick the next agent.
-func (c *Controller) decideNext(chat *Chat) Decision {
+func (c *Controller) decideNext(chat *Room) Decision {
 	messages := chat.History()
 	if len(messages) == 0 {
 		return Decision{Action: "wait"}
@@ -273,7 +273,7 @@ func HandleCommand(command string, sess *Session, ctrl *Controller) Decision {
 		return Decision{Action: "stop"}
 
 	case "/clear":
-		sess.Chat.Clear()
+		sess.MainRoom.Clear()
 		ctrl.CallStack = nil
 		ctrl.passedAgents = make(map[string]bool)
 		return Decision{Action: "clear"}
@@ -355,7 +355,7 @@ func handleRoomCommand(args []string, sess *Session, ctrl *Controller) Decision 
 
 	// Post initial prompt to room if provided
 	if prompt != "" {
-		room.Chat.Post(ChatMessage{From: "@user", Content: prompt})
+		room.Post(ChatMessage{From: "@user", Content: prompt})
 	}
 
 	return Decision{Action: "room_created", Info: fmt.Sprintf("Created room %s with %s", roomID, strings.Join(agentIDs, ", "))}

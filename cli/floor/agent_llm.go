@@ -36,7 +36,7 @@ func (a *LLMAgent) Run(ctx context.Context, sess *Session) error {
 	maxIterations := 10
 
 	// Emit agent label before first token
-	sess.Chat.PostStream(AgentLabel{AgentID: a.agent.ID})
+	sess.MainRoom.PostStream(AgentLabel{AgentID: a.agent.ID})
 
 	for i := 0; i < maxIterations; i++ {
 		// Check for cancellation
@@ -47,10 +47,10 @@ func (a *LLMAgent) Run(ctx context.Context, sess *Session) error {
 		}
 
 		result, err := client.ChatStream(a.agent.Model, messages, a.agent.Temperature, tools, func(token string) {
-			sess.Chat.PostStream(TokenStreamed{AgentID: a.agent.ID, Token: token})
+			sess.MainRoom.PostStream(TokenStreamed{AgentID: a.agent.ID, Token: token})
 		})
 		if err != nil {
-			sess.Chat.PostEvent(AgentErrorEvent{
+			sess.MainRoom.PostEvent(AgentErrorEvent{
 				AgentID: a.agent.ID,
 				Err:     err,
 				Partial: fullResponse.String(),
@@ -68,7 +68,7 @@ func (a *LLMAgent) Run(ctx context.Context, sess *Session) error {
 		// Execute tool calls
 		expanded := a.expandToolCalls(sess, result.ToolCalls)
 		for _, ex := range expanded {
-			sess.Chat.PostStream(ToolCallResult{AgentID: a.agent.ID, ID: ex.Call.ID, Title: ex.Title, Output: ex.Output})
+			sess.MainRoom.PostStream(ToolCallResult{AgentID: a.agent.ID, ID: ex.Call.ID, Title: ex.Title, Output: ex.Output})
 
 			interactions = append(interactions, ToolInteraction{
 				Command: ex.Title,
@@ -91,12 +91,12 @@ func (a *LLMAgent) Run(ctx context.Context, sess *Session) error {
 
 	// Check for [PASS] or empty response (LLM returned nothing)
 	if strings.Contains(strings.ToLower(content), "[pass]") || (strings.TrimSpace(content) == "" && len(interactions) == 0) {
-		sess.Chat.PostEvent(AgentPassedEvent{AgentID: a.agent.ID})
+		sess.MainRoom.PostEvent(AgentPassedEvent{AgentID: a.agent.ID})
 		return nil
 	}
 
 	// Post the final message to chat
-	sess.Chat.Post(ChatMessage{
+	sess.MainRoom.Post(ChatMessage{
 		From:             a.agent.ID,
 		Content:          content,
 		ToolInteractions: interactions,
@@ -117,7 +117,7 @@ func (a *LLMAgent) buildContext(sess *Session) []llm.Message {
 	if ac := sess.GetAgentContext(a.agent.ID); ac != nil {
 		chatMsgs = ac.Entries()
 	} else {
-		history := sess.Chat.History()
+		history := sess.MainRoom.History()
 		chatMsgs = make([]*ChatMessage, len(history))
 		for i := range history {
 			chatMsgs[i] = &history[i]
@@ -267,7 +267,7 @@ func (a *LLMAgent) dispatchFurnitureCall(sess *Session, tc llm.ToolCall, furnitu
 		if i > 0 {
 			callID = fmt.Sprintf("%s_%d", tc.ID, i)
 		}
-		sess.Chat.PostStream(ToolCallStarted{AgentID: a.agent.ID, ID: callID, Title: title})
+		sess.MainRoom.PostStream(ToolCallStarted{AgentID: a.agent.ID, ID: callID, Title: title})
 
 		callResult, err := f.Call(toolName, args)
 		var output string

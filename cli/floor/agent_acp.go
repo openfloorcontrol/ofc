@@ -26,7 +26,7 @@ func (a *ACPAgent) AgentID() string { return a.agent.ID }
 func (a *ACPAgent) Run(ctx context.Context, sess *Session) error {
 	subproc, ok := sess.Floor.ACPSubprocesses[a.agent.ID]
 	if !ok {
-		sess.Chat.PostEvent(AgentErrorEvent{
+		sess.MainRoom.PostEvent(AgentErrorEvent{
 			AgentID: a.agent.ID,
 			Err:     fmt.Errorf("no ACP subprocess for agent %s", a.agent.ID),
 		})
@@ -38,27 +38,27 @@ func (a *ACPAgent) Run(ctx context.Context, sess *Session) error {
 
 	// Wire ACP callbacks to stream events
 	client.OnToken = func(token string) {
-		sess.Chat.PostStream(TokenStreamed{AgentID: a.agent.ID, Token: token})
+		sess.MainRoom.PostStream(TokenStreamed{AgentID: a.agent.ID, Token: token})
 	}
 	client.OnToolCall = func(id, title string) {
-		sess.Chat.PostStream(ToolCallStarted{AgentID: a.agent.ID, ID: id, Title: title})
+		sess.MainRoom.PostStream(ToolCallStarted{AgentID: a.agent.ID, ID: id, Title: title})
 	}
 	client.OnToolOutput = func(id, output string) {
-		sess.Chat.PostStream(ToolCallOutput{AgentID: a.agent.ID, ID: id, Output: output})
+		sess.MainRoom.PostStream(ToolCallOutput{AgentID: a.agent.ID, ID: id, Output: output})
 	}
 	client.OnToolResult = func(id, title, output string) {
-		sess.Chat.PostStream(ToolCallResult{AgentID: a.agent.ID, ID: id, Title: title, Output: output})
+		sess.MainRoom.PostStream(ToolCallResult{AgentID: a.agent.ID, ID: id, Title: title, Output: output})
 	}
 
 	// Emit agent label before first token
-	sess.Chat.PostStream(AgentLabel{AgentID: a.agent.ID})
+	sess.MainRoom.PostStream(AgentLabel{AgentID: a.agent.ID})
 
 	blocks := a.buildACPContext(sess)
 	sess.Floor.debug("ACP prompt for %s (%d blocks)", a.agent.ID, len(blocks))
 
 	stopReason, err := subproc.Prompt(ctx, blocks)
 	if err != nil {
-		sess.Chat.PostEvent(AgentErrorEvent{
+		sess.MainRoom.PostEvent(AgentErrorEvent{
 			AgentID: a.agent.ID,
 			Err:     fmt.Errorf("ACP prompt failed: %w", err),
 			Partial: client.ResponseText.String(),
@@ -80,12 +80,12 @@ func (a *ACPAgent) Run(ctx context.Context, sess *Session) error {
 
 	// Check for [PASS]
 	if strings.Contains(strings.ToLower(content), "[pass]") {
-		sess.Chat.PostEvent(AgentPassedEvent{AgentID: a.agent.ID})
+		sess.MainRoom.PostEvent(AgentPassedEvent{AgentID: a.agent.ID})
 		return nil
 	}
 
 	// Post the final message to chat
-	sess.Chat.Post(ChatMessage{
+	sess.MainRoom.Post(ChatMessage{
 		From:             a.agent.ID,
 		Content:          content,
 		ToolInteractions: interactions,
@@ -109,7 +109,7 @@ func (a *ACPAgent) buildACPContext(sess *Session) []acpsdk.ContentBlock {
 		isFirstPrompt = (ac.Len() == len(chatMsgs)) // all entries are new = first prompt
 	} else {
 		// Fallback for contexts without AgentContext
-		history := sess.Chat.History()
+		history := sess.MainRoom.History()
 		chatMsgs = make([]*ChatMessage, len(history))
 		for i := range history {
 			chatMsgs[i] = &history[i]

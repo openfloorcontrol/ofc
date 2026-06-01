@@ -51,7 +51,7 @@ func RunOnce(cfg RunOnceConfig) (*RunOnceResult, error) {
 	sess := floor.DefaultSession()
 
 	// Post user input
-	sess.Chat.Post(ChatMessage{From: "@user", Content: cfg.Input})
+	sess.MainRoom.Post(ChatMessage{From: "@user", Content: cfg.Input})
 
 	// Build and run the agent synchronously
 	var agent Agent
@@ -67,7 +67,7 @@ func RunOnce(cfg RunOnceConfig) (*RunOnceResult, error) {
 	}
 
 	// Find the agent's response in chat history
-	history := sess.Chat.History()
+	history := sess.MainRoom.History()
 	for i := len(history) - 1; i >= 0; i-- {
 		if history[i].From == cfg.AgentID {
 			return &RunOnceResult{

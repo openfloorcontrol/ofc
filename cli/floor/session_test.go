@@ -58,9 +58,9 @@ func TestSessionChatAndAgentContextWiring(t *testing.T) {
 	sess := f.DefaultSession()
 
 	// Drain events so Post doesn't block.
-	go func() { for range sess.Chat.Events() {} }()
+	go func() { for range sess.MainRoom.Events() {} }()
 
-	sess.Chat.Post(ChatMessage{From: "@user", Content: "ping"})
+	sess.MainRoom.Post(ChatMessage{From: "@user", Content: "ping"})
 
 	if sess.GetAgentContext("@a").Len() != 1 {
 		t.Errorf("@a context: expected 1 entry, got %d", sess.GetAgentContext("@a").Len())
@@ -78,11 +78,11 @@ func TestMultipleSessionsOnFloorAreIndependent(t *testing.T) {
 	s2 := NewSession("alt", f)
 	f.Sessions["alt"] = s2
 
-	go func() { for range s1.Chat.Events() {} }()
-	go func() { for range s2.Chat.Events() {} }()
+	go func() { for range s1.MainRoom.Events() {} }()
+	go func() { for range s2.MainRoom.Events() {} }()
 
-	s1.Chat.Post(ChatMessage{From: "@user", Content: "in session 1"})
-	s2.Chat.Post(ChatMessage{From: "@user", Content: "in session 2"})
+	s1.MainRoom.Post(ChatMessage{From: "@user", Content: "in session 1"})
+	s2.MainRoom.Post(ChatMessage{From: "@user", Content: "in session 2"})
 
 	// Each session's agents see only their own session's traffic.
 	if s1.GetAgentContext("@a").Len() != 1 {
@@ -124,17 +124,17 @@ func TestSessionsShareFloorResources(t *testing.T) {
 func TestSessionForRoomReturnsShallowView(t *testing.T) {
 	f := NewFloor(sessionTestBlueprint())
 	sess := f.DefaultSession()
-	go func() { for range sess.Chat.Events() {} }()
+	go func() { for range sess.MainRoom.Events() {} }()
 
 	room, err := sess.CreateRoom("#r", "@user", []string{"@a"}, "")
 	if err != nil {
 		t.Fatalf("CreateRoom failed: %v", err)
 	}
-	go func() { for range room.Chat.Events() {} }()
+	go func() { for range room.Events() {} }()
 
 	view := sess.ForRoom(room)
-	if view.Chat != room.Chat {
-		t.Error("view.Chat should be room.Chat")
+	if view.MainRoom != room {
+		t.Error("view.MainRoom should be room")
 	}
 	if view.Floor != sess.Floor {
 		t.Error("view should share Floor with parent")

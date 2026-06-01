@@ -165,7 +165,7 @@ func (f *Floor) Start(renderInfo func(string)) error {
 
 	// Register floor API against the default session's chat.
 	// (In v1 the API is session-scoped to default; multi-session URL paths come later.)
-	f.APIServer.RegisterFloorAPI(f.DefaultSession().Chat, f.Blueprint, f.Furniture, f.WorkspacePath)
+	f.APIServer.RegisterFloorAPI(f.DefaultSession().MainRoom, f.Blueprint, f.Furniture, f.WorkspacePath)
 
 	// 2. Sandbox
 	var sandboxWS *blueprint.Workstation
@@ -311,7 +311,7 @@ func (f *Floor) AddFurniture(fd blueprint.FurnitureDef) error {
 
 	// Wrap so all Call() invocations emit FurnitureUpdated events on the
 	// default session's chat. (v1: one session; later, per-session.)
-	wrapped := &observableFurniture{inner: fur, chat: f.DefaultSession().Chat}
+	wrapped := &observableFurniture{inner: fur, chat: f.DefaultSession().MainRoom}
 	f.Furniture[fd.Name] = wrapped
 
 	// Register MCP endpoints on the running API server.
@@ -496,7 +496,7 @@ func (f *Floor) spawnACPSubprocess(agent blueprint.Agent, renderInfo func(string
 // on mutating Call()s. This covers all paths: LLM agents, ACP/MCP, and web UI.
 type observableFurniture struct {
 	inner furniture.Furniture
-	chat  *Chat
+	chat  *Room
 }
 
 // readOnlyTools are tool names that don't mutate state (no need to notify).

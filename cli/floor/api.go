@@ -211,7 +211,7 @@ func (s *APIServer) BaseURL() string {
 
 // RegisterFloorAPI adds message and furniture endpoints for the floor.
 // workspacePath is a func so it can be resolved lazily (sandbox may start after registration).
-func (s *APIServer) RegisterFloorAPI(chat *Chat, bp *blueprint.Blueprint, furnitureMap map[string]furniture.Furniture, workspacePath func() string) {
+func (s *APIServer) RegisterFloorAPI(chat *Room, bp *blueprint.Blueprint, furnitureMap map[string]furniture.Furniture, workspacePath func() string) {
 	s.echo.POST("/api/v1/messages", handlePostMessage(chat))
 	s.echo.GET("/api/v1/messages", handleGetMessages(chat))
 	s.echo.GET("/api/v1/events", handleSSEEvents(chat))
@@ -224,7 +224,7 @@ func (s *APIServer) RegisterFloorAPI(chat *Chat, bp *blueprint.Blueprint, furnit
 // POST /api/v1/messages — inject a message into the floor chat.
 // If from is empty or "@user", routes through PostUserInput (handles slash commands).
 // Otherwise posts as the specified sender (for external agents/webhooks).
-func handlePostMessage(chat *Chat) echo.HandlerFunc {
+func handlePostMessage(chat *Room) echo.HandlerFunc {
 	type request struct {
 		From    string `json:"from"`
 		Content string `json:"content"`
@@ -254,7 +254,7 @@ func handlePostMessage(chat *Chat) echo.HandlerFunc {
 }
 
 // GET /api/v1/messages — return chat history as JSON.
-func handleGetMessages(chat *Chat) echo.HandlerFunc {
+func handleGetMessages(chat *Room) echo.HandlerFunc {
 	type jsonMessage struct {
 		From             string            `json:"from"`
 		Content          string            `json:"content"`
@@ -483,7 +483,7 @@ func handleServeFile(furnitureMap map[string]furniture.Furniture, workspacePath 
 }
 
 // GET /api/v1/events — SSE stream of chat events.
-func handleSSEEvents(chat *Chat) echo.HandlerFunc {
+func handleSSEEvents(chat *Room) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		c.Response().Header().Set("Content-Type", "text/event-stream")
 		c.Response().Header().Set("Cache-Control", "no-cache")

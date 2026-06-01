@@ -21,7 +21,7 @@ func testBlueprint() *blueprint.Blueprint {
 func TestRoomCreation(t *testing.T) {
 	bp := testBlueprint()
 	floor := NewFloor(bp)
-	defer floor.DefaultSession().Chat.Close()
+	defer floor.DefaultSession().MainRoom.Close()
 
 	room, err := floor.DefaultSession().CreateRoom("#analysis", "@user", []string{"@data", "@code"}, "analyze the data")
 	if err != nil {
@@ -56,7 +56,7 @@ func TestRoomCreation(t *testing.T) {
 func TestRoomDuplicateCreation(t *testing.T) {
 	bp := testBlueprint()
 	floor := NewFloor(bp)
-	defer floor.DefaultSession().Chat.Close()
+	defer floor.DefaultSession().MainRoom.Close()
 
 	_, err := floor.DefaultSession().CreateRoom("#analysis", "@user", []string{"@data"}, "")
 	if err != nil {
@@ -72,7 +72,7 @@ func TestRoomDuplicateCreation(t *testing.T) {
 func TestRoomAgentAlreadyInRoom(t *testing.T) {
 	bp := testBlueprint()
 	floor := NewFloor(bp)
-	defer floor.DefaultSession().Chat.Close()
+	defer floor.DefaultSession().MainRoom.Close()
 
 	_, err := floor.DefaultSession().CreateRoom("#room1", "@user", []string{"@data"}, "")
 	if err != nil {
@@ -91,10 +91,10 @@ func TestRoomIsolation(t *testing.T) {
 	floor := NewFloor(bp)
 
 	// Drain main floor events so Post doesn't block
-	go func() { for range floor.DefaultSession().Chat.Events() {} }()
+	go func() { for range floor.DefaultSession().MainRoom.Events() {} }()
 
 	// Post a message on main floor before creating room
-	floor.DefaultSession().Chat.Post(ChatMessage{From: "@user", Content: "hello everyone"})
+	floor.DefaultSession().MainRoom.Post(ChatMessage{From: "@user", Content: "hello everyone"})
 
 	// All agents should see it
 	if floor.DefaultSession().AgentContexts["@data"].Len() != 1 {
@@ -111,10 +111,10 @@ func TestRoomIsolation(t *testing.T) {
 	}
 
 	// Drain room events so Post doesn't block
-	go func() { for range room.Chat.Events() {} }()
+	go func() { for range room.Events() {} }()
 
 	// Post to main floor — @designer sees it, @data and @code do NOT
-	floor.DefaultSession().Chat.Post(ChatMessage{From: "@user", Content: "main floor message"})
+	floor.DefaultSession().MainRoom.Post(ChatMessage{From: "@user", Content: "main floor message"})
 
 	// @designer should have 2 entries (original + new)
 	if floor.DefaultSession().AgentContexts["@designer"].Len() != 2 {
@@ -131,7 +131,7 @@ func TestRoomIsolation(t *testing.T) {
 	}
 
 	// Post to room — only room agents see it
-	room.Chat.Post(ChatMessage{From: "@user", Content: "room message"})
+	room.Post(ChatMessage{From: "@user", Content: "room message"})
 
 	// @data should now see the room message
 	dataEntries = floor.DefaultSession().AgentContexts["@data"].Entries()
@@ -157,7 +157,7 @@ func TestRoomIsolation(t *testing.T) {
 func TestRoomAgentContext(t *testing.T) {
 	bp := testBlueprint()
 	floor := NewFloor(bp)
-	go func() { for range floor.DefaultSession().Chat.Events() {} }()
+	go func() { for range floor.DefaultSession().MainRoom.Events() {} }()
 
 	_, err := floor.DefaultSession().CreateRoom("#analysis", "@user", []string{"@data", "@code"}, "analyze")
 	if err != nil {
@@ -180,16 +180,16 @@ func TestRoomAgentContext(t *testing.T) {
 func TestRoomClose(t *testing.T) {
 	bp := testBlueprint()
 	floor := NewFloor(bp)
-	go func() { for range floor.DefaultSession().Chat.Events() {} }()
+	go func() { for range floor.DefaultSession().MainRoom.Events() {} }()
 
 	room, err := floor.DefaultSession().CreateRoom("#analysis", "@user", []string{"@data", "@code"}, "analyze")
 	if err != nil {
 		t.Fatalf("CreateRoom failed: %v", err)
 	}
-	go func() { for range room.Chat.Events() {} }()
+	go func() { for range room.Events() {} }()
 
 	// Post a message in the room
-	room.Chat.Post(ChatMessage{From: "@data", Content: "analysis complete"})
+	room.Post(ChatMessage{From: "@data", Content: "analysis complete"})
 
 	// Close the room
 	if err := floor.DefaultSession().CloseRoom("#analysis"); err != nil {
@@ -217,7 +217,7 @@ func TestRoomClose(t *testing.T) {
 	}
 
 	// Main floor should have summary message
-	history := floor.DefaultSession().Chat.History()
+	history := floor.DefaultSession().MainRoom.History()
 	foundSummary := false
 	for _, m := range history {
 		if m.From == "@system" && m.Content != "" {
@@ -232,13 +232,13 @@ func TestRoomClose(t *testing.T) {
 func TestRoomCloseAgentsReceiveMainFloorMessages(t *testing.T) {
 	bp := testBlueprint()
 	floor := NewFloor(bp)
-	go func() { for range floor.DefaultSession().Chat.Events() {} }()
+	go func() { for range floor.DefaultSession().MainRoom.Events() {} }()
 
 	room, err := floor.DefaultSession().CreateRoom("#analysis", "@user", []string{"@data"}, "analyze")
 	if err != nil {
 		t.Fatalf("CreateRoom failed: %v", err)
 	}
-	go func() { for range room.Chat.Events() {} }()
+	go func() { for range room.Events() {} }()
 
 	// Close the room
 	if err := floor.DefaultSession().CloseRoom("#analysis"); err != nil {
@@ -246,7 +246,7 @@ func TestRoomCloseAgentsReceiveMainFloorMessages(t *testing.T) {
 	}
 
 	// Post to main floor after room is closed
-	floor.DefaultSession().Chat.Post(ChatMessage{From: "@user", Content: "welcome back"})
+	floor.DefaultSession().MainRoom.Post(ChatMessage{From: "@user", Content: "welcome back"})
 
 	// @data should now receive main floor messages again
 	dataEntries := floor.DefaultSession().AgentContexts["@data"].Entries()
@@ -265,18 +265,18 @@ func TestSessionForRoom(t *testing.T) {
 	bp := testBlueprint()
 	floor := NewFloor(bp)
 	sess := floor.DefaultSession()
-	go func() { for range sess.Chat.Events() {} }()
+	go func() { for range sess.MainRoom.Events() {} }()
 
 	room, err := sess.CreateRoom("#analysis", "@user", []string{"@data"}, "analyze")
 	if err != nil {
 		t.Fatalf("CreateRoom failed: %v", err)
 	}
-	go func() { for range room.Chat.Events() {} }()
+	go func() { for range room.Events() {} }()
 
 	// ForRoom should return a session view with room's Chat,
 	// sharing Floor (and thus Sandbox/Blueprint via Floor) with the parent.
 	view := sess.ForRoom(room)
-	if view.Chat != room.Chat {
+	if view.MainRoom != room {
 		t.Error("ForRoom Chat should be room's Chat")
 	}
 	if view.Floor != floor {
@@ -290,14 +290,14 @@ func TestSessionForRoom(t *testing.T) {
 	}
 
 	// Post via view should go to room Chat, not main session Chat
-	view.Chat.Post(ChatMessage{From: "@data", Content: "room response"})
+	view.MainRoom.Post(ChatMessage{From: "@data", Content: "room response"})
 
-	roomHistory := room.Chat.History()
+	roomHistory := room.History()
 	if len(roomHistory) != 1 || roomHistory[0].Content != "room response" {
 		t.Errorf("expected room history to contain 'room response', got %v", roomHistory)
 	}
 
-	mainHistory := sess.Chat.History()
+	mainHistory := sess.MainRoom.History()
 	for _, m := range mainHistory {
 		if m.Content == "room response" {
 			t.Error("room response should NOT appear in main session history")
@@ -308,7 +308,7 @@ func TestSessionForRoom(t *testing.T) {
 func TestRoomControllerFiltersAgents(t *testing.T) {
 	bp := testBlueprint()
 	floor := NewFloor(bp)
-	defer floor.DefaultSession().Chat.Close()
+	defer floor.DefaultSession().MainRoom.Close()
 
 	room, err := floor.DefaultSession().CreateRoom("#analysis", "@user", []string{"@data", "@code"}, "analyze")
 	if err != nil {
@@ -340,18 +340,18 @@ func TestRoomMissedMainFloorMessages(t *testing.T) {
 	// This is by design — "just like people."
 	bp := testBlueprint()
 	floor := NewFloor(bp)
-	go func() { for range floor.DefaultSession().Chat.Events() {} }()
+	go func() { for range floor.DefaultSession().MainRoom.Events() {} }()
 
 	room, err := floor.DefaultSession().CreateRoom("#analysis", "@user", []string{"@data"}, "analyze")
 	if err != nil {
 		t.Fatalf("CreateRoom failed: %v", err)
 	}
-	go func() { for range room.Chat.Events() {} }()
+	go func() { for range room.Events() {} }()
 
 	// Post several messages to main floor while @data is in room
-	floor.DefaultSession().Chat.Post(ChatMessage{From: "@user", Content: "msg1"})
-	floor.DefaultSession().Chat.Post(ChatMessage{From: "@designer", Content: "msg2"})
-	floor.DefaultSession().Chat.Post(ChatMessage{From: "@user", Content: "msg3"})
+	floor.DefaultSession().MainRoom.Post(ChatMessage{From: "@user", Content: "msg1"})
+	floor.DefaultSession().MainRoom.Post(ChatMessage{From: "@designer", Content: "msg2"})
+	floor.DefaultSession().MainRoom.Post(ChatMessage{From: "@user", Content: "msg3"})
 
 	// Close room — @data returns
 	floor.DefaultSession().CloseRoom("#analysis")
@@ -385,7 +385,7 @@ func TestTryAutoCloseRoom(t *testing.T) {
 	ctrl.RoomBound["@code"] = true
 
 	// Post a message so room has some history
-	room.Chat.Post(ChatMessage{From: "@data", Content: "done with the analysis"})
+	room.Post(ChatMessage{From: "@data", Content: "done with the analysis"})
 
 	// Non-room event — should not close anything
 	info := TryAutoCloseRoom("", Decision{Action: "wait"}, floor.DefaultSession(), ctrl)
@@ -416,7 +416,7 @@ func TestTryAutoCloseRoom(t *testing.T) {
 	}
 
 	// Summary should be posted to main floor
-	mainHistory := floor.DefaultSession().Chat.History()
+	mainHistory := floor.DefaultSession().MainRoom.History()
 	found := false
 	for _, m := range mainHistory {
 		if m.From == "@system" && strings.Contains(m.Content, "#work") {

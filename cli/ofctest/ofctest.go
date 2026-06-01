@@ -57,7 +57,7 @@ func runFloor(t *testing.T, bp *blueprint.Blueprint, prompt string) *FloorResult
 	sess := f.DefaultSession()
 
 	// Post initial prompt
-	sess.Chat.PostUserInput(prompt)
+	sess.MainRoom.PostUserInput(prompt)
 
 	result := &FloorResult{bp: bp}
 	unified := sess.StartUnified()
@@ -87,7 +87,7 @@ func runFloor(t *testing.T, bp *blueprint.Blueprint, prompt string) *FloorResult
 		// Drive the controller
 		switch ev.(type) {
 		case floor.MessagePosted, floor.AgentPassedEvent, floor.AgentErrorEvent:
-			decision := eventCtrl.Decide(eventSess.Chat, ev)
+			decision := eventCtrl.Decide(eventSess.MainRoom, ev)
 
 			switch decision.Action {
 			case "trigger":
@@ -103,12 +103,12 @@ func runFloor(t *testing.T, bp *blueprint.Blueprint, prompt string) *FloorResult
 			case "wait":
 				if roomID == "" {
 					// One-shot: agents are done
-					result.Messages = sess.Chat.History()
+					result.Messages = sess.MainRoom.History()
 					return result
 				}
 
 			case "stop":
-				result.Messages = sess.Chat.History()
+				result.Messages = sess.MainRoom.History()
 				return result
 			}
 
@@ -121,7 +121,7 @@ func runFloor(t *testing.T, bp *blueprint.Blueprint, prompt string) *FloorResult
 		}
 	}
 
-	result.Messages = sess.Chat.History()
+	result.Messages = sess.MainRoom.History()
 	return result
 }
 

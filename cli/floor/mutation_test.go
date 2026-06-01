@@ -153,12 +153,12 @@ func TestAddAgentContextPropagationToChat(t *testing.T) {
 	// the new agent's context.
 	f := NewFloor(&blueprint.Blueprint{Name: "test"})
 	sess := f.DefaultSession()
-	go func() { for range sess.Chat.Events() {} }()
+	go func() { for range sess.MainRoom.Events() {} }()
 
 	if err := f.AddAgent(blueprint.Agent{ID: "@new", Activation: "always"}, func(string) {}); err != nil {
 		t.Fatalf("AddAgent failed: %v", err)
 	}
-	sess.Chat.Post(ChatMessage{From: "@user", Content: "hello"})
+	sess.MainRoom.Post(ChatMessage{From: "@user", Content: "hello"})
 
 	ctx := sess.GetAgentContext("@new")
 	if ctx == nil {
@@ -174,7 +174,7 @@ func TestRemoveAgentStopsContextUpdates(t *testing.T) {
 	// reach the removed agent's (former) context.
 	f := NewFloor(mutationTestBlueprint())
 	sess := f.DefaultSession()
-	go func() { for range sess.Chat.Events() {} }()
+	go func() { for range sess.MainRoom.Events() {} }()
 
 	// Grab a reference to @a's context before removing
 	ctxA := sess.GetAgentContext("@a")
@@ -186,7 +186,7 @@ func TestRemoveAgentStopsContextUpdates(t *testing.T) {
 		t.Fatalf("RemoveAgent failed: %v", err)
 	}
 
-	sess.Chat.Post(ChatMessage{From: "@user", Content: "after remove"})
+	sess.MainRoom.Post(ChatMessage{From: "@user", Content: "after remove"})
 
 	// @a's old context shouldn't see the new message.
 	for _, e := range ctxA.Entries() {

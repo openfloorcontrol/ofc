@@ -25,10 +25,10 @@ func (a *testAgent) AgentID() string { return a.id }
 func (a *testAgent) Run(ctx context.Context, sess *Session) error {
 	resp := a.response(sess)
 	if resp == "" {
-		sess.Chat.PostEvent(AgentPassedEvent{AgentID: a.id})
+		sess.MainRoom.PostEvent(AgentPassedEvent{AgentID: a.id})
 		return nil
 	}
-	sess.Chat.Post(ChatMessage{From: a.id, Content: resp})
+	sess.MainRoom.Post(ChatMessage{From: a.id, Content: resp})
 	return nil
 }
 
@@ -39,18 +39,18 @@ func testLoop(ctx context.Context, sess *Session, ctrl *Controller, agents map[s
 		select {
 		case <-ctx.Done():
 			return
-		case ev, ok := <-sess.Chat.Events():
+		case ev, ok := <-sess.MainRoom.Events():
 			if !ok {
 				return
 			}
 			var decision Decision
 			switch e := ev.(type) {
 			case MessagePosted:
-				decision = ctrl.Decide(sess.Chat, e)
+				decision = ctrl.Decide(sess.MainRoom, e)
 			case AgentPassedEvent:
-				decision = ctrl.Decide(sess.Chat, e)
+				decision = ctrl.Decide(sess.MainRoom, e)
 			case AgentErrorEvent:
-				decision = ctrl.Decide(sess.Chat, e)
+				decision = ctrl.Decide(sess.MainRoom, e)
 			default:
 				continue
 			}
@@ -75,7 +75,7 @@ func setupTestFloor(t *testing.T, bp *blueprint.Blueprint, agents map[string]Age
 	sess := floor.DefaultSession()
 
 	api := NewAPIServer()
-	api.RegisterFloorAPI(sess.Chat, bp, nil, func() string { return "" })
+	api.RegisterFloorAPI(sess.MainRoom, bp, nil, func() string { return "" })
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start API server: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestIntegrationPostMessageTriggersAgent(t *testing.T) {
 		"@echo": &testAgent{
 			id: "@echo",
 			response: func(sess *Session) string {
-				history := sess.Chat.History()
+				history := sess.MainRoom.History()
 				last := history[len(history)-1]
 				return "echo: " + last.Content
 			},
@@ -330,7 +330,7 @@ func TestIntegrationWebhookFromExternalAgent(t *testing.T) {
 		"@bot": &testAgent{
 			id: "@bot",
 			response: func(sess *Session) string {
-				history := sess.Chat.History()
+				history := sess.MainRoom.History()
 				last := history[len(history)-1]
 				return fmt.Sprintf("got message from %s: %s", last.From, last.Content)
 			},
@@ -477,7 +477,7 @@ func TestIntegrationMultipleMessages(t *testing.T) {
 		"@echo": &testAgent{
 			id: "@echo",
 			response: func(sess *Session) string {
-				history := sess.Chat.History()
+				history := sess.MainRoom.History()
 				last := history[len(history)-1]
 				return "echo: " + last.Content
 			},
