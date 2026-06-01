@@ -41,6 +41,32 @@ func (m *MemoryStore) getSession(sessionID string) *memSession {
 	return s
 }
 
+// appendRaw inserts an event with its Seq and Time pre-assigned. Used
+// by backed implementations (e.g. JSONLStore) during load-time replay
+// where the stored event already has its metadata. nextSeq is advanced
+// past the inserted Seq.
+//
+// Locking: this is intended for single-threaded replay before the store
+// goes live. Callers (load-time only) hold m.mu themselves if needed.
+func (m *MemoryStore) appendRaw(sessionID string, ev StoredEvent) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s := m.getSession(sessionID)
+	s.events = append(s.events, ev)
+	if ev.Seq > s.nextSeq {
+		s.nextSeq = ev.Seq
+	}
+}
+
+// addRef records a visibility ref from an agent to an event seq.
+// Companion to appendRaw for load-time replay.
+func (m *MemoryStore) addRef(sessionID, agentID string, eventSeq uint64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s := m.getSession(sessionID)
+	s.agentRefs[agentID] = append(s.agentRefs[agentID], eventSeq)
+}
+
 // Append implements SessionStore.
 func (m *MemoryStore) Append(opts AppendOpts) (StoredEvent, error) {
 	m.mu.Lock()

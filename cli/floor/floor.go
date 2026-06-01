@@ -264,7 +264,8 @@ func (f *Floor) Start(renderInfo func(string)) error {
 	return nil
 }
 
-// Stop tears down ACP sessions, furniture, API server, and sandbox.
+// Stop tears down ACP sessions, furniture, API server, sandbox, and
+// closes the store if it implements io.Closer (e.g. JSONLStore).
 func (f *Floor) Stop() {
 	for id, sub := range f.ACPSubprocesses {
 		f.debug("closing ACP subprocess for %s", id)
@@ -283,6 +284,9 @@ func (f *Floor) Stop() {
 	}
 	for _, sess := range f.Sessions {
 		sess.Close()
+	}
+	if closer, ok := f.Store.(io.Closer); ok {
+		closer.Close()
 	}
 }
 

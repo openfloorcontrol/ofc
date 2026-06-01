@@ -20,6 +20,7 @@ var (
 	webPort       int
 	webHostname   string
 	useJSON       bool
+	sessionLog    string
 )
 
 var runCmd = &cobra.Command{
@@ -56,6 +57,10 @@ func runCLI(bp *blueprint.Blueprint, initialPrompt string) {
 	frontend := floor.NewCLIFrontend(logFile, debug, cm)
 
 	f := floor.NewFloor(bp)
+	if err := applySessionLog(f); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 	if debug {
 		f.DebugFunc = frontend.Debug
 	}
@@ -88,6 +93,10 @@ func runTUI(bp *blueprint.Blueprint, initialPrompt string) {
 	frontend, model := floor.NewTUIFrontend(logFile, debug, cm)
 
 	f := floor.NewFloor(bp)
+	if err := applySessionLog(f); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 	if debug {
 		f.DebugFunc = func(msg string) {
 			frontend.Render(floor.SystemInfo{Text: "[debug] " + msg})
@@ -135,6 +144,10 @@ func runJSON(bp *blueprint.Blueprint, initialPrompt string) {
 	frontend := floor.NewJSONFrontend(logFile, debug)
 
 	f := floor.NewFloor(bp)
+	if err := applySessionLog(f); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 	if debug {
 		f.DebugFunc = frontend.Debug
 	}
@@ -179,4 +192,20 @@ func init() {
 	runCmd.Flags().IntVar(&webPort, "port", 8080, "Port for web UI (used with --web)")
 	runCmd.Flags().StringVar(&webHostname, "hostname", "", "External URL for web UI (e.g. https://myhost.dev), overrides localhost in printed URL")
 	runCmd.Flags().BoolVar(&useJSON, "json", false, "Output events as JSONL to stdout")
+	runCmd.Flags().StringVar(&sessionLog, "session-log", "", "Persist session events to a JSONL file (resume by pointing at an existing file)")
+}
+
+// applySessionLog overrides Floor.Store with a JSONLStore if --session-log
+// was provided. If the file exists, its events are replayed into memory
+// on open, restoring the session.
+func applySessionLog(f *floor.Floor) error {
+	if sessionLog == "" {
+		return nil
+	}
+	store, err := floor.NewJSONLStore(sessionLog)
+	if err != nil {
+		return fmt.Errorf("session-log: %w", err)
+	}
+	f.Store = store
+	return nil
 }
