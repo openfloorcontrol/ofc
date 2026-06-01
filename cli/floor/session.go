@@ -5,32 +5,31 @@ import (
 )
 
 // MainRoomID is the ID of the default room auto-created in every session.
-// It functions like the "main chat" did before Chat/Room unification —
-// any agent in the session participates by default; turn-taking uses the
-// session's main Controller (not a per-room one).
+// Any session agent participates by default; turn-taking uses the session's
+// main Controller (not a per-room one). #main never closes.
 const MainRoomID = "#main"
 
 // Session is one conversation thread on a Floor. It owns the rooms
-// (including the always-present "#main"), per-agent memory, and which
-// room each agent is currently in. Multiple sessions share their Floor's
-// furniture, sandbox, and other shared infrastructure via the Floor
-// back-reference.
+// (including the always-present "#main"), per-agent context references,
+// and which room each agent is currently in. The actual message log
+// lives in Floor.Store; Session is the runtime structure that organizes
+// who can see what.
 //
 // In v1 each Floor has exactly one Session ("default"). The struct is
 // designed so multi-session support is "just add another entry to
 // Floor.Sessions" — no API changes needed.
 type Session struct {
 	ID    string
-	Floor *Floor // back-reference to shared state (furniture, sandbox, APIServer)
+	Floor *Floor // back-reference to shared state (store, furniture, sandbox, APIServer)
 
-	// MainRoom is a convenience pointer to Rooms[MainRoomID]. It is always
-	// non-nil for a Session created via NewSession.
+	// MainRoom is a convenience pointer to Rooms[MainRoomID]; always non-nil
+	// for a Session created via NewSession.
 	MainRoom *Room
 
 	Rooms         map[string]*Room
 	AgentContexts map[string]*AgentContext
 
-	agentRoom map[string]string // agentID → roomID (MainRoomID = on main)
+	agentRoom map[string]string // agentID → roomID ("" or MainRoomID = on main)
 	unified   chan TaggedEvent  // lazy, set by StartUnified
 }
 
@@ -48,10 +47,7 @@ func NewSession(id string, floor *Floor) *Session {
 		AgentContexts: make(map[string]*AgentContext),
 		agentRoom:     make(map[string]string),
 	}
-	// Seed contexts for agents already on the floor. (When this is
-	// called from NewFloor before any agents are added, the loop is a
-	// no-op; the LLM agents added immediately after will propagate to
-	// this session via AddAgent.)
+	main.setSession(s)
 	for _, a := range floor.Agents {
 		s.AddAgentContext(a.ID)
 	}
@@ -59,36 +55,21 @@ func NewSession(id string, floor *Floor) *Session {
 }
 
 // AddAgentContext creates a new AgentContext for the given agent in this
-// session and registers it as a listener on the main room. Called by
-// Floor.AddAgent for each existing session on the floor.
+// session. Visibility for future Post calls is determined at Post time
+// from the session's room-membership map, so this method does NOT
+// register any listener — it just allocates the context.
 func (s *Session) AddAgentContext(agentID string) *AgentContext {
-	ac := NewAgentContext(agentID)
+	ac := NewAgentContext(agentID, s)
 	s.AgentContexts[agentID] = ac
-	s.MainRoom.AddListener(ac)
 	return ac
 }
 
-// RemoveAgentContext unregisters and removes the agent's context.
-// Called by Floor.RemoveAgent for each existing session on the floor.
-// Note: the context is dropped but its accumulated entries are not
-// "preserved for audit" — when persistence lands, audit lives in the
-// session's event log, not in dropped AgentContexts.
+// RemoveAgentContext deletes the agent's context and clears membership.
+// The agent's event history in the store is preserved (audit); future
+// Post calls will not target this agent (it's no longer in any room).
 func (s *Session) RemoveAgentContext(agentID string) {
-	ac, ok := s.AgentContexts[agentID]
-	if !ok {
-		return
-	}
-	s.MainRoom.RemoveListener(ac)
 	delete(s.AgentContexts, agentID)
-
-	// Also unbind from any sub-room the agent was in.
-	if roomID := s.agentRoom[agentID]; roomID != "" && roomID != MainRoomID {
-		if room, ok := s.Rooms[roomID]; ok {
-			room.RemoveListener(ac)
-			delete(room.AgentIDs, agentID)
-		}
-		delete(s.agentRoom, agentID)
-	}
+	delete(s.agentRoom, agentID)
 }
 
 // GetAgentContext returns the context for the given agent, or nil if not found.
@@ -96,17 +77,39 @@ func (s *Session) GetAgentContext(agentID string) *AgentContext {
 	return s.AgentContexts[agentID]
 }
 
-// AgentRoom returns the room ID an agent is in. The empty string means
-// the agent is on the main room (its listener attached to MainRoom).
-// Sub-room agents return their sub-room's ID.
+// AgentRoom returns the room ID an agent is in. Empty string or
+// MainRoomID both mean "on main".
 func (s *Session) AgentRoom(agentID string) string {
 	return s.agentRoom[agentID]
 }
 
+// AgentsInRoom returns the agent IDs that currently participate in the
+// given room. Used by Room.Post to compute visibility for the store.
+// For #main: agents whose agentRoom entry is empty or MainRoomID.
+// For sub-rooms: agents whose agentRoom entry equals the room ID.
+func (s *Session) AgentsInRoom(roomID string) []string {
+	var out []string
+	for aid := range s.AgentContexts {
+		in := s.agentRoom[aid]
+		switch {
+		case roomID == MainRoomID:
+			if in == "" || in == MainRoomID {
+				out = append(out, aid)
+			}
+		default:
+			if in == roomID {
+				out = append(out, aid)
+			}
+		}
+	}
+	return out
+}
+
 // CreateRoom creates an isolated sub-conversation room and moves the
-// specified agents into it: their AgentContext switches from listening
-// on the main room to listening on the new sub-room. Inserts a system
-// message into each agent's context about the transition.
+// specified agents into it. Their AgentContext's visibility shifts to
+// the new room (future posts to #main no longer reach them; posts to
+// the new room do). Inserts a private system message into each agent's
+// view about the transition.
 func (s *Session) CreateRoom(roomID, creator string, agentIDs []string, prompt string) (*Room, error) {
 	if roomID == MainRoomID {
 		return nil, fmt.Errorf("room %s is reserved", MainRoomID)
@@ -118,12 +121,12 @@ func (s *Session) CreateRoom(roomID, creator string, agentIDs []string, prompt s
 		if _, ok := s.AgentContexts[aid]; !ok {
 			return nil, fmt.Errorf("unknown agent %s", aid)
 		}
-		if existing := s.agentRoom[aid]; existing != "" {
+		if existing := s.agentRoom[aid]; existing != "" && existing != MainRoomID {
 			return nil, fmt.Errorf("agent %s is already in room %s", aid, existing)
 		}
 	}
 
-	room := NewSubRoom(roomID, creator, agentIDs, prompt, s.Floor)
+	room := NewSubRoom(roomID, creator, agentIDs, prompt, s)
 	s.Rooms[roomID] = room
 
 	var participantNames []string
@@ -131,13 +134,13 @@ func (s *Session) CreateRoom(roomID, creator string, agentIDs []string, prompt s
 		participantNames = append(participantNames, aid)
 	}
 
+	// Move agents into the new room first so AppendSystem records the
+	// system message against the new room.
 	for _, aid := range agentIDs {
+		s.agentRoom[aid] = roomID
 		ac := s.AgentContexts[aid]
-		s.MainRoom.RemoveListener(ac)
-		room.AddListener(ac)
 		ac.AppendSystem(fmt.Sprintf("You moved to room %s with %s. Messages here are private to this room.",
 			roomID, joinAgentIDs(participantNames, aid)))
-		s.agentRoom[aid] = roomID
 	}
 
 	if s.unified != nil {
@@ -149,7 +152,7 @@ func (s *Session) CreateRoom(roomID, creator string, agentIDs []string, prompt s
 }
 
 // CloseRoom closes a sub-room and moves its agents back to the main
-// room. Posts a summary to the main room. Cannot be used on MainRoomID.
+// room. Posts a summary to #main. Cannot be used on MainRoomID.
 func (s *Session) CloseRoom(roomID string) error {
 	if roomID == MainRoomID {
 		return fmt.Errorf("cannot close %s", MainRoomID)
@@ -171,12 +174,12 @@ func (s *Session) CloseRoom(roomID string) error {
 		summary = fmt.Sprintf("[Room %s closed] No messages were exchanged.", roomID)
 	}
 
+	// Move agents back to main BEFORE the system message so it records
+	// against #main (not the closing sub-room).
 	for aid := range room.AgentIDs {
-		ac := s.AgentContexts[aid]
-		room.RemoveListener(ac)
-		s.MainRoom.AddListener(ac)
-		ac.AppendSystem(fmt.Sprintf("Room %s closed. You are back on the main floor.", roomID))
 		delete(s.agentRoom, aid)
+		ac := s.AgentContexts[aid]
+		ac.AppendSystem(fmt.Sprintf("Room %s closed. You are back on the main floor.", roomID))
 	}
 
 	room.CloseWithSummary(summary)
@@ -192,8 +195,8 @@ func (s *Session) CloseRoom(roomID string) error {
 
 // ForRoom returns a shallow Session view with MainRoom swapped to the
 // given (sub-)room. Agents running in a room receive this view so their
-// PostXxx() calls go to that room instead of the session's main room.
-// Shares AgentContexts, Rooms, agentRoom, and Floor with the parent.
+// PostXxx() calls go to that room instead of the session's #main.
+// Shares all maps and the Floor with the parent.
 func (s *Session) ForRoom(room *Room) *Session {
 	return &Session{
 		ID:            s.ID,
@@ -202,7 +205,6 @@ func (s *Session) ForRoom(room *Room) *Session {
 		Rooms:         s.Rooms,
 		AgentContexts: s.AgentContexts,
 		agentRoom:     s.agentRoom,
-		// unified deliberately not propagated — the view doesn't own the merged stream
 	}
 }
 
@@ -234,6 +236,4 @@ func (s *Session) forwardRoomEvents(room *Room) {
 
 // Close closes the session's main room. Sub-rooms close independently
 // via CloseRoom or CloseWithSummary.
-func (s *Session) Close() {
-	s.MainRoom.Close()
-}
+func (s *Session) Close() { s.MainRoom.Close() }

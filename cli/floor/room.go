@@ -10,27 +10,22 @@ import (
 // be spawned for isolated conversations (e.g. "#analysis") with their
 // own membership and turn-taking.
 //
-// A Room owns its own message log, event channel, and listener/subscriber
-// distribution. Sub-rooms additionally carry:
-//   - AgentIDs: which agents are currently in the room
-//   - Controller: turn-taking scoped to the room's members
-//   - Creator, Prompt: context about why the room was created
-//   - closed / summary: lifecycle state (sub-rooms can close; #main does not)
+// Storage lives on the Session's Floor.Store; Room.Post writes there.
+// Room itself holds only runtime fan-out state (event channel,
+// subscribers) and sub-room metadata (membership, Controller).
 //
-// For "#main", the sub-room fields are zero values: no controller (the
-// session's main controller lives elsewhere), no membership filter (all
-// session agents participate by default), no Creator/Prompt, never closes.
+// For "#main" the sub-room fields are zero values: no controller (the
+// session's main controller lives elsewhere), no AgentIDs filter (all
+// session agents are members unless they've moved to a sub-room), no
+// Creator/Prompt, never closes.
 type Room struct {
-	ID string
+	ID      string
+	session *Session // canonical session back-reference (not a view)
 
-	// Message log + event distribution (was floor.Chat).
-	mu         sync.RWMutex
-	messages   []*ChatMessage
-	eventCh    chan ChatEvent
-	subMu      sync.Mutex
+	// Runtime event distribution (NOT persistence).
+	eventCh     chan ChatEvent
+	subMu       sync.Mutex
 	subscribers []chan ChatEvent
-	listenerMu sync.Mutex
-	listeners  []MessageListener
 
 	// Sub-room state. For #main these are zero-valued.
 	Creator    string
@@ -43,8 +38,9 @@ type Room struct {
 	summary string
 }
 
-// NewRoom creates a basic room with the given ID. Used for #main and as
-// the base for sub-rooms.
+// NewRoom creates a basic room with the given ID. Used for #main and
+// for stand-alone test rooms (which won't have a session back-ref and
+// therefore skip storage on Post — only the runtime fan-out fires).
 func NewRoom(id string) *Room {
 	return &Room{
 		ID:      id,
@@ -55,36 +51,54 @@ func NewRoom(id string) *Room {
 // NewSubRoom creates a sub-room: a Room with membership (AgentIDs), a
 // scoped Controller, and creation context (Creator, Prompt). Used by
 // Session.CreateRoom for spawning isolated sub-conversations.
-func NewSubRoom(id, creator string, agentIDs []string, prompt string, floor *Floor) *Room {
+func NewSubRoom(id, creator string, agentIDs []string, prompt string, sess *Session) *Room {
 	r := NewRoom(id)
+	r.session = sess
 	r.Creator = creator
 	r.Prompt = prompt
 	r.AgentIDs = make(map[string]bool, len(agentIDs))
 	for _, aid := range agentIDs {
 		r.AgentIDs[aid] = true
 	}
-	r.Controller = NewControllerForRoom(floor, agentIDs)
+	r.Controller = NewControllerForRoom(sess.Floor, agentIDs)
 	return r
 }
 
-// --- Message log methods (formerly on Chat) ---
+// setSession is used internally by NewSession to inject the back-reference
+// for #main (which is created before the Session is fully constructed).
+func (r *Room) setSession(s *Session) { r.session = s }
 
-// Post adds a complete message to the history and emits MessagePosted.
+// --- Message log methods ---
+
+// Post writes a message to the session's store (visible to whichever
+// agents are currently in this room) and fires runtime events for
+// frontends.
 func (r *Room) Post(msg ChatMessage) {
-	m := &msg // heap-allocate for stable pointer
-	r.mu.Lock()
-	r.messages = append(r.messages, m)
-	r.mu.Unlock()
+	r.appendToStore(msg)
 
-	r.notifyListeners(m)
-
-	ev := MessagePosted{Message: *m}
+	ev := MessagePosted{Message: msg}
 	r.eventCh <- ev
 	r.fanOut(ev)
 }
 
-// PostStream emits a streaming event without adding to history.
-// Used for tokens, tool call progress, thinking indicators.
+// appendToStore writes the message to the session store with VisibleTo
+// computed from current room membership. No-op if r.session is nil
+// (stand-alone room — typically a test fixture).
+func (r *Room) appendToStore(msg ChatMessage) {
+	if r.session == nil {
+		return
+	}
+	visibleTo := r.session.AgentsInRoom(r.ID)
+	r.session.Floor.Store.Append(AppendOpts{
+		SessionID: r.session.ID,
+		RoomID:    r.ID,
+		Event:     MessagePostedEvent{Message: msg},
+		VisibleTo: visibleTo,
+	})
+}
+
+// PostStream emits a streaming event without storing it. Used for
+// tokens, tool call progress, thinking indicators.
 func (r *Room) PostStream(ev Event) {
 	se := StreamEvent{Event: ev}
 	r.eventCh <- se
@@ -92,13 +106,15 @@ func (r *Room) PostStream(ev Event) {
 }
 
 // PostEvent emits a chat event directly (AgentFinished, AgentPassed, etc.).
+// Not stored — these are runtime decisions, not conversation history.
 func (r *Room) PostEvent(ev ChatEvent) {
 	r.eventCh <- ev
 	r.fanOut(ev)
 }
 
 // PostUserInput routes user input: slash commands become UserCommandEvents,
-// everything else becomes a ChatMessage from @user.
+// everything else becomes a ChatMessage from @user (which goes through Post
+// and is therefore stored).
 func (r *Room) PostUserInput(text string) {
 	if strings.HasPrefix(text, "/") {
 		r.PostEvent(UserCommandEvent{Command: text})
@@ -107,21 +123,24 @@ func (r *Room) PostUserInput(text string) {
 	}
 }
 
-// History returns a snapshot of all messages. Safe for concurrent use.
+// History returns a snapshot of all messages in this room.
+// Sourced from the session store.
 func (r *Room) History() []ChatMessage {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	result := make([]ChatMessage, len(r.messages))
-	for i, m := range r.messages {
-		result[i] = *m
+	if r.session == nil {
+		return nil
 	}
-	return result
+	events, _ := r.session.Floor.Store.Read(r.session.ID, EventFilter{RoomID: r.ID})
+	out := make([]ChatMessage, 0, len(events))
+	for _, ev := range events {
+		if mp, ok := ev.Event.(MessagePostedEvent); ok {
+			out = append(out, mp.Message)
+		}
+	}
+	return out
 }
 
 // Events returns the channel for reading chat events.
-func (r *Room) Events() <-chan ChatEvent {
-	return r.eventCh
-}
+func (r *Room) Events() <-chan ChatEvent { return r.eventCh }
 
 // Subscribe returns a new channel that receives all chat events.
 // Call Unsubscribe when done to clean up.
@@ -146,45 +165,17 @@ func (r *Room) Unsubscribe(ch <-chan ChatEvent) {
 	}
 }
 
-// AddListener registers a MessageListener that receives every posted message.
-func (r *Room) AddListener(l MessageListener) {
-	r.listenerMu.Lock()
-	r.listeners = append(r.listeners, l)
-	r.listenerMu.Unlock()
-}
-
-// RemoveListener unregisters a MessageListener.
-func (r *Room) RemoveListener(l MessageListener) {
-	r.listenerMu.Lock()
-	defer r.listenerMu.Unlock()
-	for i, existing := range r.listeners {
-		if existing == l {
-			r.listeners = append(r.listeners[:i], r.listeners[i+1:]...)
-			return
-		}
-	}
-}
-
-// Clear removes all messages and notifies listeners that support clearing.
+// Clear removes all messages in this room from the session store.
+// Has no effect on the runtime event channel.
 func (r *Room) Clear() {
-	r.mu.Lock()
-	r.messages = nil
-	r.mu.Unlock()
-
-	r.listenerMu.Lock()
-	defer r.listenerMu.Unlock()
-	type clearer interface{ Clear() }
-	for _, l := range r.listeners {
-		if cl, ok := l.(clearer); ok {
-			cl.Clear()
-		}
+	if r.session == nil {
+		return
 	}
+	r.session.Floor.Store.Clear(r.session.ID, EventFilter{RoomID: r.ID})
 }
 
 // Close closes the event channel. Call when shutting down.
-func (r *Room) Close() {
-	close(r.eventCh)
-}
+func (r *Room) Close() { close(r.eventCh) }
 
 // fanOut sends an event to all subscribers (non-blocking).
 func (r *Room) fanOut(ev ChatEvent) {
@@ -199,16 +190,7 @@ func (r *Room) fanOut(ev ChatEvent) {
 	}
 }
 
-// notifyListeners pushes a message to all registered listeners.
-func (r *Room) notifyListeners(msg *ChatMessage) {
-	r.listenerMu.Lock()
-	defer r.listenerMu.Unlock()
-	for _, l := range r.listeners {
-		l.OnMessage(msg)
-	}
-}
-
-// --- Sub-room lifecycle (was Room) ---
+// --- Sub-room lifecycle ---
 
 // CloseWithSummary marks the room as closed with a summary and shuts down
 // its event channel. Used by Session.CloseRoom for sub-rooms; #main is

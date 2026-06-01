@@ -1,15 +1,36 @@
 package floor
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/openfloorcontrol/ofc/blueprint"
+)
+
+func acTestBlueprint(agentIDs ...string) *blueprint.Blueprint {
+	bp := &blueprint.Blueprint{Name: "ac-test"}
+	for _, id := range agentIDs {
+		bp.Agents = append(bp.Agents, blueprint.Agent{ID: id, Activation: "always"})
+	}
+	return bp
+}
+
+// drainEvents reads from sess.MainRoom.Events() so Post doesn't block on
+// the channel buffer (capacity 64).
+func drainMain(sess *Session) {
+	go func() {
+		for range sess.MainRoom.Events() {
+		}
+	}()
+}
 
 func TestAgentContextAccumulatesMessages(t *testing.T) {
-	ac := NewAgentContext("@test")
-	chat := NewRoom("#test")
-	chat.AddListener(ac)
-	defer chat.Close()
+	f := NewFloor(acTestBlueprint("@test"))
+	sess := f.DefaultSession()
+	drainMain(sess)
 
-	chat.Post(ChatMessage{From: "@user", Content: "hello"})
-	<-chat.Events() // drain
+	ac := sess.GetAgentContext("@test")
+
+	sess.MainRoom.Post(ChatMessage{From: "@user", Content: "hello"})
 
 	entries := ac.Entries()
 	if len(entries) != 1 {
@@ -24,17 +45,15 @@ func TestAgentContextAccumulatesMessages(t *testing.T) {
 }
 
 func TestAgentContextMultipleMessages(t *testing.T) {
-	ac := NewAgentContext("@test")
-	chat := NewRoom("#test")
-	chat.AddListener(ac)
-	defer chat.Close()
+	f := NewFloor(acTestBlueprint("@test"))
+	sess := f.DefaultSession()
+	drainMain(sess)
 
-	chat.Post(ChatMessage{From: "@user", Content: "first"})
-	<-chat.Events()
-	chat.Post(ChatMessage{From: "@agent", Content: "second"})
-	<-chat.Events()
-	chat.Post(ChatMessage{From: "@user", Content: "third"})
-	<-chat.Events()
+	ac := sess.GetAgentContext("@test")
+
+	sess.MainRoom.Post(ChatMessage{From: "@user", Content: "first"})
+	sess.MainRoom.Post(ChatMessage{From: "@agent", Content: "second"})
+	sess.MainRoom.Post(ChatMessage{From: "@user", Content: "third"})
 
 	entries := ac.Entries()
 	if len(entries) != 3 {
@@ -46,34 +65,31 @@ func TestAgentContextMultipleMessages(t *testing.T) {
 }
 
 func TestAgentContextDelta(t *testing.T) {
-	ac := NewAgentContext("@test")
-	chat := NewRoom("#test")
-	chat.AddListener(ac)
-	defer chat.Close()
+	f := NewFloor(acTestBlueprint("@test"))
+	sess := f.DefaultSession()
+	drainMain(sess)
 
-	chat.Post(ChatMessage{From: "@user", Content: "first"})
-	<-chat.Events()
+	ac := sess.GetAgentContext("@test")
 
-	// First delta should include everything
+	sess.MainRoom.Post(ChatMessage{From: "@user", Content: "first"})
+
+	// First delta should include everything seen so far.
 	delta := ac.Delta()
 	if len(delta) != 1 {
 		t.Fatalf("expected 1 delta entry, got %d", len(delta))
 	}
 
-	// Mark as sent
 	ac.MarkSent()
 
-	// Delta should now be empty
+	// Delta should now be empty.
 	delta = ac.Delta()
 	if len(delta) != 0 {
 		t.Fatalf("expected 0 delta after MarkSent, got %d", len(delta))
 	}
 
-	// Post more
-	chat.Post(ChatMessage{From: "@user", Content: "second"})
-	<-chat.Events()
+	sess.MainRoom.Post(ChatMessage{From: "@user", Content: "second"})
 
-	// Delta should have only the new message
+	// Delta should have only the new message.
 	delta = ac.Delta()
 	if len(delta) != 1 {
 		t.Fatalf("expected 1 delta, got %d", len(delta))
@@ -82,7 +98,7 @@ func TestAgentContextDelta(t *testing.T) {
 		t.Errorf("expected 'second', got %q", delta[0].Content)
 	}
 
-	// Full entries should have both
+	// Full Entries should have both.
 	entries := ac.Entries()
 	if len(entries) != 2 {
 		t.Fatalf("expected 2 total entries, got %d", len(entries))
@@ -90,8 +106,11 @@ func TestAgentContextDelta(t *testing.T) {
 }
 
 func TestAgentContextAppendSystem(t *testing.T) {
-	ac := NewAgentContext("@test")
+	f := NewFloor(acTestBlueprint("@test"))
+	sess := f.DefaultSession()
+	drainMain(sess)
 
+	ac := sess.GetAgentContext("@test")
 	ac.AppendSystem("You moved to #analysis with @code")
 
 	entries := ac.Entries()
@@ -106,114 +125,46 @@ func TestAgentContextAppendSystem(t *testing.T) {
 	}
 }
 
-func TestAgentContextClear(t *testing.T) {
-	ac := NewAgentContext("@test")
-	chat := NewRoom("#test")
-	chat.AddListener(ac)
-	defer chat.Close()
+func TestAgentContextClearRoomHistory(t *testing.T) {
+	// In the store-backed model, "clear" lives at the room level
+	// (Room.Clear deletes events). AgentContext.Clear just resets
+	// sentSeq. Verify both behaviors.
+	f := NewFloor(acTestBlueprint("@test"))
+	sess := f.DefaultSession()
+	drainMain(sess)
 
-	chat.Post(ChatMessage{From: "@user", Content: "hello"})
-	<-chat.Events()
-
+	ac := sess.GetAgentContext("@test")
+	sess.MainRoom.Post(ChatMessage{From: "@user", Content: "hello"})
 	ac.MarkSent()
 
 	if ac.Len() != 1 {
 		t.Fatalf("expected 1 entry before clear, got %d", ac.Len())
 	}
 
-	ac.Clear()
+	// Clear the room: removes events from the store, so Entries drops to 0.
+	sess.MainRoom.Clear()
 
 	if ac.Len() != 0 {
-		t.Errorf("expected 0 entries after clear, got %d", ac.Len())
+		t.Errorf("expected 0 entries after room Clear, got %d", ac.Len())
 	}
 
+	// AgentContext.Clear resets sentSeq so Delta returns from-scratch.
+	ac.Clear()
 	delta := ac.Delta()
 	if len(delta) != 0 {
-		t.Errorf("expected empty delta after clear, got %d", len(delta))
+		t.Errorf("expected empty delta after Clear (no events), got %d", len(delta))
 	}
 }
 
-func TestChatClearNotifiesListeners(t *testing.T) {
-	ac := NewAgentContext("@test")
-	chat := NewRoom("#test")
-	chat.AddListener(ac)
-	defer chat.Close()
+func TestMultipleAgentContextsOnSameRoom(t *testing.T) {
+	f := NewFloor(acTestBlueprint("@agent1", "@agent2"))
+	sess := f.DefaultSession()
+	drainMain(sess)
 
-	chat.Post(ChatMessage{From: "@user", Content: "hello"})
-	<-chat.Events()
+	ac1 := sess.GetAgentContext("@agent1")
+	ac2 := sess.GetAgentContext("@agent2")
 
-	if ac.Len() != 1 {
-		t.Fatalf("expected 1 entry, got %d", ac.Len())
-	}
-
-	chat.Clear()
-
-	if ac.Len() != 0 {
-		t.Errorf("expected AgentContext cleared, got %d entries", ac.Len())
-	}
-}
-
-func TestAgentContextPointerStability(t *testing.T) {
-	// Verify that messages accumulated via listener are the same pointers
-	// stored in the Chat (not copies).
-	ac := NewAgentContext("@test")
-	chat := NewRoom("#test")
-	chat.AddListener(ac)
-	defer chat.Close()
-
-	chat.Post(ChatMessage{From: "@user", Content: "hello"})
-	<-chat.Events()
-
-	entries := ac.Entries()
-	if len(entries) != 1 {
-		t.Fatal("expected 1 entry")
-	}
-
-	// The pointer in AgentContext should point to the same ChatMessage
-	// as the one in Chat's internal storage. We can verify by checking
-	// that mutating via pointer is visible (though we don't do this in
-	// practice — this just validates the pointer model).
-	history := chat.History()
-	if history[0].Content != entries[0].Content {
-		t.Error("content mismatch between Chat.History() and AgentContext.Entries()")
-	}
-}
-
-func TestAgentContextRemoveListener(t *testing.T) {
-	ac := NewAgentContext("@test")
-	chat := NewRoom("#test")
-	chat.AddListener(ac)
-	defer chat.Close()
-
-	chat.Post(ChatMessage{From: "@user", Content: "before"})
-	<-chat.Events()
-
-	if ac.Len() != 1 {
-		t.Fatalf("expected 1 entry, got %d", ac.Len())
-	}
-
-	// Remove listener
-	chat.RemoveListener(ac)
-
-	chat.Post(ChatMessage{From: "@user", Content: "after"})
-	<-chat.Events()
-
-	// Should still have only 1 entry (didn't receive "after")
-	if ac.Len() != 1 {
-		t.Errorf("expected 1 entry after RemoveListener, got %d", ac.Len())
-	}
-}
-
-func TestMultipleAgentContextsOnSameChat(t *testing.T) {
-	ac1 := NewAgentContext("@agent1")
-	ac2 := NewAgentContext("@agent2")
-	chat := NewRoom("#test")
-	chat.AddListener(ac1)
-	chat.AddListener(ac2)
-	defer chat.Close()
-
-	chat.Post(ChatMessage{From: "@user", Content: "hello everyone"})
-	<-chat.Events()
+	sess.MainRoom.Post(ChatMessage{From: "@user", Content: "hello everyone"})
 
 	if ac1.Len() != 1 {
 		t.Errorf("ac1: expected 1 entry, got %d", ac1.Len())
@@ -222,13 +173,39 @@ func TestMultipleAgentContextsOnSameChat(t *testing.T) {
 		t.Errorf("ac2: expected 1 entry, got %d", ac2.Len())
 	}
 
-	// Agent1 gets a system message (simulating room transition)
+	// Agent1 gets a private system message.
 	ac1.AppendSystem("You moved to #room1")
 
 	if ac1.Len() != 2 {
 		t.Errorf("ac1: expected 2 entries after system msg, got %d", ac1.Len())
 	}
 	if ac2.Len() != 1 {
-		t.Errorf("ac2: should still have 1 entry, got %d", ac2.Len())
+		t.Errorf("ac2: should still have 1 entry (private msg not visible), got %d", ac2.Len())
+	}
+}
+
+func TestAgentContextRemoveAgentStopsVisibility(t *testing.T) {
+	// After RemoveAgentContext, posts to the main room no longer
+	// target this agent. Their existing events remain in the store
+	// (audit) but no new events get visibility refs for them.
+	f := NewFloor(acTestBlueprint("@agent1", "@agent2"))
+	sess := f.DefaultSession()
+	drainMain(sess)
+
+	ac1 := sess.GetAgentContext("@agent1")
+
+	sess.MainRoom.Post(ChatMessage{From: "@user", Content: "before"})
+	if ac1.Len() != 1 {
+		t.Fatalf("expected 1 entry, got %d", ac1.Len())
+	}
+
+	sess.RemoveAgentContext("@agent1")
+	sess.MainRoom.Post(ChatMessage{From: "@user", Content: "after"})
+
+	// Read from store directly (ac1 is no longer in the session map,
+	// but its events from before-remove are still there).
+	events, _ := f.Store.ReadForAgent(sess.ID, "@agent1", EventFilter{})
+	if len(events) != 1 {
+		t.Errorf("expected 1 event for @agent1 (only the 'before' one), got %d", len(events))
 	}
 }

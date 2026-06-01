@@ -102,7 +102,7 @@ func TestAPIServerMCPEndToEnd(t *testing.T) {
 }
 
 func TestPostMessage(t *testing.T) {
-	chat := NewRoom("#test")
+	chat := NewFloor(&blueprint.Blueprint{Name: "test"}).DefaultSession().MainRoom
 	api := NewAPIServer()
 	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil, func() string { return "" })
 	if err := api.Start(":0"); err != nil {
@@ -139,7 +139,7 @@ func TestPostMessage(t *testing.T) {
 }
 
 func TestPostMessageDefaultsFrom(t *testing.T) {
-	chat := NewRoom("#test")
+	chat := NewFloor(&blueprint.Blueprint{Name: "test"}).DefaultSession().MainRoom
 	api := NewAPIServer()
 	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil, func() string { return "" })
 	if err := api.Start(":0"); err != nil {
@@ -165,7 +165,7 @@ func TestPostMessageDefaultsFrom(t *testing.T) {
 }
 
 func TestPostMessageRejectsEmpty(t *testing.T) {
-	chat := NewRoom("#test")
+	chat := NewFloor(&blueprint.Blueprint{Name: "test"}).DefaultSession().MainRoom
 	api := NewAPIServer()
 	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil, func() string { return "" })
 	if err := api.Start(":0"); err != nil {
@@ -189,7 +189,7 @@ func TestPostMessageRejectsEmpty(t *testing.T) {
 }
 
 func TestGetMessages(t *testing.T) {
-	chat := NewRoom("#test")
+	chat := NewFloor(&blueprint.Blueprint{Name: "test"}).DefaultSession().MainRoom
 	api := NewAPIServer()
 	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil, func() string { return "" })
 	if err := api.Start(":0"); err != nil {
@@ -228,7 +228,7 @@ func TestGetMessages(t *testing.T) {
 }
 
 func TestSSEEvents(t *testing.T) {
-	chat := NewRoom("#test")
+	chat := NewFloor(&blueprint.Blueprint{Name: "test"}).DefaultSession().MainRoom
 	api := NewAPIServer()
 	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil, func() string { return "" })
 	if err := api.Start(":0"); err != nil {
@@ -290,7 +290,7 @@ func TestGetAgents(t *testing.T) {
 		},
 	}
 
-	chat := NewRoom("#test")
+	chat := NewFloor(&blueprint.Blueprint{Name: "test"}).DefaultSession().MainRoom
 	api := NewAPIServer()
 	api.RegisterFloorAPI(chat, bp, nil, func() string { return "" })
 	if err := api.Start(":0"); err != nil {
@@ -337,7 +337,7 @@ func TestGetAgents(t *testing.T) {
 }
 
 func TestAuthMiddlewareBlocksWithoutToken(t *testing.T) {
-	chat := NewRoom("#test")
+	chat := NewFloor(&blueprint.Blueprint{Name: "test"}).DefaultSession().MainRoom
 	api := NewAPIServer()
 	api.SetAuthToken("test-secret-token")
 	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil, func() string { return "" })
@@ -383,7 +383,7 @@ func TestFurnitureCallProxy(t *testing.T) {
 	tb := furniture.NewTaskBoard()
 	furMap := map[string]furniture.Furniture{"tasks": tb}
 
-	chat := NewRoom("#test")
+	chat := NewFloor(&blueprint.Blueprint{Name: "test"}).DefaultSession().MainRoom
 	api := NewAPIServer()
 	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, furMap, func() string { return "" })
 	if err := api.Start(":0"); err != nil {
@@ -440,7 +440,7 @@ func TestFurnitureCallProxy(t *testing.T) {
 }
 
 func TestAuthMiddleware(t *testing.T) {
-	chat := NewRoom("#test")
+	chat := NewFloor(&blueprint.Blueprint{Name: "test"}).DefaultSession().MainRoom
 	api := NewAPIServer()
 	api.SetAuthToken("test-token-123")
 	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil, func() string { return "" })
@@ -486,7 +486,7 @@ func TestGetFurniture(t *testing.T) {
 	tb := furniture.NewTaskBoard()
 	furMap := map[string]furniture.Furniture{"tasks": tb}
 
-	chat := NewRoom("#test")
+	chat := NewFloor(&blueprint.Blueprint{Name: "test"}).DefaultSession().MainRoom
 	api := NewAPIServer()
 	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, furMap, func() string { return "" })
 	if err := api.Start(":0"); err != nil {
@@ -529,7 +529,7 @@ func TestGetFurniture(t *testing.T) {
 }
 
 func TestGetFurnitureEmpty(t *testing.T) {
-	chat := NewRoom("#test")
+	chat := NewFloor(&blueprint.Blueprint{Name: "test"}).DefaultSession().MainRoom
 	api := NewAPIServer()
 	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil, func() string { return "" })
 	if err := api.Start(":0"); err != nil {

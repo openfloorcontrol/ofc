@@ -1,87 +1,82 @@
 package floor
 
-import "sync"
-
-// AgentContext accumulates messages for a specific agent.
-// It acts as the agent's personal "memory" — what it has heard across rooms.
-// Messages are pushed via the MessageListener interface when the agent
-// is subscribed to a Chat.
+// AgentContext is one agent's view of a session's conversation. It is
+// a thin reader over the session's store: Entries / Delta query the
+// store's per-agent visibility join (ReadForAgent). AppendSystem writes
+// a private message visible only to this agent.
+//
+// No in-memory cache: every read goes to the store. For the in-memory
+// MemoryStore this is essentially free; for backed stores (JSONL, SQL)
+// it's a query per read. If that becomes a hot path we can add a cache
+// layer above — the interface won't change.
 type AgentContext struct {
 	agentID string
-
-	mu      sync.RWMutex
-	entries []*ChatMessage // pointers to messages in some Chat (+ system messages)
-	sentIdx int            // index up to which entries have been sent (for Delta)
+	session *Session
+	sentSeq uint64 // for Delta — events with Seq > sentSeq are "new"
 }
 
-// NewAgentContext creates a context for the given agent.
-func NewAgentContext(agentID string) *AgentContext {
+// NewAgentContext creates a context for the given agent in the given session.
+// Typically called by Session.AddAgentContext, not directly.
+func NewAgentContext(agentID string, sess *Session) *AgentContext {
 	return &AgentContext{
 		agentID: agentID,
+		session: sess,
 	}
 }
 
-// OnMessage implements MessageListener. Called by Chat.Post() when a message
-// is posted to the Chat this context is listening to.
-func (ac *AgentContext) OnMessage(msg *ChatMessage) {
-	ac.mu.Lock()
-	ac.entries = append(ac.entries, msg)
-	ac.mu.Unlock()
-}
+// AgentID returns the agent this context belongs to.
+func (ac *AgentContext) AgentID() string { return ac.agentID }
 
-// Entries returns all accumulated messages (snapshot, safe for concurrent use).
-// Used by LLMAgent to build full context.
+// Entries returns every message this agent has seen, in order.
+// Used by LLMAgent.buildContext to build the full conversation history.
 func (ac *AgentContext) Entries() []*ChatMessage {
-	ac.mu.RLock()
-	defer ac.mu.RUnlock()
-	result := make([]*ChatMessage, len(ac.entries))
-	copy(result, ac.entries)
-	return result
+	events, _ := ac.session.Floor.Store.ReadForAgent(ac.session.ID, ac.agentID, EventFilter{})
+	return extractMessages(events)
 }
 
-// Delta returns messages received since the last MarkSent() call.
-// Used by ACPAgent to send only new messages.
+// Delta returns messages this agent has seen since the last MarkSent.
+// Used by ACPAgent to send only incremental updates to the subprocess.
 func (ac *AgentContext) Delta() []*ChatMessage {
-	ac.mu.RLock()
-	defer ac.mu.RUnlock()
-	if ac.sentIdx >= len(ac.entries) {
-		return nil
-	}
-	delta := make([]*ChatMessage, len(ac.entries)-ac.sentIdx)
-	copy(delta, ac.entries[ac.sentIdx:])
-	return delta
+	events, _ := ac.session.Floor.Store.ReadForAgent(ac.session.ID, ac.agentID, EventFilter{FromSeq: ac.sentSeq})
+	return extractMessages(events)
 }
 
-// MarkSent records that all current entries have been sent to the agent.
-// Subsequent Delta() calls will only return messages added after this point.
+// MarkSent records the highest-seen Seq as "sent", so future Delta()
+// calls return only newer events.
 func (ac *AgentContext) MarkSent() {
-	ac.mu.Lock()
-	ac.sentIdx = len(ac.entries)
-	ac.mu.Unlock()
+	events, _ := ac.session.Floor.Store.ReadForAgent(ac.session.ID, ac.agentID, EventFilter{})
+	if len(events) > 0 {
+		ac.sentSeq = events[len(events)-1].Seq
+	}
 }
 
-// AppendSystem inserts a system-level message that only this agent sees.
+// AppendSystem inserts a system-level message visible only to this agent.
 // Used for room transitions ("You moved to #analysis with @code").
+// The message is recorded against the agent's current room.
 func (ac *AgentContext) AppendSystem(text string) {
-	ac.mu.Lock()
-	ac.entries = append(ac.entries, &ChatMessage{
-		From:    "@system",
-		Content: text,
+	roomID := ac.session.agentRoom[ac.agentID]
+	if roomID == "" {
+		roomID = MainRoomID
+	}
+	ac.session.Floor.Store.Append(AppendOpts{
+		SessionID: ac.session.ID,
+		RoomID:    roomID,
+		Event:     MessagePostedEvent{Message: ChatMessage{From: "@system", Content: text}},
+		VisibleTo: []string{ac.agentID},
+		Private:   true, // hidden from Read; only this agent sees it
 	})
-	ac.mu.Unlock()
 }
 
-// Clear resets the context. Called when the chat is cleared (/clear).
-func (ac *AgentContext) Clear() {
-	ac.mu.Lock()
-	ac.entries = nil
-	ac.sentIdx = 0
-	ac.mu.Unlock()
-}
-
-// Len returns the number of accumulated entries.
+// Len returns the number of messages this agent has seen.
 func (ac *AgentContext) Len() int {
-	ac.mu.RLock()
-	defer ac.mu.RUnlock()
-	return len(ac.entries)
+	events, _ := ac.session.Floor.Store.ReadForAgent(ac.session.ID, ac.agentID, EventFilter{})
+	return len(events)
+}
+
+// Clear resets sentSeq to 0. The store's events are not affected — call
+// session.MainRoom.Clear() or store.Clear() to actually remove events.
+// Used after /clear to make Delta() return everything from the start
+// of the (now-empty) log.
+func (ac *AgentContext) Clear() {
+	ac.sentSeq = 0
 }

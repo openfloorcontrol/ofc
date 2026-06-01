@@ -71,6 +71,11 @@ type Floor struct {
 	Sandbox   *sandbox.Sandbox
 	APIServer *APIServer
 
+	// Store persists session events (messages with per-agent visibility refs).
+	// Defaults to NewMemoryStore() in NewFloor; can be overridden before
+	// Start() for backed implementations (JSONL, SQL, etc.).
+	Store SessionStore
+
 	// Sessions on this Floor. In v1 there is always one default session
 	// keyed as "default", created by NewFloor.
 	Sessions map[string]*Session
@@ -103,6 +108,7 @@ func NewFloor(bp *blueprint.Blueprint) *Floor {
 		Blueprint:       bp,
 		Furniture:       make(map[string]furniture.Furniture),
 		ACPSubprocesses: make(map[string]*acpclient.Subprocess),
+		Store:           NewMemoryStore(),
 		Sessions:        make(map[string]*Session),
 		DebugFunc:       func(string) {},
 	}

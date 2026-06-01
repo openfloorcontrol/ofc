@@ -54,12 +54,6 @@ func (AgentPassedEvent) chatEventMarker() {}
 func (AgentErrorEvent) chatEventMarker()  {}
 func (UserCommandEvent) chatEventMarker() {}
 
-// MessageListener receives messages pushed by a Room.
-// Implemented by AgentContext to accumulate per-agent history.
-type MessageListener interface {
-	OnMessage(msg *ChatMessage)
-}
-
 // IsCommand returns whether the text is a slash command.
 func IsCommand(text string) bool {
 	return strings.HasPrefix(text, "/")
