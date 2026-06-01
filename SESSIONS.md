@@ -4,7 +4,7 @@
 
 ## Status
 
-Design agreed in discussion, not yet implemented. This document captures the model. Implementation proceeds in three staged PRs (see [Staging](#staging)).
+Design agreed in discussion. Implementation in progress — see [Staging](#staging) for the step-by-step plan and which steps have landed. As of writing, step 1 (Session extraction) is shipped; steps 2 onward are pending.
 
 ## The Three Layers
 
@@ -280,29 +280,77 @@ Auth and ownership are a layer above this hierarchy, not woven into it.
 
 ## Code Mapping
 
-Current → Target:
+Current → Target. ✅ marks transformations already shipped.
 
-| Current                          | Target                          | Notes |
-|----------------------------------|----------------------------------|-------|
-| `floor.Floor` (does everything)  | `floor.Floor` (slimmer) + `floor.Session` (new) | Split |
-| `floor.Floor.Chat`               | `floor.Session.Rooms["#main"]`  | Main chat becomes default room |
-| `floor.Chat`                     | `floor.Room`                    | Same concept, unified type |
-| `floor.Room` (current)           | `floor.Room` (unchanged concept) | Now lives under Session |
-| `AgentContext`                   | Inside `floor.Session`          | Moves into Session |
-| Blueprint loader                 | Sequence of mutation calls       | No separate code path |
-| `acp.AgentSession`               | `acp.Subprocess` (rename)       | Free the word "Session" |
+| Current                          | Target                          | Status / Notes |
+|----------------------------------|----------------------------------|----------------|
+| `floor.Floor` (does everything)  | `floor.Floor` (slimmer) + `floor.Session` (new) | ✅ Split shipped (step 1) |
+| `Agent.Run(ctx, *Floor)`         | `Agent.Run(ctx, *Session)`      | ✅ Shipped |
+| `Floor.ViewForRoom`              | `Session.ForRoom`               | ✅ Shipped |
+| `AgentContext`                   | Inside `floor.Session`          | ✅ Moved into Session |
+| `acp.AgentSession`               | `acp.Subprocess` (rename)       | ✅ Renamed |
+| `floor.Session.Chat`             | `floor.Session.Rooms["#main"]`  | ⏳ Main chat becomes default room (step 3) |
+| `floor.Chat`                     | `floor.Room`                    | ⏳ Unified into single type (step 3) |
+| Blueprint loader                 | Sequence of mutation calls       | ⏳ No separate code path (step 2) |
 
 ## Staging
 
-Three PRs, each shippable independently:
+Implementation broken into discrete steps. Each step is shippable on its own and leaves the system functional. Status markers: ✅ done · 🔧 in progress · ⏳ pending.
 
-1. **Introduce Session as runtime entity + Floor mutation primitives.** Pure refactor. No persistence yet, no behavior change. Floor gains `Sessions map`; blueprint loading goes through `addAgent`/`addFurniture` calls; CLI default = one anonymous Session. API surface gains `/sessions/{sid}/` prefix. All existing tests pass.
+### Phase 1 — Structural refactor (no new features)
 
-2. **Storage abstraction + JSONL impl.** Define `SessionStore` interface (event log) and `FloorStore` interface (current-state record). Memory + JSONL implementations of both. Named Floors enabled; `--session <id>` resume flag added. The log-is-context replay model lands here.
+Pure plumbing. No persistence, no behavior change. Establishes the layering the rest of the work builds on.
 
-3. **Per-agent context strategies + compactions.** AgentContext gains a Strategy field. Implementations: PassThrough (current behavior), LastN, Summarize. Summarize writes `Compaction` events back to the session log. Tiny on top of (2).
+1. **✅ Extract `floor.Session` as runtime entity.**
+   Splits per-conversation state (Chat, Rooms, AgentContexts, agentRoom) out of Floor. Floor gains `Sessions` map with a single `"default"` entry. `Agent.Run(ctx, *Floor)` becomes `Agent.Run(ctx, *Session)`. `Session.ForRoom` replaces `Floor.ViewForRoom`. `HandleCommand`/`TryAutoCloseRoom` take `*Session`. `acp.AgentSession` renamed to `acp.Subprocess` to free the word.
+   *Landed:* commits `bebd8ba`, `3f9d0ef`, `404bd0b`. Plus the design doc itself at `35b84a6`.
 
-Each PR is meaningful on its own and leaves the system functional.
+2. **⏳ Floor mutation primitives + blueprint-as-mutations.**
+   Add `addAgent`, `addFurniture`, `removeAgent`, `removeFurniture`, `updateAgent`, `setBlueprintMeta` methods on Floor. Refactor blueprint loader so that constructing a Floor from a blueprint is a sequence of mutation calls — no separate "blueprint loading" code path. Single mutation goroutine for serialization.
+   *Why now:* this is the load-bearing piece for the DOM model. All later API-driven mutations (REST, web UI) build on these primitives. Blueprint loading exercising them validates the primitives are correct.
+
+3. **⏳ Unify `Chat` and `Room` into a single type.**
+   `#main` becomes just a room inside the session. The Session holds `Rooms map[string]*Room` with `#main` always present. Eliminates the current asymmetry between "the main chat" and "rooms"; collapses two types into one. Mostly cosmetic but the cleanup pays off when sessions persist.
+   *Optional in v1.* Can land after Phase 2 if it's getting in the way.
+
+### Phase 2 — Persistence
+
+Now that Session is a concrete runtime entity, give it a place to live across restarts.
+
+4. **⏳ Storage abstraction.**
+   Define `SessionStore` (event log, append + load + list + delete) and `FloorStore` (value-shaped current state, save + load + list + delete). Memory implementations for both (= current behavior, no change to running code).
+
+5. **⏳ JSONL backend for `SessionStore`.**
+   One file per session at `~/.ofc/floors/<id>/sessions/<sid>.jsonl`. Append on each event; load = read whole file, replay. The "log IS the context" model lands here — replay deserializes the log into LLM messages, no re-execution of agent turns.
+
+6. **⏳ File backend for `FloorStore`.**
+   `floor.json` per named floor at `~/.ofc/floors/<id>/floor.json`. Atomic write (tmp + rename) on each mutation. Blueprint snapshot stored alongside.
+
+7. **⏳ Named Floor CLI + `--session` resume flag.**
+   `ofc floors create blueprint.yaml --name X`, `ofc floors ls`, `ofc run --floor X`, `ofc sessions ls --floor X`, `ofc sessions resume <sid>`. Anonymous Floor mode (`ofc run blueprint.yaml`) keeps the current dev workflow unchanged.
+
+8. **⏳ Update-from-file reconciliation.**
+   `ofc floors update X --from-file blueprint.yaml` diffs current Floor state against the file and emits mutations. Hot-reloadable changes apply immediately; furniture/subprocess changes require explicit `--restart`.
+
+### Phase 3 — Per-agent context strategies
+
+The reason this stack exists. With Sessions persistent and the log as truth, strategies become a small layer on top.
+
+9. **⏳ `ContextStrategy` interface on AgentContext.**
+   Implementations: `PassThrough` (current behavior, default), `LastN(20)`. AgentContext gains a Strategy field; LLMAgent builds messages by calling strategy.Build(ctx).
+
+10. **⏳ `Compaction` event type + `Summarize` strategy.**
+    Event recorded per-agent, durably. Agent's context = "latest compaction summary + events after the compaction marker." Summarize triggers when log exceeds a threshold; writes a Compaction event with an LLM-generated summary. Original messages stay in the log for audit; agent simply stops seeing them.
+
+### Beyond v1
+
+Not on the immediate path, but the architecture should accommodate without rework:
+
+11. REST API for fine-grained Floor mutations (currently CLI-only).
+12. SQLite/Postgres backends for `SessionStore` and `FloorStore`.
+13. Multi-user auth: Session ownership, Floor membership.
+14. Versioned blueprints / Floor mutation history.
+15. Drift summaries on session resume.
 
 ## Future Work
 
