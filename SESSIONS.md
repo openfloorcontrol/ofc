@@ -289,8 +289,8 @@ Current → Target. `[x]` marks transformations already shipped.
 | `Floor.ViewForRoom`              | `Session.ForRoom`               | `[x]` Shipped |
 | `AgentContext`                   | Inside `floor.Session`          | `[x]` Moved into Session |
 | `acp.AgentSession`               | `acp.Subprocess` (rename)       | `[x]` Renamed |
-| `floor.Session.Chat`             | `floor.Session.Rooms["#main"]`  | `[ ]` Main chat becomes default room (step 3) |
-| `floor.Chat`                     | `floor.Room`                    | `[ ]` Unified into single type (step 3) |
+| `floor.Session.Chat`             | `floor.Session.MainRoom` (= `Rooms["#main"]`)  | `[x]` Shipped (step 3) |
+| `floor.Chat`                     | `floor.Room`                    | `[x]` Unified into single type (step 3) |
 | Blueprint loader                 | Sequence of mutation calls       | `[x]` Applied via AddAgent/AddFurniture (step 2) |
 | `Controller(*Blueprint)`         | `NewController(*Floor)`         | `[x]` Shipped (step 2) |
 | `Floor.Blueprint.Agents`         | `Floor.Agents` (live, mutable)  | `[x]` Shipped (step 2) |
@@ -311,9 +311,9 @@ Pure plumbing. No persistence, no behavior change. Establishes the layering the 
   Added `AddAgent`, `RemoveAgent`, `UpdateAgent`, `AddFurniture`, `RemoveFurniture`, `SetBlueprintMeta` methods on Floor. Floor gained a live mutable `Agents []blueprint.Agent` slice — Blueprint is now strictly the loaded YAML template. Blueprint loading is no longer a separate code path: `NewFloor` applies LLM agents immediately; `Start()` brings up API/sandbox and then calls `AddFurniture` / `AddAgent` for infra-dependent pieces. Controller switches from `*Blueprint` to `*Floor`; room controllers use `NewControllerForRoom` with an `AllowedIDs` filter so they see the live floor agent set restricted to room members. Mutations serialized by `sync.Mutex` (TODO: upgrade to a single-writer queue when a REST mutation API arrives).
   *Landed:* commit `21f1e18`.
 
-- [ ] **Step 3 — Unify `Chat` and `Room` into a single type.**
-  `#main` becomes just a room inside the session. The Session holds `Rooms map[string]*Room` with `#main` always present. Eliminates the current asymmetry between "the main chat" and "rooms"; collapses two types into one. Mostly cosmetic but the cleanup pays off when sessions persist.
-  *Optional in v1.* Can land after Phase 2 if it's getting in the way.
+- [x] **Step 3 — Unify `Chat` and `Room` into a single type.**
+  The `Chat` struct is gone — its fields/methods (Post, History, Subscribe, AddListener, etc.) moved into the unified `Room` type, which also has an ID. Session holds `Rooms map[string]*Room` with `#main` (constant `MainRoomID`) always present. `Session.MainRoom *Room` is a convenience pointer. Two constructors: `NewRoom(id)` for basic rooms (#main, test fixtures), `NewSubRoom(id, creator, agentIDs, prompt, floor)` for sub-rooms with membership/controller/context. Lifecycle methods split: `Close()` closes the event channel, `CloseWithSummary(summary)` marks closed and closes.
+  *Landed:* commit `5394125`.
 
 ### Phase 2 — Persistence
 
