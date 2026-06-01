@@ -323,8 +323,9 @@ Now that Session is a concrete runtime entity, give it a place to live across re
   Added `SessionStore` interface + `MemoryStore` implementation. Two logical sets per session: an ordered event log (`Read`) and a per-agent visibility join (`ReadForAgent`) — maps naturally to two tables in SQL, one slice + map in memory, or two streams in JSONL. Room/AgentContext route through the store: `Room.Post` calls `Store.Append`; `Room.History` calls `Store.Read`; `AgentContext.Entries`/`Delta` call `Store.ReadForAgent`. `AppendSystem` writes private (per-agent only) events. The `MessageListener` interface is gone — visibility is computed at Post time from session room-membership. `FloorStore` deferred to step 6 (it's value-shaped, smaller scope).
   *Landed:* commit `0b6c64f`.
 
-- [ ] **Step 5 — JSONL backend for `SessionStore`.**
-  One file per session at `~/.ofc/floors/<id>/sessions/<sid>.jsonl`. Append on each event; load = read whole file, replay. The "log IS the context" model lands here — replay deserializes the log into LLM messages, no re-execution of agent turns.
+- [x] **Step 5 — JSONL backend for `SessionStore`.**
+  `JSONLStore` writes one record per line. Three record kinds: `event`, `ref`, `clear`. Reads go to an in-memory mirror (MemoryStore) for speed; the file is write-only at runtime. Append writes event + N ref lines and fsyncs. Load replays the file into the mirror, preserving original Seq + Time. Crash recovery tolerates a truncated final line. CLI flag `--session-log <path>` overrides Floor.Store; pointing two runs at the same file resumes (seq numbers continue monotonically across invocations). The "log IS the context" model is real now — replay deserializes the log into runtime structures without re-executing agent turns.
+  *Landed:* commit `fed20df`.
 
 - [ ] **Step 6 — File backend for `FloorStore`.**
   `floor.json` per named floor at `~/.ofc/floors/<id>/floor.json`. Atomic write (tmp + rename) on each mutation. Blueprint snapshot stored alongside.
