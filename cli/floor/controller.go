@@ -15,25 +15,64 @@ type Decision struct {
 	Info    string // additional info (error message, command name)
 }
 
-// Controller is the pure-logic heart of the floor.
+// Controller is the pure-logic heart of the floor's turn-taking.
 // It receives events, updates state, and returns actions.
 // It has NO I/O, NO goroutines, NO channels.
+//
+// The Controller reads the agent set from its associated Floor (live)
+// or, for room controllers, from an explicit AllowedIDs filter applied
+// to Floor.Agents.
 type Controller struct {
-	Blueprint    *blueprint.Blueprint
+	Floor        *Floor
+	AllowedIDs   map[string]bool // nil = all agents on Floor; non-nil = subset (room scope)
 	CallStack    []Frame
 	passedAgents map[string]bool
 	RoomBound    map[string]bool // agents currently in rooms — skip on main floor
 	DebugFunc    func(string)    // injected for debug logging; no-op in tests
 }
 
-// NewController creates a controller for the given blueprint.
-func NewController(bp *blueprint.Blueprint) *Controller {
+// NewController creates a controller for the given floor's full agent set.
+func NewController(f *Floor) *Controller {
 	return &Controller{
-		Blueprint:    bp,
+		Floor:        f,
 		passedAgents: make(map[string]bool),
 		RoomBound:    make(map[string]bool),
-		DebugFunc:    func(string) {}, // no-op by default
+		DebugFunc:    func(string) {},
 	}
+}
+
+// NewControllerForRoom creates a controller scoped to a subset of the
+// floor's agents (the ones in the room). The filter is by agent ID;
+// if an agent is later removed from the floor, it stops being eligible
+// in the room controller as well.
+func NewControllerForRoom(f *Floor, agentIDs []string) *Controller {
+	filter := make(map[string]bool, len(agentIDs))
+	for _, id := range agentIDs {
+		filter[id] = true
+	}
+	return &Controller{
+		Floor:        f,
+		AllowedIDs:   filter,
+		passedAgents: make(map[string]bool),
+		RoomBound:    make(map[string]bool),
+		DebugFunc:    func(string) {},
+	}
+}
+
+// agents returns the agents this controller considers eligible.
+// For main controllers, that's all of Floor.Agents. For room
+// controllers, only those whose IDs are in AllowedIDs.
+func (c *Controller) agents() []blueprint.Agent {
+	if c.AllowedIDs == nil {
+		return c.Floor.Agents
+	}
+	var filtered []blueprint.Agent
+	for _, a := range c.Floor.Agents {
+		if c.AllowedIDs[a.ID] {
+			filtered = append(filtered, a)
+		}
+	}
+	return filtered
 }
 
 // Decide processes a ChatEvent and returns what to do next.
@@ -103,7 +142,9 @@ func (c *Controller) nextRecipient(lastMsg ChatMessage, excluded map[string]bool
 	}
 
 	// 1. Explicit @mentions? → push frame, wake mentioned agent
-	for _, agent := range c.Blueprint.Agents {
+	agents := c.agents()
+	for i := range agents {
+		agent := agents[i]
 		if excluded[agent.ID] || c.RoomBound[agent.ID] {
 			continue
 		}
@@ -137,7 +178,8 @@ func (c *Controller) nextRecipient(lastMsg ChatMessage, excluded map[string]bool
 	}
 
 	// 3. Poll shouldWake
-	for _, agent := range c.Blueprint.Agents {
+	for i := range agents {
+		agent := agents[i]
 		if excluded[agent.ID] || c.RoomBound[agent.ID] {
 			c.debug("should_wake(%s): skipped (passed or in room)", agent.ID)
 			continue
@@ -164,11 +206,12 @@ func (c *Controller) shouldWake(agent *blueprint.Agent, lastMsg *ChatMessage) bo
 	return false
 }
 
-// getAgent looks up an agent by ID.
+// getAgent looks up an agent by ID within the controller's scope.
 func (c *Controller) getAgent(id string) *blueprint.Agent {
-	for i := range c.Blueprint.Agents {
-		if c.Blueprint.Agents[i].ID == id {
-			return &c.Blueprint.Agents[i]
+	agents := c.agents()
+	for i := range agents {
+		if agents[i].ID == id {
+			return &agents[i]
 		}
 	}
 	return nil

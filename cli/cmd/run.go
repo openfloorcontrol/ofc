@@ -68,7 +68,7 @@ func runCLI(bp *blueprint.Blueprint, initialPrompt string) {
 		frontend.Headless = true
 	}
 
-	ctrl := floor.NewController(bp)
+	ctrl := floor.NewController(f)
 	if debug {
 		ctrl.DebugFunc = frontend.Debug
 	}
@@ -101,7 +101,7 @@ func runTUI(bp *blueprint.Blueprint, initialPrompt string) {
 	}
 	f.StderrWriter = stderrWriter
 
-	ctrl := floor.NewController(bp)
+	ctrl := floor.NewController(f)
 	if debug {
 		ctrl.DebugFunc = func(msg string) {
 			frontend.Render(floor.SystemInfo{Text: "[debug] " + msg})
@@ -140,7 +140,7 @@ func runJSON(bp *blueprint.Blueprint, initialPrompt string) {
 	}
 	f.LogWriter = frontend.LogWriter()
 
-	ctrl := floor.NewController(bp)
+	ctrl := floor.NewController(f)
 	if debug {
 		ctrl.DebugFunc = frontend.Debug
 	}

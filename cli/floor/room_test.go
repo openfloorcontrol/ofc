@@ -315,14 +315,16 @@ func TestRoomControllerFiltersAgents(t *testing.T) {
 		t.Fatalf("CreateRoom failed: %v", err)
 	}
 
-	// Room controller should only know about @data and @code
+	// Room controller should only consider @data and @code from the
+	// floor's agent set.
 	ctrl := room.Controller
-	if len(ctrl.Blueprint.Agents) != 2 {
-		t.Fatalf("expected 2 agents in room controller, got %d", len(ctrl.Blueprint.Agents))
+	roomAgents := ctrl.agents()
+	if len(roomAgents) != 2 {
+		t.Fatalf("expected 2 agents in room controller, got %d", len(roomAgents))
 	}
 
 	agentIDs := make(map[string]bool)
-	for _, a := range ctrl.Blueprint.Agents {
+	for _, a := range roomAgents {
 		agentIDs[a.ID] = true
 	}
 	if !agentIDs["@data"] || !agentIDs["@code"] {
@@ -372,7 +374,7 @@ func TestTryAutoCloseRoom(t *testing.T) {
 		},
 	}
 	floor := NewFloor(bp)
-	ctrl := NewController(bp)
+	ctrl := NewController(floor)
 
 	// Create a room
 	room, err := floor.DefaultSession().CreateRoom("#work", "@user", []string{"@data", "@code"}, "do stuff")

@@ -24,24 +24,58 @@ type Session struct {
 	unified   chan TaggedEvent  // lazy, set by StartUnified
 }
 
-// NewSession creates a session attached to the given Floor.
-// Iterates the floor's blueprint agents to create AgentContexts and
-// registers them as listeners on the session's main Chat.
+// NewSession creates a session attached to the given Floor and seeds it
+// with AgentContexts for every agent currently on the Floor. Subsequent
+// Floor mutations (AddAgent / RemoveAgent) propagate to this session too.
 func NewSession(id string, floor *Floor) *Session {
-	chat := NewChat()
-	contexts := make(map[string]*AgentContext, len(floor.Blueprint.Agents))
-	for _, a := range floor.Blueprint.Agents {
-		ctx := NewAgentContext(a.ID)
-		contexts[a.ID] = ctx
-		chat.AddListener(ctx)
-	}
-	return &Session{
+	s := &Session{
 		ID:            id,
 		Floor:         floor,
-		Chat:          chat,
+		Chat:          NewChat(),
 		Rooms:         make(map[string]*Room),
-		AgentContexts: contexts,
+		AgentContexts: make(map[string]*AgentContext),
 		agentRoom:     make(map[string]string),
+	}
+	// Seed contexts for agents already on the floor. (When this is
+	// called from NewFloor before any agents are added, the loop is a
+	// no-op; the LLM agents added immediately after will propagate to
+	// this session via AddAgent.)
+	for _, a := range floor.Agents {
+		s.AddAgentContext(a.ID)
+	}
+	return s
+}
+
+// AddAgentContext creates a new AgentContext for the given agent in this
+// session and registers it as a Chat listener. Called by Floor.AddAgent
+// for each existing session on the floor.
+func (s *Session) AddAgentContext(agentID string) *AgentContext {
+	ac := NewAgentContext(agentID)
+	s.AgentContexts[agentID] = ac
+	s.Chat.AddListener(ac)
+	return ac
+}
+
+// RemoveAgentContext unregisters and removes the agent's context.
+// Called by Floor.RemoveAgent for each existing session on the floor.
+// Note: the context is dropped but its accumulated entries are not
+// "preserved for audit" — when persistence lands, audit lives in the
+// session's event log, not in dropped AgentContexts.
+func (s *Session) RemoveAgentContext(agentID string) {
+	ac, ok := s.AgentContexts[agentID]
+	if !ok {
+		return
+	}
+	s.Chat.RemoveListener(ac)
+	delete(s.AgentContexts, agentID)
+
+	// Also unbind from any room the agent was in.
+	if roomID := s.agentRoom[agentID]; roomID != "" {
+		if room, ok := s.Rooms[roomID]; ok {
+			room.Chat.RemoveListener(ac)
+			delete(room.AgentIDs, agentID)
+		}
+		delete(s.agentRoom, agentID)
 	}
 }
 
@@ -71,7 +105,7 @@ func (s *Session) CreateRoom(roomID, creator string, agentIDs []string, prompt s
 		}
 	}
 
-	room := NewRoom(roomID, creator, agentIDs, prompt, s.Floor.Blueprint)
+	room := NewRoom(roomID, creator, agentIDs, prompt, s.Floor)
 	s.Rooms[roomID] = room
 
 	var participantNames []string

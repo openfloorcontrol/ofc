@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 	acpclient "github.com/openfloorcontrol/ofc/acp"
@@ -49,16 +50,26 @@ type Frame struct {
 	Callee string // e.g. "@code"
 }
 
-// Floor is the long-lived shared space for one or more Sessions.
-// It owns furniture instances, sandbox, ACP subprocesses, and the API server —
-// everything that's shared across conversations on the same blueprint instance.
+// Floor is the live DOM of agents and furniture for one or more Sessions.
+// It owns the runtime agent set, furniture instances, sandbox, ACP subprocesses,
+// and the API server — everything that's shared across conversations.
 // Per-conversation state (chat log, agent memory, rooms) lives in Session.
+//
+// The Blueprint reference is the immutable template loaded from YAML.
+// Mutations (AddAgent, AddFurniture, ...) modify Floor's own state — Agents,
+// Furniture, etc. — not the Blueprint. Blueprint loading is simply a sequence
+// of mutations applied during Start().
 type Floor struct {
-	Blueprint       *blueprint.Blueprint
-	Sandbox         *sandbox.Sandbox
+	Blueprint *blueprint.Blueprint // immutable template (the loaded YAML)
+
+	// Live, mutable runtime state. Mutations modify these (under mu);
+	// initial blueprint loading populates them via the same mutations.
+	Agents          []blueprint.Agent
 	Furniture       map[string]furniture.Furniture
-	APIServer       *APIServer
 	ACPSubprocesses map[string]*acpclient.Subprocess
+
+	Sandbox   *sandbox.Sandbox
+	APIServer *APIServer
 
 	// Sessions on this Floor. In v1 there is always one default session
 	// keyed as "default", created by NewFloor.
@@ -70,9 +81,23 @@ type Floor struct {
 	DebugFunc    func(string)
 	LogWriter    io.Writer
 	StderrWriter io.Writer // where ACP subprocess stderr goes
+
+	// mu serializes mutations to the live runtime state (Agents,
+	// Furniture, ACPSubprocesses). v1 uses a plain mutex; if/when we
+	// add a REST mutation API we can upgrade to a single-writer queue
+	// without changing the method signatures.
+	mu sync.Mutex
 }
 
-// NewFloor creates a Floor from a blueprint and a default Session.
+// NewFloor creates a Floor and applies the blueprint's static parts —
+// LLM agents — immediately. Furniture and ACP agents are deferred to
+// Start() because they require the API server to be up.
+//
+// Splitting application across NewFloor and Start lets tests use a Floor
+// without spinning up infrastructure: LLM agents are ready, AgentContexts
+// are populated, but no API server / sandbox / subprocesses are running.
+// Both phases go through the same AddAgent / AddFurniture mutation
+// primitives — there is no separate "blueprint loading" code path.
 func NewFloor(bp *blueprint.Blueprint) *Floor {
 	f := &Floor{
 		Blueprint:       bp,
@@ -82,6 +107,18 @@ func NewFloor(bp *blueprint.Blueprint) *Floor {
 		DebugFunc:       func(string) {},
 	}
 	f.Sessions["default"] = NewSession("default", f)
+
+	// Apply LLM agents now. ACP agents need the API server and so wait
+	// for Start(); furniture also needs the API server for MCP routes.
+	for _, a := range bp.Agents {
+		if a.Type == "acp" {
+			continue
+		}
+		// AddAgent only fails for ACP-with-no-APIServer or duplicates;
+		// neither applies here. Ignore error.
+		_ = f.AddAgent(a, func(string) {})
+	}
+
 	return f
 }
 
@@ -113,7 +150,9 @@ func joinAgentIDs(ids []string, exclude string) string {
 	return strings.Join(others, ", ")
 }
 
-// Start initializes API server, sandbox, furniture, and ACP sessions.
+// Start initializes API server, sandbox, then applies the blueprint as a
+// sequence of mutations (AddFurniture, AddAgent). Same primitives that
+// future runtime mutations will use.
 func (f *Floor) Start(renderInfo func(string)) error {
 	// 1. API server (always — serves floor message endpoints + furniture MCP)
 	f.APIServer = NewAPIServer()
@@ -152,12 +191,7 @@ func (f *Floor) Start(renderInfo func(string)) error {
 		renderInfo(fmt.Sprintf("Sandbox ready (%s)", f.Sandbox.ContainerID[:12]))
 	}
 
-	// 3. Furniture
-	if err := f.initFurniture(renderInfo); err != nil {
-		return err
-	}
-
-	// 4. Serve web dist if enabled
+	// 3. Serve web dist if enabled
 	if f.ServeWebDist {
 		webDir := findWebDist()
 		if webDir != nil {
@@ -168,14 +202,16 @@ func (f *Floor) Start(renderInfo func(string)) error {
 		}
 	}
 
-	// 5. Start API server (after furniture is registered)
+	// 4. Start API server. Routes can be added after Start() — both
+	// AddFurniture (MCP routes) and the static handler register against
+	// the running server. Echo serves whatever routes are registered
+	// when a request comes in.
 	listenAddr := f.ListenAddr
 	if listenAddr == "" {
 		listenAddr = ":0"
 	}
 	// Bind to localhost by default for security (token-authenticated API)
 	if f.ServeWebDist && !strings.Contains(listenAddr, "127.0.0.1") && !strings.Contains(listenAddr, "localhost") {
-		// Replace ":port" with "127.0.0.1:port"
 		if strings.HasPrefix(listenAddr, ":") {
 			listenAddr = "127.0.0.1" + listenAddr
 		}
@@ -197,13 +233,25 @@ func (f *Floor) Start(renderInfo func(string)) error {
 		}
 	}
 
-	// 6. ACP agent sessions
-	for _, agent := range f.Blueprint.Agents {
-		if agent.Type != "acp" {
+	// 5. Apply the infrastructure-dependent parts of the blueprint via
+	// mutations. LLM agents are already applied by NewFloor; here we
+	// add furniture (needs API server for MCP routes) and ACP agents
+	// (need API server for furniture MCP URLs).
+	//
+	// Furniture must come before ACP agents — ACP agents reference
+	// furniture by name when registering their MCP server list.
+	for _, fd := range f.Blueprint.Furniture {
+		if err := f.AddFurniture(fd); err != nil {
+			return fmt.Errorf("failed to add furniture %q: %w", fd.Name, err)
+		}
+		renderInfo(fmt.Sprintf("Furniture ready: %s (%s)", fd.Name, fd.Type))
+	}
+	for _, a := range f.Blueprint.Agents {
+		if a.Type != "acp" {
 			continue
 		}
-		if err := f.startACPAgent(agent, renderInfo); err != nil {
-			return err
+		if err := f.AddAgent(a, renderInfo); err != nil {
+			return fmt.Errorf("failed to add agent %s: %w", a.ID, err)
 		}
 	}
 
@@ -232,32 +280,215 @@ func (f *Floor) Stop() {
 	}
 }
 
-// initFurniture creates furniture instances and registers them on the API server.
-func (f *Floor) initFurniture(renderInfo func(string)) error {
-	if len(f.Blueprint.Furniture) == 0 {
-		return nil
+// --- Mutation primitives ---
+//
+// These are the only ways to mutate Floor's live runtime state (Agents,
+// Furniture, ACPSubprocesses). Blueprint loading in Start() uses the same
+// primitives that future runtime callers (REST API, web UI) will use.
+//
+// All mutations are serialized by f.mu. Mutation methods emit no events
+// today; when a Floor mutation event log lands (post-v1), the events will
+// originate here.
+
+// AddFurniture creates a furniture instance, wraps it for observability,
+// and registers its MCP endpoints on the API server. Requires Start() to
+// have run (the API server must be initialized).
+func (f *Floor) AddFurniture(fd blueprint.FurnitureDef) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.APIServer == nil {
+		return fmt.Errorf("AddFurniture(%q): Floor not started", fd.Name)
+	}
+	if _, exists := f.Furniture[fd.Name]; exists {
+		return fmt.Errorf("furniture %q already exists", fd.Name)
+	}
+
+	fur, err := createFurniture(context.Background(), fd, f.Blueprint.Dir)
+	if err != nil {
+		return err
+	}
+
+	// Wrap so all Call() invocations emit FurnitureUpdated events on the
+	// default session's chat. (v1: one session; later, per-session.)
+	wrapped := &observableFurniture{inner: fur, chat: f.DefaultSession().Chat}
+	f.Furniture[fd.Name] = wrapped
+
+	// Register MCP endpoints on the running API server.
+	f.APIServer.RegisterFurniture("default", fd.Name, furniture.WrapAsMCP(wrapped))
+
+	return nil
+}
+
+// RemoveFurniture terminates the furniture (closing subprocesses if any)
+// and removes it from the floor's furniture map. Best-effort: the API
+// server's MCP routes for this furniture stay registered but will return
+// 404 since the map lookup fails. Full route deregistration awaits a
+// future API server refactor (single dispatcher route, see SESSIONS.md
+// Step 8 area).
+func (f *Floor) RemoveFurniture(name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	fur, ok := f.Furniture[name]
+	if !ok {
+		return fmt.Errorf("furniture %q not found", name)
+	}
+
+	delete(f.Furniture, name)
+
+	if closer, ok := fur.(io.Closer); ok {
+		if err := closer.Close(); err != nil {
+			f.debug("RemoveFurniture(%q): close error: %v", name, err)
+		}
+	}
+
+	return nil
+}
+
+// AddAgent appends an agent to the floor and creates an AgentContext for
+// it in every existing session. For ACP agents, also spawns the
+// subprocess and registers its MCP server list — this requires Start()
+// to have run (the API server must be up so ACP can reach furniture MCPs).
+//
+// renderInfo receives status updates during ACP subprocess startup. For
+// non-ACP agents (LLM) it is unused. Pass a no-op for non-interactive
+// callers.
+func (f *Floor) AddAgent(spec blueprint.Agent, renderInfo func(string)) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	for _, a := range f.Agents {
+		if a.ID == spec.ID {
+			return fmt.Errorf("agent %s already exists", spec.ID)
+		}
+	}
+	if spec.Type == "acp" && f.APIServer == nil {
+		return fmt.Errorf("AddAgent(%s): ACP agent requires Floor.Start() first", spec.ID)
+	}
+
+	// For ACP, spawn the subprocess before recording the agent — if startup
+	// fails we don't want a half-registered agent.
+	if spec.Type == "acp" {
+		if err := f.spawnACPSubprocess(spec, renderInfo); err != nil {
+			return err
+		}
+	}
+
+	f.Agents = append(f.Agents, spec)
+	for _, sess := range f.Sessions {
+		sess.AddAgentContext(spec.ID)
+	}
+	return nil
+}
+
+// RemoveAgent removes an agent from the floor. For ACP agents, terminates
+// the subprocess. Removes the AgentContext from every session.
+func (f *Floor) RemoveAgent(id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	idx := -1
+	for i := range f.Agents {
+		if f.Agents[i].ID == id {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return fmt.Errorf("agent %s not found", id)
+	}
+
+	// Terminate ACP subprocess if present.
+	if sub, ok := f.ACPSubprocesses[id]; ok {
+		f.debug("closing ACP subprocess for %s", id)
+		sub.Close()
+		delete(f.ACPSubprocesses, id)
+	}
+
+	f.Agents = append(f.Agents[:idx], f.Agents[idx+1:]...)
+	for _, sess := range f.Sessions {
+		sess.RemoveAgentContext(id)
+	}
+	return nil
+}
+
+// UpdateAgent applies in-place edits to an agent's config via the mutator
+// function. Returns an error if the agent doesn't exist.
+//
+// Subprocess-affecting changes (Type, Command, Args, Env, Furniture list
+// for ACP) take effect on the agent record but NOT on an already-running
+// ACP subprocess. To rebuild the subprocess, callers must
+// RemoveAgent + AddAgent. Hot-reloadable changes (Prompt, Model,
+// Temperature, Endpoint, APIKey, Activation, ToolContext) take effect on
+// the next agent turn — LLMAgent and ACPAgent read these fresh each Run.
+func (f *Floor) UpdateAgent(id string, mutator func(*blueprint.Agent)) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	for i := range f.Agents {
+		if f.Agents[i].ID == id {
+			mutator(&f.Agents[i])
+			return nil
+		}
+	}
+	return fmt.Errorf("agent %s not found", id)
+}
+
+// SetBlueprintMeta updates the floor's display metadata (name, description).
+// Mutates the in-memory Blueprint reference. When persistence and blueprint
+// snapshots land, this is the boundary between the immutable on-disk file
+// and the mutable Floor state — for now, we accept the in-place mutation
+// as a v1 simplification.
+func (f *Floor) SetBlueprintMeta(name, description string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Blueprint.Name = name
+	f.Blueprint.Description = description
+}
+
+// spawnACPSubprocess launches an ACP agent process, performs the ACP
+// handshake, and stores the subprocess in f.ACPSubprocesses. Must be
+// called with f.mu held.
+func (f *Floor) spawnACPSubprocess(agent blueprint.Agent, renderInfo func(string)) error {
+	if agent.Command == "" {
+		return fmt.Errorf("ACP agent %s has no command configured", agent.ID)
+	}
+
+	renderInfo(fmt.Sprintf("Starting ACP agent %s (%s)...", agent.ID, agent.Command))
+
+	cwd, _ := os.Getwd()
+	workDir := filepath.Join(cwd, "workspace")
+	os.MkdirAll(workDir, 0o755)
+	client := acpclient.NewFloorClient(f.Sandbox, workDir)
+	client.LogWriter = f.LogWriter
+	client.DebugFunc = func(msg string) {
+		renderInfo(msg)
+	}
+
+	stderrW := f.StderrWriter
+	if stderrW == nil {
+		stderrW = nil // will use os.Stderr in NewSubprocess
+	}
+
+	sub, err := acpclient.NewSubprocess(agent.Command, agent.Args, agent.Env, client, stderrW, f.Blueprint.Dir)
+	if err != nil {
+		return fmt.Errorf("failed to start ACP agent %s: %w", agent.ID, err)
 	}
 
 	ctx := context.Background()
-	for _, fd := range f.Blueprint.Furniture {
-		fur, err := createFurniture(ctx, fd, f.Blueprint.Dir)
-		if err != nil {
-			return fmt.Errorf("failed to create furniture %q: %w", fd.Name, err)
-		}
-		// Wrap so all Call() invocations emit FurnitureUpdated events on the
-		// default session's chat. (v1: one session; later, observability
-		// will route per-session.)
-		fur = &observableFurniture{inner: fur, chat: f.DefaultSession().Chat}
-		f.Furniture[fd.Name] = fur
-		renderInfo(fmt.Sprintf("Furniture ready: %s (%s)", fd.Name, fd.Type))
+	if err := sub.Initialize(ctx); err != nil {
+		sub.Close()
+		return fmt.Errorf("failed to initialize ACP agent %s: %w", agent.ID, err)
+	}
+	mcpServers := f.buildACPMCPServers(agent, sub)
+	if err := sub.StartSession(ctx, workDir, mcpServers); err != nil {
+		sub.Close()
+		return fmt.Errorf("failed to create session for ACP agent %s: %w", agent.ID, err)
 	}
 
-	// Register furniture MCP endpoints on the existing API server
-	for name, fur := range f.Furniture {
-		mcpSrv := furniture.WrapAsMCP(fur)
-		f.APIServer.RegisterFurniture("default", name, mcpSrv)
-	}
-
+	f.ACPSubprocesses[agent.ID] = sub
+	renderInfo(fmt.Sprintf("ACP agent %s ready", agent.ID))
 	return nil
 }
 
@@ -301,49 +532,6 @@ func (o *observableFurniture) Call(toolName string, args map[string]interface{})
 		o.chat.PostStream(FurnitureUpdated{Name: o.inner.Name()})
 	}
 	return result, err
-}
-
-// startACPAgent initializes one ACP agent session.
-func (f *Floor) startACPAgent(agent blueprint.Agent, renderInfo func(string)) error {
-	if agent.Command == "" {
-		return fmt.Errorf("ACP agent %s has no command configured", agent.ID)
-	}
-
-	renderInfo(fmt.Sprintf("Starting ACP agent %s (%s)...", agent.ID, agent.Command))
-
-	cwd, _ := os.Getwd()
-	workDir := filepath.Join(cwd, "workspace")
-	os.MkdirAll(workDir, 0o755)
-	client := acpclient.NewFloorClient(f.Sandbox, workDir)
-	client.LogWriter = f.LogWriter
-	client.DebugFunc = func(msg string) {
-		renderInfo(msg)
-	}
-
-	stderrW := f.StderrWriter
-	if stderrW == nil {
-		stderrW = nil // will use os.Stderr in NewSubprocess
-	}
-
-	session, err := acpclient.NewSubprocess(agent.Command, agent.Args, agent.Env, client, stderrW, f.Blueprint.Dir)
-	if err != nil {
-		return fmt.Errorf("failed to start ACP agent %s: %w", agent.ID, err)
-	}
-
-	ctx := context.Background()
-	if err := session.Initialize(ctx); err != nil {
-		session.Close()
-		return fmt.Errorf("failed to initialize ACP agent %s: %w", agent.ID, err)
-	}
-	mcpServers := f.buildACPMCPServers(agent, session)
-	if err := session.StartSession(ctx, workDir, mcpServers); err != nil {
-		session.Close()
-		return fmt.Errorf("failed to create session for ACP agent %s: %w", agent.ID, err)
-	}
-
-	f.ACPSubprocesses[agent.ID] = session
-	renderInfo(fmt.Sprintf("ACP agent %s ready", agent.ID))
-	return nil
 }
 
 // buildACPMCPServers builds the MCP server list for an ACP agent.

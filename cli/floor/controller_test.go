@@ -28,7 +28,7 @@ func requireDecision(t *testing.T, d Decision, action string, agentID string) {
 }
 
 func TestDecideUserMessageTriggersAlwaysAgent(t *testing.T) {
-	ctrl := NewController(twoAgentBlueprint())
+	ctrl := NewController(NewFloor(twoAgentBlueprint()))
 	chat := NewChat()
 
 	chat.Post(ChatMessage{From: "@user", Content: "hello"})
@@ -38,7 +38,7 @@ func TestDecideUserMessageTriggersAlwaysAgent(t *testing.T) {
 }
 
 func TestDecideMentionDelegation(t *testing.T) {
-	ctrl := NewController(twoAgentBlueprint())
+	ctrl := NewController(NewFloor(twoAgentBlueprint()))
 	chat := NewChat()
 
 	// User says hello → @data wakes
@@ -58,7 +58,7 @@ func TestDecideMentionDelegation(t *testing.T) {
 }
 
 func TestDecideStackPopReturns(t *testing.T) {
-	ctrl := NewController(twoAgentBlueprint())
+	ctrl := NewController(NewFloor(twoAgentBlueprint()))
 	chat := NewChat()
 
 	// User → @data
@@ -80,7 +80,7 @@ func TestDecideStackPopReturns(t *testing.T) {
 }
 
 func TestDecideStackPopToUser(t *testing.T) {
-	ctrl := NewController(twoAgentBlueprint())
+	ctrl := NewController(NewFloor(twoAgentBlueprint()))
 	chat := NewChat()
 
 	// User mentions @code? directly
@@ -95,7 +95,7 @@ func TestDecideStackPopToUser(t *testing.T) {
 }
 
 func TestDecidePassExcludesAgent(t *testing.T) {
-	ctrl := NewController(twoAgentBlueprint())
+	ctrl := NewController(NewFloor(twoAgentBlueprint()))
 	chat := NewChat()
 
 	// User says hello → @data wakes
@@ -116,7 +116,7 @@ func TestDecidePassFallsToNextAlwaysAgent(t *testing.T) {
 			{ID: "@b", Activation: "always", ToolContext: "full"},
 		},
 	}
-	ctrl := NewController(bp)
+	ctrl := NewController(NewFloor(bp))
 	chat := NewChat()
 
 	// User says hello → @a
@@ -130,18 +130,18 @@ func TestDecidePassFallsToNextAlwaysAgent(t *testing.T) {
 }
 
 func TestDecideQuitCommand(t *testing.T) {
-	bp := twoAgentBlueprint()
-	ctrl := NewController(bp)
-	sess := NewFloor(bp).DefaultSession()
+	f := NewFloor(twoAgentBlueprint())
+	ctrl := NewController(f)
+	sess := f.DefaultSession()
 
 	d := HandleCommand("/quit", sess, ctrl)
 	requireDecision(t, d, "stop", "")
 }
 
 func TestDecideClearCommand(t *testing.T) {
-	bp := twoAgentBlueprint()
-	ctrl := NewController(bp)
-	sess := NewFloor(bp).DefaultSession()
+	f := NewFloor(twoAgentBlueprint())
+	ctrl := NewController(f)
+	sess := f.DefaultSession()
 
 	// Add some messages
 	sess.Chat.Post(ChatMessage{From: "@user", Content: "hello"})
@@ -160,7 +160,7 @@ func TestDecideClearCommand(t *testing.T) {
 }
 
 func TestDecideAgentError(t *testing.T) {
-	ctrl := NewController(twoAgentBlueprint())
+	ctrl := NewController(NewFloor(twoAgentBlueprint()))
 	chat := NewChat()
 
 	d := ctrl.Decide(chat, AgentErrorEvent{
@@ -171,7 +171,7 @@ func TestDecideAgentError(t *testing.T) {
 }
 
 func TestDecideMentionsUserPauses(t *testing.T) {
-	ctrl := NewController(twoAgentBlueprint())
+	ctrl := NewController(NewFloor(twoAgentBlueprint()))
 	chat := NewChat()
 
 	// User says hello → @data
@@ -185,9 +185,9 @@ func TestDecideMentionsUserPauses(t *testing.T) {
 }
 
 func TestDecideUnknownCommand(t *testing.T) {
-	bp := twoAgentBlueprint()
-	ctrl := NewController(bp)
-	sess := NewFloor(bp).DefaultSession()
+	f := NewFloor(twoAgentBlueprint())
+	ctrl := NewController(f)
+	sess := f.DefaultSession()
 
 	d := HandleCommand("/foo", sess, ctrl)
 	requireDecision(t, d, "error", "")
@@ -197,7 +197,7 @@ func TestDecideUnknownCommand(t *testing.T) {
 }
 
 func TestDecideToolInteractionsPreserved(t *testing.T) {
-	ctrl := NewController(twoAgentBlueprint())
+	ctrl := NewController(NewFloor(twoAgentBlueprint()))
 	chat := NewChat()
 
 	chat.Post(ChatMessage{From: "@user", Content: "do something"})

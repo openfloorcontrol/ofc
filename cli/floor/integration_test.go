@@ -81,7 +81,7 @@ func setupTestFloor(t *testing.T, bp *blueprint.Blueprint, agents map[string]Age
 	}
 	floor.APIServer = api
 
-	ctrl := NewController(bp)
+	ctrl := NewController(floor)
 	ctx, cancel := context.WithCancel(context.Background())
 	go testLoop(ctx, sess, ctrl, agents)
 

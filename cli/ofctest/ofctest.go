@@ -41,7 +41,7 @@ func runFloor(t *testing.T, bp *blueprint.Blueprint, prompt string) *FloorResult
 	}
 	defer f.Stop()
 
-	ctrl := floor.NewController(bp)
+	ctrl := floor.NewController(f)
 
 	agents := make(map[string]floor.Agent)
 	for i := range bp.Agents {
