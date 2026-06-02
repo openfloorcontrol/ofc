@@ -95,26 +95,22 @@ func (j *JSONFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string
 
 	unified := sess.StartUnified()
 
-	for tagged := range unified {
-		roomID := tagged.RoomID
-		ev := tagged.Event
+	onCloseInfo := func(info string) {
+		j.emit(map[string]interface{}{"type": "system_info", "text": info})
+	}
 
-		// Resolve which Controller and Session view to use
-		eventCtrl, eventSess := ctrl, sess
-		if roomID != "" {
-			room, ok := sess.Rooms[roomID]
-			if !ok {
-				continue
-			}
-			eventCtrl = room.Controller
-			eventSess = sess.ForRoom(room)
+	for tagged := range unified {
+		ec, ok := ResolveEventContext(sess, ctrl, tagged)
+		if !ok {
+			continue
 		}
+		ev := tagged.Event
 
 		// Serialize and emit the event
 		payload := EventJSON(ev)
 		if payload != nil {
-			if roomID != "" {
-				payload["room_id"] = roomID
+			if ec.RoomID != "" {
+				payload["room_id"] = ec.RoomID
 			}
 			j.emit(payload)
 		}
@@ -122,7 +118,7 @@ func (j *JSONFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string
 		// Handle controller decisions (same logic as CLI)
 		switch ev.(type) {
 		case MessagePosted, AgentPassedEvent, AgentErrorEvent:
-			decision := eventCtrl.Decide(eventSess.MainRoom, ev)
+			decision := DecideAndAutoClose(ec, ev, sess, ctrl, onCloseInfo)
 
 			switch decision.Action {
 			case "trigger":
@@ -138,11 +134,11 @@ func (j *JSONFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string
 				cancelAgent = cancel
 				go func() {
 					defer cancel()
-					agent.Run(ctx, eventSess)
+					agent.Run(ctx, ec.Sess)
 				}()
 
 			case "wait":
-				if oneShot && roomID == "" {
+				if oneShot && ec.RoomID == "" {
 					j.emit(map[string]interface{}{"type": "floor_stopped"})
 					return nil
 				}
@@ -150,13 +146,6 @@ func (j *JSONFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string
 			case "stop":
 				j.emit(map[string]interface{}{"type": "floor_stopped"})
 				return nil
-			}
-
-			if info := TryAutoCloseRoom(roomID, decision, sess, ctrl); info != "" {
-				j.emit(map[string]interface{}{
-					"type": "system_info",
-					"text": info,
-				})
 			}
 
 		case UserCommandEvent:

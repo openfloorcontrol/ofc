@@ -112,38 +112,27 @@ func (f *CLIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 
 	// Main event loop — flat, no recursion
 	for tagged := range unified {
-		roomID := tagged.RoomID
-		ev := tagged.Event
-
-		// Resolve which Controller and Session view to use
-		eventCtrl, eventSess := ctrl, sess
-		if roomID != "" {
-			room, ok := sess.Rooms[roomID]
-			if !ok {
-				continue // room closed, stale event
-			}
-			eventCtrl = room.Controller
-			eventSess = sess.ForRoom(room)
+		ec, ok := ResolveEventContext(sess, ctrl, tagged)
+		if !ok {
+			continue // stale event for a closed room
 		}
+		ev := tagged.Event
 
 		switch e := ev.(type) {
 		case MessagePosted:
 			f.renderMessagePosted(e)
 
-			decision := eventCtrl.Decide(eventSess.MainRoom, e)
-			if err := f.handleDecision(eventSess, eventCtrl, agents, decision, &cancelAgent); err != nil {
+			decision := DecideAndAutoClose(ec, e, sess, ctrl, f.renderSystemInfo)
+			if err := f.handleDecision(ec.Sess, ec.Ctrl, agents, decision, &cancelAgent); err != nil {
 				return err
 			}
-			if oneShot && roomID == "" && decision.Action == "wait" {
+			if oneShot && ec.RoomID == "" && decision.Action == "wait" {
 				return nil
 			}
-			if info := TryAutoCloseRoom(roomID, decision, sess, ctrl); info != "" {
-				f.renderSystemInfo(info)
-			}
-			signalReady(roomID, decision)
+			signalReady(ec.RoomID, decision)
 
 		case StreamEvent:
-			f.renderStream(e.Event, roomID)
+			f.renderStream(e.Event, ec.RoomID)
 
 		case AgentFinished:
 			f.out.Print("\n") // newline after streaming
@@ -151,33 +140,30 @@ func (f *CLIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 		case AgentPassedEvent:
 			f.out.Terminal("\r\033[K")
 			label := e.AgentID
-			if roomID != "" {
-				label = roomID + "/" + e.AgentID
+			if ec.RoomID != "" {
+				label = ec.RoomID + "/" + e.AgentID
 			}
 			f.out.Terminal("%s%s[%s]:%s [PASS]\n", Bold, f.agentColor(e.AgentID), label, Reset)
 
-			decision := eventCtrl.Decide(eventSess.MainRoom, e)
-			if err := f.handleDecision(eventSess, eventCtrl, agents, decision, &cancelAgent); err != nil {
+			decision := DecideAndAutoClose(ec, e, sess, ctrl, f.renderSystemInfo)
+			if err := f.handleDecision(ec.Sess, ec.Ctrl, agents, decision, &cancelAgent); err != nil {
 				return err
 			}
-			if oneShot && roomID == "" && decision.Action == "wait" {
+			if oneShot && ec.RoomID == "" && decision.Action == "wait" {
 				return nil
 			}
-			if info := TryAutoCloseRoom(roomID, decision, sess, ctrl); info != "" {
-				f.renderSystemInfo(info)
-			}
-			signalReady(roomID, decision)
+			signalReady(ec.RoomID, decision)
 
 		case AgentErrorEvent:
 			f.out.Terminal("\r\033[K")
 			f.out.AgentLabel(e.AgentID, f.agentColor(e.AgentID))
 			f.out.Print("[ERROR: %v]\n", e.Err)
 
-			decision := eventCtrl.Decide(eventSess.MainRoom, e)
-			if err := f.handleDecision(eventSess, eventCtrl, agents, decision, &cancelAgent); err != nil {
+			decision := DecideAndAutoClose(ec, e, sess, ctrl, f.renderSystemInfo)
+			if err := f.handleDecision(ec.Sess, ec.Ctrl, agents, decision, &cancelAgent); err != nil {
 				return err
 			}
-			signalReady(roomID, decision)
+			signalReady(ec.RoomID, decision)
 
 		case UserCommandEvent:
 			decision := HandleCommand(e.Command, sess, ctrl)
@@ -220,8 +206,9 @@ func (f *CLIFrontend) handleDecision(sess *Session, ctrl *Controller, agents map
 		go func() {
 			defer cancel()
 			agent.Run(ctx, sess)
-			// Agent.Run() posts MessagePosted (or AgentPassedEvent/AgentErrorEvent) to Chat.
-			// The main loop will pick it up and call Decide again.
+			// Agent.Run() posts MessagePosted (or AgentPassedEvent/AgentErrorEvent)
+			// to the session's main room. The main loop will pick it up and
+			// call Decide again.
 		}()
 
 	case "wait":
@@ -238,7 +225,7 @@ func (f *CLIFrontend) handleDecision(sess *Session, ctrl *Controller, agents map
 	return nil
 }
 
-// readStdinLoop reads lines from stdin and posts them to the default session's Chat.
+// readStdinLoop reads lines from stdin and posts them to the default session's main room.
 // Waits for readyForInput before showing the prompt (so it doesn't
 // appear while agents are streaming).
 func (f *CLIFrontend) readStdinLoop(floor *Floor, readyForInput chan struct{}) {

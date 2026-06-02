@@ -1,47 +1,28 @@
 package floor
 
-// Event is the base interface for all floor events.
+// Event is the base interface for streaming/display events that flow
+// through Room.PostStream and the TUI display channel. These are
+// ephemeral — they are NOT stored in the session log (that's
+// ChatEvent in chat.go).
+//
 // Sealed — only types in this package implement it.
 type Event interface {
 	eventMarker()
 }
 
-// --- Inbound events (to controller) ---
-
-// UserMessage is sent when the user provides input.
-type UserMessage struct {
-	Content string
-}
-
-// AgentDone is sent when an agent finishes its full response.
-type AgentDone struct {
-	AgentID          string
-	Content          string
-	ToolInteractions []ToolInteraction
-}
-
-// AgentPassed is sent when an agent responds with [PASS].
-type AgentPassed struct {
-	AgentID string
-}
-
-// AgentError is sent when an agent encounters an error.
-type AgentError struct {
-	AgentID string
-	Err     error
-	Partial string // any content produced before the error
-}
-
-// UserCommand is sent for slash commands (/quit, /clear).
-type UserCommand struct {
-	Command string
-}
-
 // --- Informational ---
 
-// SystemInfo is an informational message (sandbox ready, agent started, etc.).
+// SystemInfo is an informational message (sandbox ready, agent started,
+// debug output, etc.). Used by frontends to display non-chat status.
 type SystemInfo struct {
 	Text string
+}
+
+// AgentDone is a display marker the TUI uses to add a newline after an
+// agent finishes streaming. Sent by the TUI's background goroutine to
+// its Bubble Tea model in response to AgentFinished (chat.go).
+type AgentDone struct {
+	AgentID string
 }
 
 // --- Stream events (agent → frontend, bypass controller) ---
@@ -90,23 +71,19 @@ type FurnitureUpdated struct {
 }
 
 // TaggedEvent wraps a ChatEvent with a room identifier.
-// RoomID is "" for main floor events.
+// RoomID is "" for the main room.
 type TaggedEvent struct {
 	RoomID string
 	Event  ChatEvent
 }
 
 // Seal the interface — only floor package types can implement Event.
-func (UserMessage) eventMarker()    {}
-func (AgentDone) eventMarker()      {}
-func (AgentPassed) eventMarker()    {}
-func (AgentError) eventMarker()     {}
-func (UserCommand) eventMarker()    {}
-func (SystemInfo) eventMarker()     {}
-func (TokenStreamed) eventMarker()  {}
-func (ToolCallStarted) eventMarker() {}
-func (ToolCallOutput) eventMarker()  {}
-func (ToolCallResult) eventMarker()  {}
-func (AgentThinking) eventMarker()  {}
-func (AgentLabel) eventMarker()          {}
-func (FurnitureUpdated) eventMarker()    {}
+func (SystemInfo) eventMarker()       {}
+func (AgentDone) eventMarker()        {}
+func (TokenStreamed) eventMarker()    {}
+func (ToolCallStarted) eventMarker()  {}
+func (ToolCallOutput) eventMarker()   {}
+func (ToolCallResult) eventMarker()   {}
+func (AgentThinking) eventMarker()    {}
+func (AgentLabel) eventMarker()       {}
+func (FurnitureUpdated) eventMarker() {}

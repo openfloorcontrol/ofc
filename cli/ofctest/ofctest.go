@@ -62,24 +62,24 @@ func runFloor(t *testing.T, bp *blueprint.Blueprint, prompt string) *FloorResult
 	result := &FloorResult{bp: bp}
 	unified := sess.StartUnified()
 
-	for tagged := range unified {
-		roomID := tagged.RoomID
-		ev := tagged.Event
+	onCloseInfo := func(info string) {
+		result.Events = append(result.Events, map[string]interface{}{
+			"type": "system_info",
+			"text": info,
+		})
+	}
 
-		eventCtrl, eventSess := ctrl, sess
-		if roomID != "" {
-			room, ok := sess.Rooms[roomID]
-			if !ok {
-				continue
-			}
-			eventCtrl = room.Controller
-			eventSess = sess.ForRoom(room)
+	for tagged := range unified {
+		ec, ok := floor.ResolveEventContext(sess, ctrl, tagged)
+		if !ok {
+			continue
 		}
+		ev := tagged.Event
 
 		// Collect event
 		if payload := floor.EventJSON(ev); payload != nil {
-			if roomID != "" {
-				payload["room_id"] = roomID
+			if ec.RoomID != "" {
+				payload["room_id"] = ec.RoomID
 			}
 			result.Events = append(result.Events, payload)
 		}
@@ -87,7 +87,7 @@ func runFloor(t *testing.T, bp *blueprint.Blueprint, prompt string) *FloorResult
 		// Drive the controller
 		switch ev.(type) {
 		case floor.MessagePosted, floor.AgentPassedEvent, floor.AgentErrorEvent:
-			decision := eventCtrl.Decide(eventSess.MainRoom, ev)
+			decision := floor.DecideAndAutoClose(ec, ev, sess, ctrl, onCloseInfo)
 
 			switch decision.Action {
 			case "trigger":
@@ -97,11 +97,11 @@ func runFloor(t *testing.T, bp *blueprint.Blueprint, prompt string) *FloorResult
 				}
 				ctx := context.Background()
 				go func() {
-					agent.Run(ctx, eventSess)
+					agent.Run(ctx, ec.Sess)
 				}()
 
 			case "wait":
-				if roomID == "" {
+				if ec.RoomID == "" {
 					// One-shot: agents are done
 					result.Messages = sess.MainRoom.History()
 					return result
@@ -110,13 +110,6 @@ func runFloor(t *testing.T, bp *blueprint.Blueprint, prompt string) *FloorResult
 			case "stop":
 				result.Messages = sess.MainRoom.History()
 				return result
-			}
-
-			if info := floor.TryAutoCloseRoom(roomID, decision, sess, ctrl); info != "" {
-				result.Events = append(result.Events, map[string]interface{}{
-					"type": "system_info",
-					"text": info,
-				})
 			}
 		}
 	}

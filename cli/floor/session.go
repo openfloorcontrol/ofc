@@ -56,8 +56,8 @@ func NewSession(id string, floor *Floor) *Session {
 
 // AddAgentContext creates a new AgentContext for the given agent in this
 // session. Visibility for future Post calls is determined at Post time
-// from the session's room-membership map, so this method does NOT
-// register any listener — it just allocates the context.
+// from the session's room-membership map (Session.AgentsInRoom); this
+// method just allocates the context struct.
 func (s *Session) AddAgentContext(agentID string) *AgentContext {
 	ac := NewAgentContext(agentID, s)
 	s.AgentContexts[agentID] = ac

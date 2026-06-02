@@ -149,31 +149,24 @@ func (t *TUIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 		// Use unified event channel — merges main session chat + all room events
 		unified := sess.StartUnified()
 
-		for tagged := range unified {
-			roomID := tagged.RoomID
-			ev := tagged.Event
-
-			// Resolve which Controller and Session view to use
-			eventCtrl, eventSess := ctrl, sess
-			if roomID != "" {
-				room, ok := sess.Rooms[roomID]
-				if !ok {
-					continue // room closed, stale event
-				}
-				eventCtrl = room.Controller
-				eventSess = sess.ForRoom(room)
+		onCloseInfo := func(info string) {
+			if t.program != nil {
+				t.program.Send(tuiSystemMsg{Text: info})
 			}
+		}
+
+		for tagged := range unified {
+			ec, ok := ResolveEventContext(sess, ctrl, tagged)
+			if !ok {
+				continue
+			}
+			ev := tagged.Event
 
 			switch e := ev.(type) {
 			case MessagePosted:
 				t.logChatEvent(ev)
-				decision := eventCtrl.Decide(eventSess.MainRoom, e)
-				t.dispatchDecision(eventSess, agents, decision, &cancelAgent)
-				if info := TryAutoCloseRoom(roomID, decision, sess, ctrl); info != "" {
-					if t.program != nil {
-						t.program.Send(tuiSystemMsg{Text: info})
-					}
-				}
+				decision := DecideAndAutoClose(ec, e, sess, ctrl, onCloseInfo)
+				t.dispatchDecision(ec.Sess, agents, decision, &cancelAgent)
 
 			case StreamEvent:
 				if t.program != nil {
@@ -191,21 +184,16 @@ func (t *TUIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 					t.program.Send(tuiPassedMsg{AgentID: e.AgentID})
 				}
 				t.out.Log("[%s]: [PASS]\n", e.AgentID)
-				decision := eventCtrl.Decide(eventSess.MainRoom, e)
-				t.dispatchDecision(eventSess, agents, decision, &cancelAgent)
-				if info := TryAutoCloseRoom(roomID, decision, sess, ctrl); info != "" {
-					if t.program != nil {
-						t.program.Send(tuiSystemMsg{Text: info})
-					}
-				}
+				decision := DecideAndAutoClose(ec, e, sess, ctrl, onCloseInfo)
+				t.dispatchDecision(ec.Sess, agents, decision, &cancelAgent)
 
 			case AgentErrorEvent:
 				if t.program != nil {
 					t.program.Send(tuiErrorMsg{AgentID: e.AgentID, Err: e.Err})
 				}
 				t.out.Log("[ERROR from %s: %v]\n", e.AgentID, e.Err)
-				decision := eventCtrl.Decide(eventSess.MainRoom, e)
-				t.dispatchDecision(eventSess, agents, decision, &cancelAgent)
+				decision := DecideAndAutoClose(ec, e, sess, ctrl, onCloseInfo)
+				t.dispatchDecision(ec.Sess, agents, decision, &cancelAgent)
 
 			case UserCommandEvent:
 				decision := HandleCommand(e.Command, sess, ctrl)

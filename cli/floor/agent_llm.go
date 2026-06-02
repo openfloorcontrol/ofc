@@ -106,13 +106,13 @@ func (a *LLMAgent) Run(ctx context.Context, sess *Session) error {
 
 // buildContext converts the agent's accumulated context to LLM messages,
 // applying tool_context filtering. Reads from AgentContext if available,
-// falls back to Chat.History() for test agents without a context.
+// falls back to MainRoom.History() for test agents without a context.
 func (a *LLMAgent) buildContext(sess *Session) []llm.Message {
 	messages := []llm.Message{
 		{Role: "system", Content: a.agent.Prompt},
 	}
 
-	// Use AgentContext if available, fall back to Chat.History()
+	// Use AgentContext if available, fall back to MainRoom.History()
 	var chatMsgs []*ChatMessage
 	if ac := sess.GetAgentContext(a.agent.ID); ac != nil {
 		chatMsgs = ac.Entries()
