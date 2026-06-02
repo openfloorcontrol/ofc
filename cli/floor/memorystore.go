@@ -21,6 +21,7 @@ type memSession struct {
 	events    []StoredEvent       // ordered by Seq
 	nextSeq   uint64              // assigned on Append (starts at 1)
 	agentRefs map[string][]uint64 // agentID → seq numbers in arrival order
+	meta      *SessionMeta        // nil if SetMeta was never called
 }
 
 // NewMemoryStore creates an empty in-memory store.
@@ -179,6 +180,27 @@ func (m *MemoryStore) Clear(sessionID string, filter EventFilter) error {
 	}
 
 	return nil
+}
+
+// SetMeta implements SessionStore.
+func (m *MemoryStore) SetMeta(sessionID string, meta SessionMeta) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s := m.getSession(sessionID)
+	copy := meta // own a copy so the caller can't mutate after store
+	s.meta = &copy
+	return nil
+}
+
+// GetMeta implements SessionStore.
+func (m *MemoryStore) GetMeta(sessionID string) (SessionMeta, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.sessions[sessionID]
+	if !ok || s.meta == nil {
+		return SessionMeta{}, ErrNoSessionMeta
+	}
+	return *s.meta, nil
 }
 
 // matches checks whether an event satisfies the filter.

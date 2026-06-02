@@ -135,6 +135,35 @@ func (s *JSONLStore) ReadForAgent(sessionID, agentID string, filter EventFilter)
 	return s.mem.ReadForAgent(sessionID, agentID, filter)
 }
 
+// SetMeta writes a meta-record to the file and applies it to the mirror.
+// Append-only: a later SetMeta overrides earlier ones at load time
+// because replay applies records in order (the last one wins).
+func (s *JSONLStore) SetMeta(sessionID string, meta SessionMeta) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	rec := metaRecord{
+		Kind:      "meta",
+		SessionID: sessionID,
+		Meta:      meta,
+	}
+	line, err := json.Marshal(rec)
+	if err != nil {
+		return fmt.Errorf("marshal meta record: %w", err)
+	}
+	if err := s.writeAndSync([][]byte{line}); err != nil {
+		return err
+	}
+	return s.mem.SetMeta(sessionID, meta)
+}
+
+// GetMeta delegates to the in-memory mirror.
+func (s *JSONLStore) GetMeta(sessionID string) (SessionMeta, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.mem.GetMeta(sessionID)
+}
+
 // Clear writes a clear-record to the file and applies it to the mirror.
 func (s *JSONLStore) Clear(sessionID string, filter EventFilter) error {
 	s.mu.Lock()
@@ -185,6 +214,12 @@ type clearRecord struct {
 	Kind      string      `json:"kind"`
 	SessionID string      `json:"session_id"`
 	Filter    EventFilter `json:"filter"`
+}
+
+type metaRecord struct {
+	Kind      string      `json:"kind"`
+	SessionID string      `json:"session_id"`
+	Meta      SessionMeta `json:"meta"`
 }
 
 // writeAndSync writes each record followed by '\n', then fsyncs.
@@ -263,8 +298,14 @@ func (s *JSONLStore) load() error {
 				break
 			}
 			_ = s.mem.Clear(cr.SessionID, cr.Filter)
+		case "meta":
+			var mr metaRecord
+			if err := json.Unmarshal(line, &mr); err != nil {
+				break
+			}
+			_ = s.mem.SetMeta(mr.SessionID, mr.Meta)
 		default:
-			// Unknown record kind — skip
+			// Unknown record kind — skip (forward compat)
 		}
 	}
 	if err := scanner.Err(); err != nil && err != io.EOF {

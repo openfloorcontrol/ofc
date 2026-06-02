@@ -1,9 +1,13 @@
 package cmd
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/uuid"
@@ -65,7 +69,7 @@ func runCLI(bp *blueprint.Blueprint, initialPrompt string) {
 	frontend := floor.NewCLIFrontend(logFile, debug, cm)
 
 	f := floor.NewFloor(bp)
-	if err := applySessionLog(f); err != nil {
+	if err := applySessionLog(f, bp); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -101,7 +105,7 @@ func runTUI(bp *blueprint.Blueprint, initialPrompt string) {
 	frontend, model := floor.NewTUIFrontend(logFile, debug, cm)
 
 	f := floor.NewFloor(bp)
-	if err := applySessionLog(f); err != nil {
+	if err := applySessionLog(f, bp); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -152,7 +156,7 @@ func runJSON(bp *blueprint.Blueprint, initialPrompt string) {
 	frontend := floor.NewJSONFrontend(logFile, debug)
 
 	f := floor.NewFloor(bp)
-	if err := applySessionLog(f); err != nil {
+	if err := applySessionLog(f, bp); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -236,10 +240,18 @@ func resolveSessionPath() (string, bool, error) {
 	return path, resuming, nil
 }
 
+// internalSessionID is the key used inside a JSONL file for the session's
+// events and meta. The externally-meaningful identifier is the UUID
+// (the file name); internally we use "default" so multiple files don't
+// confuse each other at the record level.
+const internalSessionID = "default"
+
 // applySessionLog overrides Floor.Store with a JSONLStore at the resolved
 // path. Prints a "Session: <uuid>" line so the user knows what to
-// reference later.
-func applySessionLog(f *floor.Floor) error {
+// reference later. On a fresh session, records SessionMeta (cwd,
+// blueprint path, name, hash, version, time). On resume, fetches
+// existing meta and warns on any mismatch.
+func applySessionLog(f *floor.Floor, bp *blueprint.Blueprint) error {
 	path, resuming, err := resolveSessionPath()
 	if err != nil {
 		return err
@@ -250,9 +262,6 @@ func applySessionLog(f *floor.Floor) error {
 	}
 	f.Store = store
 
-	// Print a session line so users can grep / copy the UUID. For
-	// --session-log, we echo the path instead. JSON frontend skips
-	// this — it's noise in machine-readable output.
 	if !useJSON {
 		if sessionLog != "" {
 			fmt.Fprintf(os.Stderr, "Session log: %s\n", sessionLog)
@@ -262,5 +271,94 @@ func applySessionLog(f *floor.Floor) error {
 			fmt.Fprintf(os.Stderr, "Session: %s\n", resolvedSessionID)
 		}
 	}
+
+	if resuming {
+		if existing, err := store.GetMeta(internalSessionID); err == nil {
+			warnOnMetaMismatch(existing, bp, blueprintFile)
+		}
+		// If no meta recorded (older file), stay silent.
+	} else {
+		meta, err := makeSessionMeta(bp, blueprintFile)
+		if err != nil {
+			// Non-fatal — meta is for hygiene, not correctness.
+			fmt.Fprintf(os.Stderr, "[warning] could not record session meta: %v\n", err)
+		} else if err := store.SetMeta(internalSessionID, meta); err != nil {
+			fmt.Fprintf(os.Stderr, "[warning] could not write session meta: %v\n", err)
+		}
+	}
 	return nil
 }
+
+// makeSessionMeta builds a SessionMeta for the current invocation. The
+// blueprint hash is sha256 of the on-disk file contents (captures any
+// change — prompts, agent set, furniture config).
+func makeSessionMeta(bp *blueprint.Blueprint, bpPath string) (floor.SessionMeta, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "" // not fatal
+	}
+	absPath, err := filepath.Abs(bpPath)
+	if err != nil {
+		absPath = bpPath
+	}
+	hash, err := hashFile(absPath)
+	if err != nil {
+		return floor.SessionMeta{}, fmt.Errorf("hash blueprint: %w", err)
+	}
+	return floor.SessionMeta{
+		CWD:           cwd,
+		BlueprintPath: absPath,
+		BlueprintName: bp.Name,
+		BlueprintHash: hash,
+		OfcVersion:    Version,
+		CreatedAt:     time.Now(),
+	}, nil
+}
+
+// hashFile returns the hex-encoded sha256 of a file's contents.
+func hashFile(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	h := sha256.Sum256(data)
+	return hex.EncodeToString(h[:]), nil
+}
+
+// warnOnMetaMismatch compares the resumed session's recorded meta to the
+// current invocation's context. Each mismatch becomes a stderr warning;
+// none of them block the resume — they're for the user to decide if the
+// drift matters.
+func warnOnMetaMismatch(existing floor.SessionMeta, bp *blueprint.Blueprint, bpPath string) {
+	// CWD comparison
+	cwd, _ := os.Getwd()
+	if existing.CWD != "" && cwd != "" && existing.CWD != cwd {
+		fmt.Fprintf(os.Stderr, "[warning] session was started in %s; current dir is %s\n", existing.CWD, cwd)
+	}
+
+	// Blueprint path comparison
+	absPath, err := filepath.Abs(bpPath)
+	if err != nil {
+		absPath = bpPath
+	}
+	if existing.BlueprintPath != "" && existing.BlueprintPath != absPath {
+		fmt.Fprintf(os.Stderr, "[warning] session was started with blueprint %s; now using %s\n", existing.BlueprintPath, absPath)
+	}
+
+	// Blueprint name comparison (catches a renamed blueprint file)
+	if existing.BlueprintName != "" && existing.BlueprintName != bp.Name {
+		fmt.Fprintf(os.Stderr, "[warning] blueprint name changed: %q → %q\n", existing.BlueprintName, bp.Name)
+	}
+
+	// Blueprint content hash
+	currentHash, err := hashFile(absPath)
+	if err == nil && existing.BlueprintHash != "" && existing.BlueprintHash != currentHash {
+		fmt.Fprintf(os.Stderr, "[warning] blueprint file contents changed since session started (hash mismatch)\n")
+	}
+
+	// Version comparison (informational)
+	if existing.OfcVersion != "" && existing.OfcVersion != Version && Version != "dev" {
+		fmt.Fprintf(os.Stderr, "[info] session was created with ofc %s; running %s\n", existing.OfcVersion, Version)
+	}
+}
+

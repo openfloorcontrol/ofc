@@ -1,6 +1,9 @@
 package floor
 
-import "time"
+import (
+	"errors"
+	"time"
+)
 
 // SessionEvent is the payload of a stored event. Concrete types today:
 //   - MessagePostedEvent
@@ -39,6 +42,28 @@ type EventFilter struct {
 	FromSeq uint64 // only events with Seq > FromSeq
 }
 
+// SessionMeta records the context a session was started in, so we can
+// flag when a resume looks inconsistent (different cwd, blueprint
+// changed, etc.). In a SQL backend this would map to its own table;
+// in JSONL it lives as a "meta" record (typically the first line).
+//
+// The sessionID is the store key, not a field on the meta itself —
+// SetMeta and GetMeta take it as a separate argument.
+type SessionMeta struct {
+	CWD           string    `json:"cwd"`
+	BlueprintPath string    `json:"blueprint_path"`
+	BlueprintName string    `json:"blueprint_name"`
+	BlueprintHash string    `json:"blueprint_hash"` // sha256 hex of blueprint file contents
+	OfcVersion    string    `json:"ofc_version"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+// ErrNoSessionMeta is returned by GetMeta when no metadata has been
+// recorded for the session. Common for sessions created before this
+// feature shipped, or for in-memory sessions where SetMeta was never
+// called.
+var ErrNoSessionMeta = errors.New("no session metadata recorded")
+
 // AppendOpts groups Append's parameters. RoomID and VisibleTo are
 // optional; Event is required.
 type AppendOpts struct {
@@ -74,6 +99,14 @@ type SessionStore interface {
 	// Clear removes events matching the filter and any visibility refs
 	// that point to them.
 	Clear(sessionID string, filter EventFilter) error
+
+	// SetMeta records (or replaces) the SessionMeta for a session.
+	// Called by the CLI on session creation.
+	SetMeta(sessionID string, meta SessionMeta) error
+
+	// GetMeta returns the SessionMeta for the session, or
+	// ErrNoSessionMeta if none was recorded.
+	GetMeta(sessionID string) (SessionMeta, error)
 }
 
 // extractMessages picks ChatMessages out of a stored-event list.

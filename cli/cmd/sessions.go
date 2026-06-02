@@ -42,10 +42,12 @@ var sessionsLsCmd = &cobra.Command{
 		}
 
 		type sessionRow struct {
-			id    string
-			path  string
-			info  os.FileInfo
-			mtime int64
+			id        string
+			path      string
+			info      os.FileInfo
+			mtime     int64
+			blueprint string // from meta if present, "" if unknown
+			cwdShort  string // last path segment for compactness
 		}
 		var rows []sessionRow
 		for _, e := range entries {
@@ -61,12 +63,18 @@ var sessionsLsCmd = &cobra.Command{
 			if err != nil {
 				continue
 			}
-			rows = append(rows, sessionRow{
+			row := sessionRow{
 				id:    id,
 				path:  filepath.Join(dir, name),
 				info:  info,
 				mtime: info.ModTime().Unix(),
-			})
+			}
+			// Best-effort: read meta to enrich the listing. Skip on error.
+			if meta, err := readSessionMeta(row.path); err == nil {
+				row.blueprint = meta.BlueprintName
+				row.cwdShort = shortCWD(meta.CWD)
+			}
+			rows = append(rows, row)
 		}
 		if len(rows) == 0 {
 			fmt.Println("No sessions yet.")
@@ -77,12 +85,23 @@ var sessionsLsCmd = &cobra.Command{
 		sort.Slice(rows, func(i, j int) bool { return rows[i].mtime > rows[j].mtime })
 
 		// Tab-style columns. Header + rows.
-		fmt.Printf("%-36s  %-19s  %s\n", "UUID", "LAST MODIFIED", "SIZE")
+		// Truncate UUID to 8 chars for readability — full UUID still works as input.
+		fmt.Printf("%-8s  %-19s  %-8s  %-20s  %s\n", "UUID", "LAST MODIFIED", "SIZE", "BLUEPRINT", "CWD")
 		for _, r := range rows {
-			fmt.Printf("%-36s  %-19s  %s\n",
-				r.id,
+			bp := r.blueprint
+			if bp == "" {
+				bp = "-"
+			}
+			cwd := r.cwdShort
+			if cwd == "" {
+				cwd = "-"
+			}
+			fmt.Printf("%-8s  %-19s  %-8s  %-20s  %s\n",
+				r.id[:8],
 				r.info.ModTime().Format("2006-01-02 15:04:05"),
-				humanSize(r.info.Size()))
+				humanSize(r.info.Size()),
+				truncate(bp, 20),
+				cwd)
 		}
 	},
 }
@@ -153,6 +172,26 @@ var sessionsShowCmd = &cobra.Command{
 		}
 		defer store.Close()
 
+		fmt.Printf("# Session %s\n\n", id)
+
+		// Print meta header if recorded.
+		if meta, err := store.GetMeta("default"); err == nil {
+			fmt.Printf("- **Blueprint**: %s\n", meta.BlueprintName)
+			if meta.BlueprintPath != "" {
+				fmt.Printf("- **Blueprint path**: %s\n", meta.BlueprintPath)
+			}
+			if meta.CWD != "" {
+				fmt.Printf("- **Working dir**: %s\n", meta.CWD)
+			}
+			if !meta.CreatedAt.IsZero() {
+				fmt.Printf("- **Created**: %s\n", meta.CreatedAt.Format("2006-01-02 15:04:05"))
+			}
+			if meta.OfcVersion != "" {
+				fmt.Printf("- **ofc version**: %s\n", meta.OfcVersion)
+			}
+			fmt.Println()
+		}
+
 		// Files written by ofc run use "default" as the internal session
 		// id. (The file name is the externally-visible UUID.)
 		events, err := store.Read("default", floor.EventFilter{})
@@ -161,9 +200,8 @@ var sessionsShowCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		fmt.Printf("# Session %s\n\n", id)
 		if len(events) == 0 {
-			fmt.Println("_(empty)_")
+			fmt.Println("_(no messages)_")
 			return
 		}
 		for _, ev := range events {
@@ -175,6 +213,42 @@ var sessionsShowCmd = &cobra.Command{
 			fmt.Printf("**[%s]**: %s\n\n", msg.From, msg.Content)
 		}
 	},
+}
+
+// readSessionMeta opens a JSONL store at the given path, fetches the
+// stored meta (if any), and closes. Used by `ofc sessions ls` to enrich
+// the listing without loading the full session into memory long-term.
+func readSessionMeta(path string) (floor.SessionMeta, error) {
+	store, err := floor.NewJSONLStore(path)
+	if err != nil {
+		return floor.SessionMeta{}, err
+	}
+	defer store.Close()
+	return store.GetMeta("default")
+}
+
+// shortCWD returns the last 2 path segments of a directory, prefixed
+// with "…/" if there are more. For listings.
+func shortCWD(p string) string {
+	if p == "" {
+		return ""
+	}
+	parts := strings.Split(p, string(filepath.Separator))
+	if len(parts) <= 2 {
+		return p
+	}
+	return "…/" + strings.Join(parts[len(parts)-2:], string(filepath.Separator))
+}
+
+// truncate caps s at n runes, appending "…" if cut.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	if n <= 1 {
+		return "…"
+	}
+	return s[:n-1] + "…"
 }
 
 // humanSize formats a byte count as a short human-readable string.
