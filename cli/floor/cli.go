@@ -68,6 +68,12 @@ func (f *CLIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 
 	f.renderHeader(floor)
 
+	sess := floor.DefaultSession()
+
+	// If the session has prior history (resumed from disk), replay the
+	// last turn so the user sees the context they're picking up.
+	f.renderLastTurnIfAny(sess)
+
 	// readyForInput signals the stdin goroutine to show the prompt.
 	// It gates input so we don't show "@user:" while agents are streaming.
 	readyForInput := make(chan struct{}, 1)
@@ -76,8 +82,6 @@ func (f *CLIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 		// Spawn stdin reader goroutine (waits for readyForInput before each prompt)
 		go f.readStdinLoop(floor, readyForInput)
 	}
-
-	sess := floor.DefaultSession()
 
 	// If initial prompt, post it as @user (or handle as command)
 	if initialPrompt != "" {
@@ -311,6 +315,34 @@ func (f *CLIFrontend) renderStream(ev Event, roomID string) {
 // renderSystemInfo shows a system info message.
 func (f *CLIFrontend) renderSystemInfo(text string) {
 	f.out.Print("%s[System]: %s%s\n", Dim, text, Reset)
+}
+
+// renderLastTurnIfAny replays the last conversational turn (last @user
+// message and everything after) if the session has prior history. Used
+// on resume so the user sees what they're picking up. Does nothing for
+// fresh sessions.
+func (f *CLIFrontend) renderLastTurnIfAny(sess *Session) {
+	history := sess.MainRoom.History()
+	if len(history) == 0 {
+		return
+	}
+	// Walk back to find the most recent @user message (inclusive).
+	start := 0
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].From == "@user" {
+			start = i
+			break
+		}
+	}
+	turn := history[start:]
+
+	f.renderSystemInfo(fmt.Sprintf("--- Resuming session (%d prior messages, last turn below) ---", len(history)))
+	for _, msg := range turn {
+		f.out.Print("\n")
+		f.out.AgentLabel(msg.From, f.agentColor(msg.From))
+		f.out.Print("%s\n", msg.Content)
+	}
+	f.renderSystemInfo("--- End of prior conversation ---")
 }
 
 // renderHeader prints the floor header for the new loop.
