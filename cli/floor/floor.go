@@ -12,30 +12,11 @@ import (
 	"strings"
 	"sync"
 
-	acpsdk "github.com/coder/acp-go-sdk"
 	acpclient "github.com/openfloorcontrol/ofc/acp"
 	"github.com/openfloorcontrol/ofc/blueprint"
 	"github.com/openfloorcontrol/ofc/furniture"
 	"github.com/openfloorcontrol/ofc/sandbox"
 )
-
-// ANSI color codes
-const (
-	Bold   = "\033[1m"
-	Dim    = "\033[2m"
-	Reset  = "\033[0m"
-	Cyan   = "\033[36m"
-	Green  = "\033[32m"
-	Yellow = "\033[33m"
-	Blue   = "\033[34m"
-	Purple = "\033[35m"
-	Red    = "\033[31m"
-	Gray   = "\033[90m"
-)
-
-// agentColors is the palette cycled through for agent labels.
-// @user always gets Cyan; agents get the rest in order.
-var agentColors = []string{Green, Purple, Yellow, Blue, Red}
 
 // ToolInteraction stores one tool call and its result.
 type ToolInteraction struct {
@@ -457,142 +438,6 @@ func (f *Floor) SetBlueprintMeta(name, description string) {
 	f.Blueprint.Description = description
 }
 
-// spawnACPSubprocess launches an ACP agent process, performs the ACP
-// handshake, and stores the subprocess in f.ACPSubprocesses. Must be
-// called with f.mu held.
-func (f *Floor) spawnACPSubprocess(agent blueprint.Agent, renderInfo func(string)) error {
-	if agent.Command == "" {
-		return fmt.Errorf("ACP agent %s has no command configured", agent.ID)
-	}
-
-	renderInfo(fmt.Sprintf("Starting ACP agent %s (%s)...", agent.ID, agent.Command))
-
-	cwd, _ := os.Getwd()
-	workDir := filepath.Join(cwd, "workspace")
-	os.MkdirAll(workDir, 0o755)
-	client := acpclient.NewFloorClient(f.Sandbox, workDir)
-	client.LogWriter = f.LogWriter
-	client.DebugFunc = func(msg string) {
-		renderInfo(msg)
-	}
-
-	stderrW := f.StderrWriter
-	if stderrW == nil {
-		stderrW = nil // will use os.Stderr in NewSubprocess
-	}
-
-	sub, err := acpclient.NewSubprocess(agent.Command, agent.Args, agent.Env, client, stderrW, f.Blueprint.Dir)
-	if err != nil {
-		return fmt.Errorf("failed to start ACP agent %s: %w", agent.ID, err)
-	}
-
-	ctx := context.Background()
-	if err := sub.Initialize(ctx); err != nil {
-		sub.Close()
-		return fmt.Errorf("failed to initialize ACP agent %s: %w", agent.ID, err)
-	}
-	mcpServers := f.buildACPMCPServers(agent, sub)
-	if err := sub.StartSession(ctx, workDir, mcpServers); err != nil {
-		sub.Close()
-		return fmt.Errorf("failed to create session for ACP agent %s: %w", agent.ID, err)
-	}
-
-	f.ACPSubprocesses[agent.ID] = sub
-	renderInfo(fmt.Sprintf("ACP agent %s ready", agent.ID))
-	return nil
-}
-
-// observableFurniture wraps a Furniture and emits FurnitureUpdated events
-// on mutating Call()s. This covers all paths: LLM agents, ACP/MCP, and web UI.
-type observableFurniture struct {
-	inner furniture.Furniture
-	chat  *Room
-}
-
-// readOnlyTools are tool names that don't mutate state (no need to notify).
-// Covers both built-in (taskboard) and common external (filesystem MCP) tools.
-var readOnlyTools = map[string]bool{
-	"list_tasks":               true,
-	"get_task":                 true,
-	"list_directory":           true,
-	"list_directory_with_sizes": true,
-	"directory_tree":           true,
-	"read_file":                true,
-	"read_text_file":           true,
-	"read_media_file":          true,
-	"read_multiple_files":      true,
-	"search_files":             true,
-	"get_file_info":            true,
-	"list_allowed_directories": true,
-}
-
-func (o *observableFurniture) Name() string             { return o.inner.Name() }
-func (o *observableFurniture) Tools() []furniture.Tool   { return o.inner.Tools() }
-
-// ReadFileRaw forwards to the inner furniture if it implements FileReader.
-func (o *observableFurniture) ReadFileRaw(path string) ([]byte, string, error) {
-	if fr, ok := o.inner.(furniture.FileReader); ok {
-		return fr.ReadFileRaw(path)
-	}
-	return nil, "", fmt.Errorf("furniture %q does not support file reading", o.inner.Name())
-}
-func (o *observableFurniture) Call(toolName string, args map[string]interface{}) (interface{}, error) {
-	result, err := o.inner.Call(toolName, args)
-	if err == nil && !readOnlyTools[toolName] {
-		o.chat.PostStream(FurnitureUpdated{Name: o.inner.Name()})
-	}
-	return result, err
-}
-
-// buildACPMCPServers builds the MCP server list for an ACP agent.
-func (f *Floor) buildACPMCPServers(agent blueprint.Agent, session *acpclient.Subprocess) []acpsdk.McpServer {
-	if f.APIServer == nil || len(agent.Furniture) == 0 {
-		return nil
-	}
-
-	caps := session.McpCapabilities
-	base := f.APIServer.BaseURL()
-
-	// Include auth header if token is set
-	var headers []acpsdk.HttpHeader
-	if token := f.APIServer.AuthToken(); token != "" {
-		headers = []acpsdk.HttpHeader{{Name: "Authorization", Value: "Bearer " + token}}
-	}
-
-	var servers []acpsdk.McpServer
-	for _, fname := range agent.Furniture {
-		if _, ok := f.Furniture[fname]; !ok {
-			continue
-		}
-
-		switch {
-		case caps.Sse:
-			url := base + "/api/v1/floors/default/sse/" + fname
-			servers = append(servers, acpsdk.McpServer{
-				Sse: &acpsdk.McpServerSse{
-					Type:    "sse",
-					Name:    fname,
-					Url:     url,
-					Headers: headers,
-				},
-			})
-		case caps.Http:
-			url := base + "/api/v1/floors/default/mcp/" + fname + "/"
-			servers = append(servers, acpsdk.McpServer{
-				Http: &acpsdk.McpServerHttp{
-					Type:    "http",
-					Name:    fname,
-					Url:     url,
-					Headers: headers,
-				},
-			})
-		default:
-			f.debug("agent %s has no supported MCP transport for furniture %s", agent.ID, fname)
-		}
-	}
-	return servers
-}
-
 func (f *Floor) debug(format string, args ...any) {
 	if f.DebugFunc != nil {
 		f.DebugFunc(fmt.Sprintf(format, args...))
@@ -638,11 +483,3 @@ func findWebDist() fs.FS {
 	return nil
 }
 
-// BuildColorMap assigns colors to agents, cycling through the palette.
-func BuildColorMap(bp *blueprint.Blueprint) map[string]string {
-	cm := map[string]string{"@user": Cyan}
-	for i, a := range bp.Agents {
-		cm[a.ID] = agentColors[i%len(agentColors)]
-	}
-	return cm
-}
