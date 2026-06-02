@@ -4,7 +4,9 @@
 
 ## Status
 
-Design agreed in discussion. Implementation in progress — see [Staging](#staging) for the step-by-step plan and which steps have landed. As of writing, step 1 (Session extraction) is shipped; steps 2 onward are pending.
+Design agreed in discussion. Implementation in progress — see [Staging](#staging) for the step-by-step plan and which steps have landed.
+
+Phase 1 (structural refactor) is complete: Session is its own runtime entity, Floor is a live DOM with mutation primitives, Chat and Room are unified. Phase 2 (persistence) is partially complete: SessionStore + MemoryStore + JSONLStore land event persistence; UUIDs + `ofc sessions` give the CLI workflow; SessionMeta + resume warnings give hygiene. Remaining in Phase 2: FloorStore, named Floors, update-from-file reconciliation. Phase 3 (per-agent context strategies) hasn't started.
 
 ## The Three Layers
 
@@ -175,17 +177,25 @@ No event log for Floor mutations in v1. The current snapshot is enough. Audit hi
 
 Session state is **append-only events**. Derived state (AgentContexts, room structure) is rebuilt on load by walking the log.
 
-Storage interface:
+Storage interface (as shipped):
 
 ```go
 type SessionStore interface {
-    Create(floorID string) (sessionID string, err error)
-    Append(sessionID string, ev SessionEvent) error
-    Load(sessionID string) ([]SessionEvent, error)
-    List(floorID string) ([]SessionMeta, error)
-    Delete(sessionID string) error
+    // Event log
+    Append(opts AppendOpts) (StoredEvent, error)
+    Read(sessionID string, filter EventFilter) ([]StoredEvent, error)
+    ReadForAgent(sessionID, agentID string, filter EventFilter) ([]StoredEvent, error)
+    Clear(sessionID string, filter EventFilter) error
+
+    // Per-session metadata (cwd, blueprint info, ofc version, created_at)
+    SetMeta(sessionID string, meta SessionMeta) error
+    GetMeta(sessionID string) (SessionMeta, error)
 }
 ```
+
+The event log uses two logical sets per session: an ordered event log (`Read`) and a per-agent visibility join (`ReadForAgent`). In SQL this naturally maps to two tables (`session_events` + `agent_event_refs`); in memory it's a slice + map; in JSONL it's a stream of typed records.
+
+`SessionMeta` is a separate concern stored alongside but distinct from events — in SQL it'd be a `session_meta` table joined by sessionID.
 
 Backends:
 
@@ -323,13 +333,17 @@ Now that Session is a concrete runtime entity, give it a place to live across re
   Added `SessionStore` interface + `MemoryStore` implementation. Two logical sets per session: an ordered event log (`Read`) and a per-agent visibility join (`ReadForAgent`) — maps naturally to two tables in SQL, one slice + map in memory, or two streams in JSONL. Room/AgentContext route through the store: `Room.Post` calls `Store.Append`; `Room.History` calls `Store.Read`; `AgentContext.Entries`/`Delta` call `Store.ReadForAgent`. `AppendSystem` writes private (per-agent only) events. The `MessageListener` interface is gone — visibility is computed at Post time from session room-membership. `FloorStore` deferred to step 6 (it's value-shaped, smaller scope).
   *Landed:* commit `0b6c64f`.
 
-- [x] **Step 5b — UUIDs by default + `ofc sessions` commands.**
-  Every `ofc run` generates a UUID and persists to `~/.ofc/sessions/<uuid>.jsonl` (overridable via `$OFC_SESSIONS_DIR`). Flags: `--session <uuid>` to resume, `--session-log <path>` for explicit-path override. New subcommands: `ofc sessions ls/show/rm`. Internal session_id stays `"default"` per file (file-as-session-container). UUID printed at startup so users can grep / copy.
-  *Landed:* commit `87a0c8f`.
-
 - [x] **Step 5 — JSONL backend for `SessionStore`.**
-  `JSONLStore` writes one record per line. Three record kinds: `event`, `ref`, `clear`. Reads go to an in-memory mirror (MemoryStore) for speed; the file is write-only at runtime. Append writes event + N ref lines and fsyncs. Load replays the file into the mirror, preserving original Seq + Time. Crash recovery tolerates a truncated final line. CLI flag `--session-log <path>` overrides Floor.Store; pointing two runs at the same file resumes (seq numbers continue monotonically across invocations). The "log IS the context" model is real now — replay deserializes the log into runtime structures without re-executing agent turns.
+  `JSONLStore` writes one record per line. Three record kinds: `event`, `ref`, `clear` (plus `meta` added in step 5c). Reads go to an in-memory mirror (MemoryStore) for speed; the file is write-only at runtime. Append writes event + N ref lines and fsyncs. Load replays the file into the mirror, preserving original Seq + Time. Crash recovery tolerates a truncated final line. CLI flag `--session-log <path>` overrides Floor.Store; pointing two runs at the same file resumes (seq numbers continue monotonically across invocations). The "log IS the context" model is real now — replay deserializes the log into runtime structures without re-executing agent turns.
   *Landed:* commit `fed20df`.
+
+- [x] **Step 5b — UUIDs by default + `ofc sessions` commands.**
+  Every `ofc run` generates a UUID and persists to `~/.ofc/sessions/<uuid>.jsonl` (overridable via `$OFC_SESSIONS_DIR`). Flags: `--session <uuid>` to resume, `--session-log <path>` for explicit-path override. New subcommands: `ofc sessions ls/show/rm`. Internal session_id stays `"default"` per file (file-as-session-container). UUID printed at startup so users can grep / copy. On resume, the last "turn" (most recent @user message + responses) is replayed to give the user context.
+  *Landed:* commits `87a0c8f`, `8bc482c`, `f86785b`.
+
+- [x] **Step 5c — `SessionMeta` + resume drift warnings.**
+  Added `SessionMeta` to the store (cwd, blueprint path, blueprint name, blueprint file sha256, ofc version, created_at). `SetMeta`/`GetMeta` methods on the interface; new "meta" record kind in JSONL. Written on session creation, read on resume to warn about cwd / blueprint mismatches. Warnings are advisory only — deliberately tweaking a prompt between runs is a normal workflow, so we don't block. `ofc sessions ls` enriched with blueprint name + cwd columns; `ofc sessions show` prints a meta block before the transcript. Maps to a separate `session_meta` table in SQL backends.
+  *Landed:* commit `207897a`.
 
 - [ ] **Step 6 — File backend for `FloorStore`.**
   `floor.json` per named floor at `~/.ofc/floors/<id>/floor.json`. Atomic write (tmp + rename) on each mutation. Blueprint snapshot stored alongside.
@@ -366,7 +380,7 @@ Things noted during design but explicitly deferred:
 
 - **Floor mutation event log.** v1 stores current state only. A future version could log mutations for audit/replay/duplication features (`ofc floors export`, `ofc floors duplicate`).
 - **Versioned blueprints.** v1 overwrites the snapshot. Future: keep history, let sessions reference which version was active when a message was posted.
-- **Drift summaries on resume.** v1 = naive resume, user is expected to explain changes. Future: per-furniture optional drift hooks injecting a "while you were away" system note.
+- **Per-furniture drift summaries on resume.** Step 5c shipped resume-time warnings comparing recorded SessionMeta to the current invocation (cwd, blueprint hash) — but only at the config level. A richer future version: per-furniture "what changed" hooks that inject a "while you were away" system note (e.g. "3 tasks were added since this session was last active").
 - **Live add/remove of agents and furniture via API.** Mutation primitives exist in v1 (used by blueprint loader); v1 also supports CLI for these. REST endpoints for fine-grained mutation come later.
 - **Mutation protection.** Confirmation flows or access control to prevent accidentally removing critical furniture/agents from a Floor with active sessions.
 - **Multi-process Floor access.** JSONL is single-process-safe; concurrent multi-process writes need SQLite or Postgres backend.
