@@ -29,6 +29,12 @@ func init() {
 	rootCmd.AddCommand(evalCmd)
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(versionCmd)
+
+	sessionsCmd.AddCommand(sessionsLsCmd)
+	sessionsCmd.AddCommand(sessionsRmCmd)
+	sessionsCmd.AddCommand(sessionsShowCmd)
+	sessionsRmCmd.Flags().BoolVarP(&rmForce, "force", "f", false, "Skip confirmation prompt")
+	rootCmd.AddCommand(sessionsCmd)
 }
 
 var versionCmd = &cobra.Command{

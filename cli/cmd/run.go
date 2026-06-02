@@ -6,6 +6,7 @@ import (
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/google/uuid"
 	"github.com/openfloorcontrol/ofc/blueprint"
 	"github.com/openfloorcontrol/ofc/floor"
 	"github.com/spf13/cobra"
@@ -21,6 +22,13 @@ var (
 	webHostname   string
 	useJSON       bool
 	sessionLog    string
+	sessionID     string
+
+	// resolvedSessionID is the actual UUID used by this invocation —
+	// either passed via --session, or freshly generated. Captured here
+	// so all frontends and applySessionLog can read it without re-doing
+	// resolution.
+	resolvedSessionID string
 )
 
 var runCmd = &cobra.Command{
@@ -192,20 +200,67 @@ func init() {
 	runCmd.Flags().IntVar(&webPort, "port", 8080, "Port for web UI (used with --web)")
 	runCmd.Flags().StringVar(&webHostname, "hostname", "", "External URL for web UI (e.g. https://myhost.dev), overrides localhost in printed URL")
 	runCmd.Flags().BoolVar(&useJSON, "json", false, "Output events as JSONL to stdout")
-	runCmd.Flags().StringVar(&sessionLog, "session-log", "", "Persist session events to a JSONL file (resume by pointing at an existing file)")
+	runCmd.Flags().StringVar(&sessionLog, "session-log", "", "Persist session events to a JSONL file (explicit path, overrides --session)")
+	runCmd.Flags().StringVar(&sessionID, "session", "", "Session UUID to resume (default: generate a new one)")
 }
 
-// applySessionLog overrides Floor.Store with a JSONLStore if --session-log
-// was provided. If the file exists, its events are replayed into memory
-// on open, restoring the session.
-func applySessionLog(f *floor.Floor) error {
-	if sessionLog == "" {
-		return nil
+// resolveSessionPath picks the JSONL path for this invocation:
+//   - --session-log <path>: explicit, used as-is. Caller responsible for paths.
+//   - --session <uuid>:     resolves to default sessions dir + uuid.jsonl
+//   - neither:              generates a fresh UUID, uses default sessions dir
+//
+// Sets resolvedSessionID as a side effect so callers can print it.
+// Returns ("", false, err) on error, ("", false, nil) if no persistence
+// is configured (impossible today since we default to UUID).
+func resolveSessionPath() (string, bool, error) {
+	if sessionLog != "" {
+		// Explicit path. The session UUID inside the JSONL file is
+		// whatever's there (or "default" for our hardcoded sessionID
+		// at this layer); we don't surface it.
+		resolvedSessionID = sessionLog
+		return sessionLog, false, nil
 	}
-	store, err := floor.NewJSONLStore(sessionLog)
+
+	var resuming bool
+	if sessionID == "" {
+		sessionID = uuid.NewString()
+	} else {
+		resuming = true
+	}
+	resolvedSessionID = sessionID
+
+	path, err := sessionPath(sessionID)
 	if err != nil {
-		return fmt.Errorf("session-log: %w", err)
+		return "", false, err
+	}
+	return path, resuming, nil
+}
+
+// applySessionLog overrides Floor.Store with a JSONLStore at the resolved
+// path. Prints a "Session: <uuid>" line so the user knows what to
+// reference later.
+func applySessionLog(f *floor.Floor) error {
+	path, resuming, err := resolveSessionPath()
+	if err != nil {
+		return err
+	}
+	store, err := floor.NewJSONLStore(path)
+	if err != nil {
+		return fmt.Errorf("session store: %w", err)
 	}
 	f.Store = store
+
+	// Print a session line so users can grep / copy the UUID. For
+	// --session-log, we echo the path instead. JSON frontend skips
+	// this — it's noise in machine-readable output.
+	if !useJSON {
+		if sessionLog != "" {
+			fmt.Fprintf(os.Stderr, "Session log: %s\n", sessionLog)
+		} else if resuming {
+			fmt.Fprintf(os.Stderr, "Resuming session %s\n", resolvedSessionID)
+		} else {
+			fmt.Fprintf(os.Stderr, "Session: %s\n", resolvedSessionID)
+		}
+	}
 	return nil
 }
