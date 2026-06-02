@@ -342,7 +342,6 @@ func (f *CLIFrontend) renderLastTurnIfAny(sess *Session) {
 		f.out.AgentLabel(msg.From, f.agentColor(msg.From))
 		f.out.Print("%s\n", msg.Content)
 	}
-	f.renderSystemInfo("--- End of prior conversation ---")
 }
 
 // renderHeader prints the floor header for the new loop.
