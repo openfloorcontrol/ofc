@@ -5,19 +5,23 @@ package floor
 // store's per-agent visibility join (ReadForAgent). AppendSystem writes
 // a private message visible only to this agent.
 //
+// AgentContext holds a SessionView (not a *Session) so it depends only
+// on the small interface its work actually needs — store access plus
+// per-agent room lookup. This keeps it testable without a full Floor.
+//
 // No in-memory cache: every read goes to the store. For the in-memory
 // MemoryStore this is essentially free; for backed stores (JSONL, SQL)
 // it's a query per read. If that becomes a hot path we can add a cache
 // layer above — the interface won't change.
 type AgentContext struct {
 	agentID string
-	session *Session
+	session SessionView
 	sentSeq uint64 // for Delta — events with Seq > sentSeq are "new"
 }
 
 // NewAgentContext creates a context for the given agent in the given session.
 // Typically called by Session.AddAgentContext, not directly.
-func NewAgentContext(agentID string, sess *Session) *AgentContext {
+func NewAgentContext(agentID string, sess SessionView) *AgentContext {
 	return &AgentContext{
 		agentID: agentID,
 		session: sess,
@@ -30,21 +34,21 @@ func (ac *AgentContext) AgentID() string { return ac.agentID }
 // Entries returns every message this agent has seen, in order.
 // Used by LLMAgent.buildContext to build the full conversation history.
 func (ac *AgentContext) Entries() []*ChatMessage {
-	events, _ := ac.session.Floor.Store.ReadForAgent(ac.session.ID, ac.agentID, EventFilter{})
+	events, _ := ac.session.Store().ReadForAgent(ac.session.ID(), ac.agentID, EventFilter{})
 	return extractMessages(events)
 }
 
 // Delta returns messages this agent has seen since the last MarkSent.
 // Used by ACPAgent to send only incremental updates to the subprocess.
 func (ac *AgentContext) Delta() []*ChatMessage {
-	events, _ := ac.session.Floor.Store.ReadForAgent(ac.session.ID, ac.agentID, EventFilter{FromSeq: ac.sentSeq})
+	events, _ := ac.session.Store().ReadForAgent(ac.session.ID(), ac.agentID, EventFilter{FromSeq: ac.sentSeq})
 	return extractMessages(events)
 }
 
 // MarkSent records the highest-seen Seq as "sent", so future Delta()
 // calls return only newer events.
 func (ac *AgentContext) MarkSent() {
-	events, _ := ac.session.Floor.Store.ReadForAgent(ac.session.ID, ac.agentID, EventFilter{})
+	events, _ := ac.session.Store().ReadForAgent(ac.session.ID(), ac.agentID, EventFilter{})
 	if len(events) > 0 {
 		ac.sentSeq = events[len(events)-1].Seq
 	}
@@ -54,12 +58,12 @@ func (ac *AgentContext) MarkSent() {
 // Used for room transitions ("You moved to #analysis with @code").
 // The message is recorded against the agent's current room.
 func (ac *AgentContext) AppendSystem(text string) {
-	roomID := ac.session.agentRoom[ac.agentID]
+	roomID := ac.session.AgentRoom(ac.agentID)
 	if roomID == "" {
 		roomID = MainRoomID
 	}
-	ac.session.Floor.Store.Append(AppendOpts{
-		SessionID: ac.session.ID,
+	ac.session.Store().Append(AppendOpts{
+		SessionID: ac.session.ID(),
 		RoomID:    roomID,
 		Event:     MessagePostedEvent{Message: ChatMessage{From: "@system", Content: text}},
 		VisibleTo: []string{ac.agentID},
@@ -69,7 +73,7 @@ func (ac *AgentContext) AppendSystem(text string) {
 
 // Len returns the number of messages this agent has seen.
 func (ac *AgentContext) Len() int {
-	events, _ := ac.session.Floor.Store.ReadForAgent(ac.session.ID, ac.agentID, EventFilter{})
+	events, _ := ac.session.Store().ReadForAgent(ac.session.ID(), ac.agentID, EventFilter{})
 	return len(events)
 }
 

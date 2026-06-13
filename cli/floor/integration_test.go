@@ -17,18 +17,18 @@ import (
 // testAgent is a fake agent with a configurable response function.
 type testAgent struct {
 	id       string
-	response func(sess *Session) string // return "" to pass
+	response func(turn AgentTurn) string // return "" to pass
 }
 
 func (a *testAgent) AgentID() string { return a.id }
 
-func (a *testAgent) Run(ctx context.Context, sess *Session) error {
-	resp := a.response(sess)
+func (a *testAgent) Run(ctx context.Context, turn AgentTurn) error {
+	resp := a.response(turn)
 	if resp == "" {
-		sess.MainRoom.PostEvent(AgentPassedEvent{AgentID: a.id})
+		turn.Status(AgentPassedEvent{AgentID: a.id})
 		return nil
 	}
-	sess.MainRoom.Post(ChatMessage{From: a.id, Content: resp})
+	turn.Reply(ChatMessage{From: a.id, Content: resp})
 	return nil
 }
 
@@ -57,8 +57,9 @@ func testLoop(ctx context.Context, sess *Session, ctrl *Controller, agents map[s
 			if decision.Action == "trigger" {
 				agent, ok := agents[decision.AgentID]
 				if ok {
+					turn := NewAgentTurn(sess, sess.MainRoom, sess.Floor, decision.AgentID)
 					go func() {
-						_ = agent.Run(ctx, sess)
+						_ = agent.Run(ctx, turn)
 					}()
 				}
 			}
@@ -157,9 +158,9 @@ func TestIntegrationPostMessageTriggersAgent(t *testing.T) {
 	agents := map[string]Agent{
 		"@echo": &testAgent{
 			id: "@echo",
-			response: func(sess *Session) string {
-				history := sess.MainRoom.History()
-				last := history[len(history)-1]
+			response: func(turn AgentTurn) string {
+				entries := turn.Entries()
+				last := entries[len(entries)-1]
 				return "echo: " + last.Content
 			},
 		},
@@ -192,7 +193,7 @@ func TestIntegrationMentionDelegation(t *testing.T) {
 	agents := map[string]Agent{
 		"@lead": &testAgent{
 			id: "@lead",
-			response: func(sess *Session) string {
+			response: func(turn AgentTurn) string {
 				leadTurns++
 				if leadTurns == 1 {
 					return "asking @helper? for help"
@@ -202,7 +203,7 @@ func TestIntegrationMentionDelegation(t *testing.T) {
 		},
 		"@helper": &testAgent{
 			id: "@helper",
-			response: func(sess *Session) string {
+			response: func(turn AgentTurn) string {
 				return "helped!"
 			},
 		},
@@ -240,11 +241,11 @@ func TestIntegrationAgentPass(t *testing.T) {
 	agents := map[string]Agent{
 		"@a": &testAgent{
 			id:       "@a",
-			response: func(sess *Session) string { return "" }, // pass
+			response: func(turn AgentTurn) string { return "" }, // pass
 		},
 		"@b": &testAgent{
 			id: "@b",
-			response: func(sess *Session) string {
+			response: func(turn AgentTurn) string {
 				return "I'm here"
 			},
 		},
@@ -271,7 +272,7 @@ func TestIntegrationSSEStream(t *testing.T) {
 	agents := map[string]Agent{
 		"@bot": &testAgent{
 			id: "@bot",
-			response: func(sess *Session) string {
+			response: func(turn AgentTurn) string {
 				return "bot reply"
 			},
 		},
@@ -329,9 +330,9 @@ func TestIntegrationWebhookFromExternalAgent(t *testing.T) {
 	agents := map[string]Agent{
 		"@bot": &testAgent{
 			id: "@bot",
-			response: func(sess *Session) string {
-				history := sess.MainRoom.History()
-				last := history[len(history)-1]
+			response: func(turn AgentTurn) string {
+				entries := turn.Entries()
+				last := entries[len(entries)-1]
 				return fmt.Sprintf("got message from %s: %s", last.From, last.Content)
 			},
 		},
@@ -476,9 +477,9 @@ func TestIntegrationMultipleMessages(t *testing.T) {
 	agents := map[string]Agent{
 		"@echo": &testAgent{
 			id: "@echo",
-			response: func(sess *Session) string {
-				history := sess.MainRoom.History()
-				last := history[len(history)-1]
+			response: func(turn AgentTurn) string {
+				entries := turn.Entries()
+				last := entries[len(entries)-1]
 				return "echo: " + last.Content
 			},
 		},

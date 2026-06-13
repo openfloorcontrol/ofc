@@ -18,8 +18,11 @@ const MainRoomID = "#main"
 // In v1 each Floor has exactly one Session ("default"). The struct is
 // designed so multi-session support is "just add another entry to
 // Floor.Sessions" — no API changes needed.
+//
+// Session implements SessionView so Room and AgentContext can hold a
+// view (interface) rather than a concrete *Session back-pointer.
 type Session struct {
-	ID    string
+	id    string
 	Floor *Floor // back-reference to shared state (store, furniture, sandbox, APIServer)
 
 	// MainRoom is a convenience pointer to Rooms[MainRoomID]; always non-nil
@@ -33,6 +36,12 @@ type Session struct {
 	unified   chan TaggedEvent  // lazy, set by StartUnified
 }
 
+// ID implements SessionView. Returns the session identifier.
+func (s *Session) ID() string { return s.id }
+
+// Store implements SessionView. Returns the session store from the Floor.
+func (s *Session) Store() SessionStore { return s.Floor.Store }
+
 // NewSession creates a session attached to the given Floor with its
 // default "#main" room. AgentContexts are seeded for every agent
 // currently on the Floor; subsequent Floor mutations (AddAgent /
@@ -40,7 +49,7 @@ type Session struct {
 func NewSession(id string, floor *Floor) *Session {
 	main := NewRoom(MainRoomID)
 	s := &Session{
-		ID:            id,
+		id:            id,
 		Floor:         floor,
 		MainRoom:      main,
 		Rooms:         map[string]*Room{MainRoomID: main},
@@ -48,7 +57,7 @@ func NewSession(id string, floor *Floor) *Session {
 		agentRoom:     make(map[string]string),
 	}
 	main.setSession(s)
-	for _, a := range floor.Agents {
+	for _, a := range floor.agents {
 		s.AddAgentContext(a.ID)
 	}
 	return s
@@ -126,7 +135,7 @@ func (s *Session) CreateRoom(roomID, creator string, agentIDs []string, prompt s
 		}
 	}
 
-	room := NewSubRoom(roomID, creator, agentIDs, prompt, s)
+	room := NewSubRoom(roomID, creator, agentIDs, prompt, s, s.Floor)
 	s.Rooms[roomID] = room
 
 	var participantNames []string
@@ -199,7 +208,7 @@ func (s *Session) CloseRoom(roomID string) error {
 // Shares all maps and the Floor with the parent.
 func (s *Session) ForRoom(room *Room) *Session {
 	return &Session{
-		ID:            s.ID,
+		id:            s.id,
 		Floor:         s.Floor,
 		MainRoom:      room,
 		Rooms:         s.Rooms,

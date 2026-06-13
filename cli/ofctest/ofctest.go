@@ -96,8 +96,9 @@ func runFloor(t *testing.T, bp *blueprint.Blueprint, prompt string) *FloorResult
 					continue
 				}
 				ctx := context.Background()
+				turn := floor.NewAgentTurn(ec.Sess, ec.Sess.MainRoom, ec.Sess.Floor, decision.AgentID)
 				go func() {
-					agent.Run(ctx, ec.Sess)
+					agent.Run(ctx, turn)
 				}()
 
 			case "wait":

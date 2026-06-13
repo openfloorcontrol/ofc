@@ -10,9 +10,14 @@ import (
 // be spawned for isolated conversations (e.g. "#analysis") with their
 // own membership and turn-taking.
 //
-// Storage lives on the Session's Floor.Store; Room.Post writes there.
+// Storage is reached through the SessionView; Room.Post writes there.
 // Room itself holds only runtime fan-out state (event channel,
 // subscribers) and sub-room metadata (membership, Controller).
+//
+// Room holds a SessionView (not a *Session) so it depends only on the
+// small interface its work actually needs — store access plus room
+// membership lookup. Standalone rooms used as test fixtures pass nil
+// and skip the storage path.
 //
 // For "#main" the sub-room fields are zero values: no controller (the
 // session's main controller lives elsewhere), no AgentIDs filter (all
@@ -20,7 +25,7 @@ import (
 // Creator/Prompt, never closes.
 type Room struct {
 	ID      string
-	session *Session // canonical session back-reference (not a view)
+	session SessionView // nil for standalone rooms (tests)
 
 	// Runtime event distribution (NOT persistence).
 	eventCh     chan ChatEvent
@@ -51,7 +56,10 @@ func NewRoom(id string) *Room {
 // NewSubRoom creates a sub-room: a Room with membership (AgentIDs), a
 // scoped Controller, and creation context (Creator, Prompt). Used by
 // Session.CreateRoom for spawning isolated sub-conversations.
-func NewSubRoom(id, creator string, agentIDs []string, prompt string, sess *Session) *Room {
+//
+// reg is the agent registry the sub-room's controller will consult —
+// typically the Floor.
+func NewSubRoom(id, creator string, agentIDs []string, prompt string, sess SessionView, reg AgentRegistry) *Room {
 	r := NewRoom(id)
 	r.session = sess
 	r.Creator = creator
@@ -60,13 +68,13 @@ func NewSubRoom(id, creator string, agentIDs []string, prompt string, sess *Sess
 	for _, aid := range agentIDs {
 		r.AgentIDs[aid] = true
 	}
-	r.Controller = NewControllerForRoom(sess.Floor, agentIDs)
+	r.Controller = NewControllerForRoom(reg, agentIDs)
 	return r
 }
 
-// setSession is used internally by NewSession to inject the back-reference
-// for #main (which is created before the Session is fully constructed).
-func (r *Room) setSession(s *Session) { r.session = s }
+// setSession is used internally by NewSession to inject the view for
+// #main (which is created before the Session is fully constructed).
+func (r *Room) setSession(s SessionView) { r.session = s }
 
 // --- Message log methods ---
 
@@ -89,8 +97,8 @@ func (r *Room) appendToStore(msg ChatMessage) {
 		return
 	}
 	visibleTo := r.session.AgentsInRoom(r.ID)
-	r.session.Floor.Store.Append(AppendOpts{
-		SessionID: r.session.ID,
+	r.session.Store().Append(AppendOpts{
+		SessionID: r.session.ID(),
 		RoomID:    r.ID,
 		Event:     MessagePostedEvent{Message: msg},
 		VisibleTo: visibleTo,
@@ -129,7 +137,7 @@ func (r *Room) History() []ChatMessage {
 	if r.session == nil {
 		return nil
 	}
-	events, _ := r.session.Floor.Store.Read(r.session.ID, EventFilter{RoomID: r.ID})
+	events, _ := r.session.Store().Read(r.session.ID(), EventFilter{RoomID: r.ID})
 	out := make([]ChatMessage, 0, len(events))
 	for _, ev := range events {
 		if mp, ok := ev.Event.(MessagePostedEvent); ok {
@@ -171,7 +179,7 @@ func (r *Room) Clear() {
 	if r.session == nil {
 		return
 	}
-	r.session.Floor.Store.Clear(r.session.ID, EventFilter{RoomID: r.ID})
+	r.session.Store().Clear(r.session.ID(), EventFilter{RoomID: r.ID})
 }
 
 // Close closes the event channel. Call when shutting down.

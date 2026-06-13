@@ -20,7 +20,7 @@ func mutationTestBlueprint() *blueprint.Blueprint {
 func TestNewFloorAppliesLLMAgents(t *testing.T) {
 	f := NewFloor(mutationTestBlueprint())
 
-	if got := len(f.Agents); got != 2 {
+	if got := len(f.agents); got != 2 {
 		t.Fatalf("expected 2 agents on floor, got %d", got)
 	}
 	sess := f.DefaultSession()
@@ -75,7 +75,7 @@ func TestRemoveAgentPropagatesToAllSessions(t *testing.T) {
 		t.Error("alt session still has AgentContext for @a")
 	}
 	// Floor.Agents should no longer contain @a
-	for _, a := range f.Agents {
+	for _, a := range f.agents {
 		if a.ID == "@a" {
 			t.Error("Floor.Agents still contains @a after RemoveAgent")
 		}
@@ -101,9 +101,9 @@ func TestUpdateAgentMutatesInPlace(t *testing.T) {
 	}
 
 	var found *blueprint.Agent
-	for i := range f.Agents {
-		if f.Agents[i].ID == "@a" {
-			found = &f.Agents[i]
+	for i := range f.agents {
+		if f.agents[i].ID == "@a" {
+			found = &f.agents[i]
 			break
 		}
 	}

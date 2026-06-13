@@ -242,9 +242,10 @@ func (t *TUIFrontend) dispatchDecision(sess *Session, agents map[string]Agent, d
 		ctx, cancel := context.WithCancel(context.Background())
 		*cancelAgent = cancel
 
+		turn := NewAgentTurn(sess, sess.MainRoom, sess.Floor, d.AgentID)
 		go func() {
 			defer cancel()
-			agent.Run(ctx, sess)
+			agent.Run(ctx, turn)
 		}()
 	}
 }

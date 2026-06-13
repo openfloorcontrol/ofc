@@ -62,7 +62,8 @@ func RunOnce(cfg RunOnceConfig) (*RunOnceResult, error) {
 		agent = NewLLMAgent(agentDef)
 	}
 
-	if err := agent.Run(context.Background(), sess); err != nil {
+	turn := NewAgentTurn(sess, sess.MainRoom, sess.Floor, cfg.AgentID)
+	if err := agent.Run(context.Background(), turn); err != nil {
 		return nil, fmt.Errorf("agent %s: %w", cfg.AgentID, err)
 	}
 

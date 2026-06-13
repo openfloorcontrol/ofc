@@ -204,7 +204,7 @@ func TestAgentContextRemoveAgentStopsVisibility(t *testing.T) {
 
 	// Read from store directly (ac1 is no longer in the session map,
 	// but its events from before-remove are still there).
-	events, _ := f.Store.ReadForAgent(sess.ID, "@agent1", EventFilter{})
+	events, _ := f.Store.ReadForAgent(sess.ID(), "@agent1", EventFilter{})
 	if len(events) != 1 {
 		t.Errorf("expected 1 event for @agent1 (only the 'before' one), got %d", len(events))
 	}

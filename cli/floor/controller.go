@@ -19,22 +19,23 @@ type Decision struct {
 // It receives events, updates state, and returns actions.
 // It has NO I/O, NO goroutines, NO channels.
 //
-// The Controller reads the agent set from its associated Floor (live)
-// or, for room controllers, from an explicit AllowedIDs filter applied
-// to Floor.Agents.
+// The Controller reads the agent set through its registry — Floor satisfies
+// AgentRegistry, but tests can pass any implementation. Room-scoped
+// controllers additionally filter by AllowedIDs.
 type Controller struct {
-	Floor        *Floor
-	AllowedIDs   map[string]bool // nil = all agents on Floor; non-nil = subset (room scope)
+	registry     AgentRegistry
+	AllowedIDs   map[string]bool // nil = all agents; non-nil = subset (room scope)
 	CallStack    []Frame
 	passedAgents map[string]bool
 	RoomBound    map[string]bool // agents currently in rooms — skip on main floor
 	DebugFunc    func(string)    // injected for debug logging; no-op in tests
 }
 
-// NewController creates a controller for the given floor's full agent set.
-func NewController(f *Floor) *Controller {
+// NewController creates a controller for the given registry's full agent set.
+// In production callers pass a *Floor (which implements AgentRegistry).
+func NewController(reg AgentRegistry) *Controller {
 	return &Controller{
-		Floor:        f,
+		registry:     reg,
 		passedAgents: make(map[string]bool),
 		RoomBound:    make(map[string]bool),
 		DebugFunc:    func(string) {},
@@ -42,16 +43,16 @@ func NewController(f *Floor) *Controller {
 }
 
 // NewControllerForRoom creates a controller scoped to a subset of the
-// floor's agents (the ones in the room). The filter is by agent ID;
-// if an agent is later removed from the floor, it stops being eligible
+// registry's agents (the ones in the room). The filter is by agent ID;
+// if an agent is later removed from the registry, it stops being eligible
 // in the room controller as well.
-func NewControllerForRoom(f *Floor, agentIDs []string) *Controller {
+func NewControllerForRoom(reg AgentRegistry, agentIDs []string) *Controller {
 	filter := make(map[string]bool, len(agentIDs))
 	for _, id := range agentIDs {
 		filter[id] = true
 	}
 	return &Controller{
-		Floor:        f,
+		registry:     reg,
 		AllowedIDs:   filter,
 		passedAgents: make(map[string]bool),
 		RoomBound:    make(map[string]bool),
@@ -60,14 +61,15 @@ func NewControllerForRoom(f *Floor, agentIDs []string) *Controller {
 }
 
 // agents returns the agents this controller considers eligible.
-// For main controllers, that's all of Floor.Agents. For room
+// For main controllers, that's the registry's full set. For room
 // controllers, only those whose IDs are in AllowedIDs.
 func (c *Controller) agents() []blueprint.Agent {
+	all := c.registry.Agents()
 	if c.AllowedIDs == nil {
-		return c.Floor.Agents
+		return all
 	}
 	var filtered []blueprint.Agent
-	for _, a := range c.Floor.Agents {
+	for _, a := range all {
 		if c.AllowedIDs[a.ID] {
 			filtered = append(filtered, a)
 		}

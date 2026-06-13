@@ -132,9 +132,10 @@ func (j *JSONFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string
 				}
 				ctx, cancel := context.WithCancel(context.Background())
 				cancelAgent = cancel
+				turn := NewAgentTurn(ec.Sess, ec.Sess.MainRoom, ec.Sess.Floor, decision.AgentID)
 				go func() {
 					defer cancel()
-					agent.Run(ctx, ec.Sess)
+					agent.Run(ctx, turn)
 				}()
 
 			case "wait":

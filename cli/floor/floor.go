@@ -45,7 +45,9 @@ type Floor struct {
 
 	// Live, mutable runtime state. Mutations modify these (under mu);
 	// initial blueprint loading populates them via the same mutations.
-	Agents          []blueprint.Agent
+	// agents is read via the Agents() method (which also implements
+	// AgentRegistry for Controller).
+	agents          []blueprint.Agent
 	Furniture       map[string]furniture.Furniture
 	ACPSubprocesses map[string]*acpclient.Subprocess
 
@@ -113,6 +115,13 @@ func NewFloor(bp *blueprint.Blueprint) *Floor {
 // In v1 every floor has exactly one session, created at NewFloor time.
 func (f *Floor) DefaultSession() *Session {
 	return f.Sessions["default"]
+}
+
+// Agents implements AgentRegistry. Returns the live agent set.
+// Mutations to the returned slice's backing array are not safe — treat
+// it as read-only. Use AddAgent / RemoveAgent / UpdateAgent to mutate.
+func (f *Floor) Agents() []blueprint.Agent {
+	return f.agents
 }
 
 // WorkspacePath returns the sandbox workspace directory, or "" if no sandbox.
@@ -349,7 +358,7 @@ func (f *Floor) AddAgent(spec blueprint.Agent, renderInfo func(string)) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	for _, a := range f.Agents {
+	for _, a := range f.agents {
 		if a.ID == spec.ID {
 			return fmt.Errorf("agent %s already exists", spec.ID)
 		}
@@ -366,7 +375,7 @@ func (f *Floor) AddAgent(spec blueprint.Agent, renderInfo func(string)) error {
 		}
 	}
 
-	f.Agents = append(f.Agents, spec)
+	f.agents = append(f.agents, spec)
 	for _, sess := range f.Sessions {
 		sess.AddAgentContext(spec.ID)
 	}
@@ -380,8 +389,8 @@ func (f *Floor) RemoveAgent(id string) error {
 	defer f.mu.Unlock()
 
 	idx := -1
-	for i := range f.Agents {
-		if f.Agents[i].ID == id {
+	for i := range f.agents {
+		if f.agents[i].ID == id {
 			idx = i
 			break
 		}
@@ -397,7 +406,7 @@ func (f *Floor) RemoveAgent(id string) error {
 		delete(f.ACPSubprocesses, id)
 	}
 
-	f.Agents = append(f.Agents[:idx], f.Agents[idx+1:]...)
+	f.agents = append(f.agents[:idx], f.agents[idx+1:]...)
 	for _, sess := range f.Sessions {
 		sess.RemoveAgentContext(id)
 	}
@@ -417,9 +426,9 @@ func (f *Floor) UpdateAgent(id string, mutator func(*blueprint.Agent)) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	for i := range f.Agents {
-		if f.Agents[i].ID == id {
-			mutator(&f.Agents[i])
+	for i := range f.agents {
+		if f.agents[i].ID == id {
+			mutator(&f.agents[i])
 			return nil
 		}
 	}

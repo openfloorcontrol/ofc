@@ -202,10 +202,11 @@ func (f *CLIFrontend) handleDecision(sess *Session, ctrl *Controller, agents map
 		ctx, cancel := context.WithCancel(context.Background())
 		*cancelAgent = cancel
 
-		// Run agent in goroutine
+		// Build a per-turn capability handle and run the agent in a goroutine.
+		turn := NewAgentTurn(sess, sess.MainRoom, sess.Floor, d.AgentID)
 		go func() {
 			defer cancel()
-			agent.Run(ctx, sess)
+			agent.Run(ctx, turn)
 			// Agent.Run() posts MessagePosted (or AgentPassedEvent/AgentErrorEvent)
 			// to the session's main room. The main loop will pick it up and
 			// call Decide again.
