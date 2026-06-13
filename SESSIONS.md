@@ -6,7 +6,7 @@
 
 Design agreed in discussion. Implementation in progress — see [Staging](#staging) for the step-by-step plan and which steps have landed.
 
-Phase 1 (structural refactor) is complete: Session is its own runtime entity, Floor is a live DOM with mutation primitives, Chat and Room are unified. Phase 2 (persistence) is partially complete: SessionStore + MemoryStore + JSONLStore land event persistence; UUIDs + `ofc sessions` give the CLI workflow; SessionMeta + resume warnings give hygiene. Remaining in Phase 2: FloorStore, named Floors, update-from-file reconciliation. Phase 3 (per-agent context strategies) hasn't started.
+Phase 1 (structural refactor) is complete: Session is its own runtime entity, Floor is a live DOM with mutation primitives, Chat and Room are unified. Phase 2 (single-process persistence) is partially complete: SessionStore + MemoryStore + JSONLStore land event persistence; UUIDs + `ofc sessions` give the CLI workflow; SessionMeta + resume warnings give hygiene. FloorStore (Step 6) closes Phase 2. Phase 3 then shifts the primary surface from `ofc run` to `ofc serve` — REST mutation API, SQL-backed stores, web UI as the main consumer. That's what the architecture has been preparing for; the CLI keeps working but becomes a thin client over the REST API rather than its own design surface. Phase 4 (per-agent context strategies) follows and plugs into the existing AgentContext / AgentTurn regardless of which surface is driving.
 
 ## The Three Layers
 
@@ -346,46 +346,51 @@ Now that Session is a concrete runtime entity, give it a place to live across re
   *Landed:* commit `207897a`.
 
 - [ ] **Step 6 — File backend for `FloorStore`.**
-  `floor.json` per named floor at `~/.ofc/floors/<id>/floor.json`. Atomic write (tmp + rename) on each mutation. Blueprint snapshot stored alongside.
+  `floor.json` per named floor at `~/.ofc/floors/<id>/floor.json`. Atomic write (tmp + rename) on each mutation. Blueprint snapshot stored alongside. Single-process safe; multi-process safety is Phase 3's concern.
 
-- [ ] **Step 7 — Named Floor CLI + `--session` resume flag.**
-  `ofc floors create blueprint.yaml --name X`, `ofc floors ls`, `ofc run --floor X`, `ofc sessions ls --floor X`, `ofc sessions resume <sid>`. Anonymous Floor mode (`ofc run blueprint.yaml`) keeps the current dev workflow unchanged.
+### Phase 3 — API and multi-process server
 
-- [ ] **Step 8 — Update-from-file reconciliation.**
-  `ofc floors update X --from-file blueprint.yaml` diffs current Floor state against the file and emits mutations. Hot-reloadable changes apply immediately; furniture/subprocess changes require explicit `--restart`.
+Shifts the primary surface from one-shot CLI invocations to a long-running daemon. The CLI keeps working but becomes a thin client over the REST API rather than its own design surface. Multi-process by nature — multiple HTTP requests handled concurrently, possibly multiple processes behind a load balancer — which is what promotes SQL-backed storage from a nice-to-have into a requirement: JSONL is single-process safe by design and won't cover this.
 
-### Phase 3 — Per-agent context strategies
+- [ ] **Step 7 — `ofc serve` + REST mutation API.**
+  Long-running HTTP daemon. The mutation primitives from Phase 1 (AddAgent, AddFurniture, UpdateAgent, ...) become endpoints: `PATCH /api/v1/floors/X/agents/@hiro`, `POST /api/v1/floors`, etc. The existing API server already serves furniture MCP routes and session reads; Step 7 adds the write side and the daemon lifecycle.
 
-The reason this stack exists. With Sessions persistent and the log as truth, strategies become a small layer on top.
+- [ ] **Step 8 — SQL-backed `SessionStore` and `FloorStore`.**
+  Required once multiple processes can write to the same store. `SessionStore` maps to `session_events`, `agent_event_refs`, `session_meta` tables (the design the interface was built around). `FloorStore` is one row per Floor with a JSON column or structured columns. SQLite for embedded deployments, Postgres for networked. JSONL and the file `FloorStore` keep working for local single-process development — backends sit behind the same interfaces.
 
-- [ ] **Step 9 — `ContextStrategy` interface on AgentContext.**
+- [ ] **Step 9 — Web UI: Floor switcher + Session switcher.**
+  `web/dist` already exists as a single-Floor view; Step 9 gives it multi-Floor and multi-Session navigation appropriate for a daemon serving more than one conversation at a time.
+
+- [ ] **Step 10 — Live session followers.**
+  Web clients tail an active session in real time. MemoryStore already does this through its event channel; SQL-backed needs LISTEN/NOTIFY (Postgres) or a polling/eventfd hybrid (SQLite). API surface is SSE on an existing-or-new endpoint per session.
+
+### Phase 4 — Per-agent context strategies
+
+The original reason this stack exists. With Sessions persistent and the log as truth, strategies become a small layer on top. AgentContext + AgentTurn already give a clean seam — strategies plug in regardless of whether `ofc run` or `ofc serve` is driving.
+
+- [ ] **Step 11 — `ContextStrategy` interface on AgentContext.**
   Implementations: `PassThrough` (current behavior, default), `LastN(20)`. AgentContext gains a Strategy field; LLMAgent builds messages by calling strategy.Build(ctx).
 
-- [ ] **Step 10 — `Compaction` event type + `Summarize` strategy.**
+- [ ] **Step 12 — `Compaction` event type + `Summarize` strategy.**
   Event recorded per-agent, durably. Agent's context = "latest compaction summary + events after the compaction marker." Summarize triggers when log exceeds a threshold; writes a Compaction event with an LLM-generated summary. Original messages stay in the log for audit; agent simply stops seeing them.
 
 ### Beyond v1
 
 Not on the immediate path, but the architecture should accommodate without rework:
 
-- [ ] REST API for fine-grained Floor mutations (currently CLI-only).
-- [ ] SQLite/Postgres backends for `SessionStore` and `FloorStore`.
+- [ ] Named-floor CLI as a thin REST client (`ofc floors create/ls`, `ofc run --floor X`) — once the REST API exists in Phase 3, these become thin wrappers over it rather than direct file manipulation.
+- [ ] Update-from-file reconciliation (`ofc floors update X --from-file blueprint.yaml`) — diffs the file against current Floor state and emits API mutations.
 - [ ] Multi-user auth: Session ownership, Floor membership.
 - [ ] Versioned blueprints / Floor mutation history.
-- [ ] Drift summaries on session resume.
+- [ ] Per-furniture drift notes on resume (richer than the Step 5c config-level warnings).
 
 ## Future Work
 
-Things noted during design but explicitly deferred:
+Things noted during design but explicitly deferred. The bigger items (REST mutation API, SQL backends, web UI live followers, named-floor CLI) moved into Phase 3 and Beyond v1; what remains here are smaller design notes.
 
 - **Floor mutation event log.** v1 stores current state only. A future version could log mutations for audit/replay/duplication features (`ofc floors export`, `ofc floors duplicate`).
-- **Versioned blueprints.** v1 overwrites the snapshot. Future: keep history, let sessions reference which version was active when a message was posted.
-- **Per-furniture drift summaries on resume.** Step 5c shipped resume-time warnings comparing recorded SessionMeta to the current invocation (cwd, blueprint hash) — but only at the config level. A richer future version: per-furniture "what changed" hooks that inject a "while you were away" system note (e.g. "3 tasks were added since this session was last active").
-- **Live add/remove of agents and furniture via API.** Mutation primitives exist in v1 (used by blueprint loader); v1 also supports CLI for these. REST endpoints for fine-grained mutation come later.
 - **Mutation protection.** Confirmation flows or access control to prevent accidentally removing critical furniture/agents from a Floor with active sessions.
-- **Multi-process Floor access.** JSONL is single-process-safe; concurrent multi-process writes need SQLite or Postgres backend.
-- **Live session followers.** Web UI tailing a session in real time. Memory backend has this via event channel; JSONL/SQL need file-watching or LISTEN/NOTIFY.
-- **Cross-session search.** Linear scan over JSONL works for small N; SQLite/Postgres for larger.
+- **Cross-session search.** Linear scan over JSONL works for small N; the SQL backend (Phase 3 Step 8) makes larger-scale search easy as a follow-on.
 - **Renaming `MemoryTaskBoard`.** The built-in in-memory TaskBoard is explicitly ephemeral. Rename / README note to make the prototyping/production distinction obvious.
 
 ## Related Docs
