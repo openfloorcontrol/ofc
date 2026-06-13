@@ -17,23 +17,40 @@ Flags: `--debug` (debug output), `--log` (write ofc.log), `--tui` (Bubble Tea UI
 ```
 cli/                          # Go module (github.com/openfloorcontrol/ofc)
   main.go                     # Entry point
-  cmd/                        # Cobra CLI commands (run, init, version)
+  cmd/                        # Cobra CLI commands (run, sessions, init, version, eval)
   blueprint/                  # YAML blueprint schema + loader
-  floor/                      # Core orchestration engine
-    floor.go                  # Floor: Chat, Furniture, Sandbox, ACP sessions, Rooms
-    chat.go                   # Chat: thread-safe message store + event channel + listeners
+  floor/                      # Core engine — types, interfaces, runtime
+    floor.go                  # Floor: live DOM (agents, furniture, sandbox, ACP pool, sessions, store, APIServer)
+    session.go                # Session: one conversation thread (rooms + AgentContexts); implements SessionView
+    room.go                   # Room: messages + event channel + subscribers; #main + sub-rooms
     controller.go             # Controller: pure-logic turn-taking (Decide → Decision, no I/O)
-    agent.go                  # Agent interface + dispatch
-    agent_llm.go              # LLMAgent: builds context from AgentContext, calls LLM API
-    agent_acp.go              # ACPAgent: sends deltas via AgentContext, ACP over stdio
-    agent_context.go          # AgentContext: per-agent message accumulator (Entries/Delta/MarkSent)
-    room.go                   # Room: isolated sub-conversation with own Chat + Controller
-    events.go                 # ChatEvent types + TaggedEvent for unified channel
-    cli.go                    # CLI frontend (stdin/stdout, unified event loop)
-    tui.go                    # Bubble Tea TUI frontend
-    output.go                 # Output multiplexer (terminal + log file)
-    api.go                    # Echo HTTP server: MCP endpoints + Floor REST API
-  acp/                        # Agent Client Protocol integration
+    agent.go                  # Agent interface (Run(ctx, AgentTurn) error)
+    agent_iface.go            # AgentTurn, AgentRegistry, SessionView interfaces (DI seams)
+    turn.go                   # agentTurn impl — one constructed per dispatch
+    agent_context.go          # AgentContext: per-agent reader over the store (Entries/Delta/MarkSent)
+    chat.go                   # ChatMessage, ChatEvent variants
+    events.go                 # Event variants (stream), TaggedEvent
+    events_json.go            # EventJSON: ChatEvent → JSON (used by api/ and frontend/json)
+    store.go                  # SessionStore interface, StoredEvent, EventFilter, SessionMeta, MessagePostedEvent
+    memorystore.go            # MemoryStore (default backend; stays here to avoid NewFloor import cycle)
+    api_iface.go              # APIServer interface — concrete impl lives in api/
+    floor_acp.go              # ACP subprocess lifecycle (spawnACPSubprocess, buildACPMCPServers)
+    furniture_observable.go   # Furniture wrapper that emits FurnitureUpdated events
+    run_once.go               # RunOnce helper (used by eval/)
+  floor/sessionstore/         # File/DB-backed SessionStore implementations
+    jsonl.go                  # JSONLStore: append-only file + in-memory mirror, crash-recovery
+  floor/agents/llm/           # LLMAgent — implements floor.Agent through floor.AgentTurn
+  floor/agents/acp/           # ACPAgent — implements floor.Agent through floor.AgentTurn
+  frontend/                   # CLI / TUI / JSON frontends (composition layer)
+    cli.go                    # CLIFrontend: stdin/stdout, unified event loop
+    tui.go                    # TUIFrontend: Bubble Tea
+    json.go                   # JSONFrontend: JSONL to stdout
+    eventloop.go              # ResolveEventContext, DecideAndAutoClose — shared dispatch helpers
+    output.go                 # Terminal + log file multiplexer
+    colors.go                 # ANSI palette, BuildColorMap
+  api/                        # HTTP API server (composition layer)
+    api.go                    # api.Server: /api/v1/messages, /events, /agents, /furniture, /mcp/{name}, /sse/{name}, /file/*
+  acp/                        # Agent Client Protocol integration (low-level)
     session.go                # ACP agent subprocess lifecycle + handshake
     client.go                 # FloorClient: implements acpsdk.Client callbacks
     terminal.go               # TerminalManager for ACP terminal operations
@@ -44,6 +61,8 @@ cli/                          # Go module (github.com/openfloorcontrol/ofc)
     mcpwrap.go                # WrapAsMCP: Furniture → MCP Server (go-sdk)
     externalmcp.go            # ExternalMCP: spawn MCP subprocess as Furniture
   sandbox/                    # Docker container management for sandboxed execution
+  eval/                       # LLM-as-judge evaluation (used by `ofc eval` + ofctest)
+  ofctest/                    # Test helpers: RunFloor + assertions
 examples/                     # Blueprint examples
   taskboard-acp/              # ACP agent (Claude Code) + taskboard + filesystem MCP
   everything/                 # External MCP test server demo
@@ -55,30 +74,42 @@ examples/                     # Blueprint examples
   chaindepth/                 # Delegation chain depth test
 ```
 
+**Package boundary cheat-sheet.** `floor/` owns the engine and defines the
+interfaces. `floor/sessionstore/` and `floor/agents/{llm,acp}/` are
+*extensions* — they implement floor interfaces (nesting signals the
+plug-in relationship). `frontend/` and `api/` are top-level
+*composition* — they consume floor through its interfaces but aren't
+part of it. Agents never reach into `*Floor` or `*Session`: they get a
+`floor.AgentTurn` handle from the dispatch site with exactly the
+capabilities they need (Entries/Delta, Stream/Status/Reply, Furniture,
+Sandbox, ACPSubprocess, Debug).
+
 ## Architecture
 
 **Event-driven** with clean separation:
 
 ```
-User Input → Chat.PostUserInput() → ChatEvent → Frontend event loop
+User Input → Room.PostUserInput() → ChatEvent → Frontend event loop
                                                       ↓
-                                              Controller.Decide(chat, event) → Decision
+                                              Controller.Decide(room, event) → Decision
                                                       ↓
-                                              Agent.Run(ctx, floor) — goroutine
+                                              Agent.Run(ctx, AgentTurn) — goroutine
                                                       ↓
-                                              Chat.Post() → next event
+                                              turn.Reply() → Room.Post → next event
 ```
 
-**Floor** (`floor/floor.go`) owns shared state: Chat, Furniture, Sandbox, ACP sessions, Rooms, AgentContexts.
+**Floor** (`floor/floor.go`) is the live DOM: agents, furniture, sandbox, ACP subprocess pool, sessions, store, APIServer. Mutated only through `AddAgent`/`RemoveAgent`/`UpdateAgent`/`AddFurniture`/`RemoveFurniture` (all serialized by a mutex).
 
-**Controller** (`floor/controller.go`) is the heart — a pure function: event in, Decision out. No I/O, no goroutines. Fully testable.
+**Session** (`floor/session.go`) is one conversation thread on a Floor — owns `Rooms`, `AgentContexts`. Implements `SessionView` so Room and AgentContext consume it through an interface, not a back-pointer.
 
-**Agents** run as goroutines. LLMAgent builds context from AgentContext and calls the LLM API. ACPAgent sends deltas over stdio. Both post results back to Chat.
+**Controller** (`floor/controller.go`) is the turn-taking heart — a pure function: event in, Decision out. No I/O, no goroutines. Consumes an `AgentRegistry` (one-method interface, Floor satisfies it) so it's testable without a Floor.
+
+**Agents** run as goroutines and consume `floor.AgentTurn` — a small capability handle constructed per dispatch. The turn binds the agent to its target room and gives scoped access to context (Entries/Delta), emission (Stream/Status/Reply), and resources (Furniture, Sandbox, ACPSubprocess). Agent impls never see `*Floor` or `*Session`.
 
 ## Two Agent Paths
 
-- **LLM agents** (`agent_llm.go`): Builds `[]llm.Message` context from `AgentContext.Entries()`. Calls OpenAI-compatible API. Furniture tools injected as function calls namespaced `{furniture}__{tool}`. Direct `Furniture.Call()`. `can_use_sandbox` controls bash tool access (requires Docker sandbox).
-- **ACP agents** (`agent_acp.go`, e.g. Claude Code, OpenCode): Sends delta context via `AgentContext.Delta()` / `MarkSent()`. Communicates over stdio via `AgentSession.Prompt()`. Furniture exposed as MCP server URLs (SSE preferred). ACP agents also have built-in file read/write and terminal execution via FloorClient callbacks.
+- **LLM agents** (`floor/agents/llm/`, factory `llm.New`): Builds `[]llmsdk.Message` from `turn.Entries()`. Calls OpenAI-compatible API. Furniture tools injected as function calls namespaced `{furniture}__{tool}`; dispatched through `turn.Furniture(name).Call(...)`. `can_use_sandbox` gates the bash tool, which uses `turn.Sandbox()`.
+- **ACP agents** (`floor/agents/acp/`, factory `acp.New`, e.g. Claude Code, OpenCode): Send delta context via `turn.Delta()` / `turn.MarkSent()`. Subprocess obtained via `turn.ACPSubprocess()`; prompt sent over stdio. Floor exposes furniture as MCP server URLs at startup (`floor/floor_acp.go` builds the list — SSE preferred when both transports advertised, HTTP fallback). ACP agents also have built-in file read/write and terminal execution via FloorClient callbacks.
 
 ## Furniture System
 
