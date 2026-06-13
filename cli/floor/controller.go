@@ -365,7 +365,10 @@ func handleRoomCommand(args []string, sess *Session, ctrl *Controller) Decision 
 
 // --- Helpers ---
 
-func summarizeLines(text string, maxLines int) string {
+// SummarizeLines truncates a multi-line string to maxLines lines,
+// appending an ellipsis summary if cut. Exported so agent subpackages
+// can share the formatter.
+func SummarizeLines(text string, maxLines int) string {
 	lines := strings.Split(strings.TrimSpace(text), "\n")
 	if len(lines) <= maxLines {
 		return strings.TrimSpace(text)
@@ -373,7 +376,11 @@ func summarizeLines(text string, maxLines int) string {
 	return strings.Join(lines[:maxLines], "\n") + fmt.Sprintf("\n... (%d more lines)", len(lines)-maxLines)
 }
 
-func formatToolInteractions(interactions []ToolInteraction, level string) string {
+// FormatToolInteractions renders a peer agent's tool interactions as
+// text suitable for inclusion in another agent's prompt. level controls
+// detail: "none" (skip), "summary" (truncated), "full" (capped at 500
+// chars per output). Used by both LLM and ACP agent impls.
+func FormatToolInteractions(interactions []ToolInteraction, level string) string {
 	if level == "none" || len(interactions) == 0 {
 		return ""
 	}
@@ -385,7 +392,7 @@ func formatToolInteractions(interactions []ToolInteraction, level string) string
 			if len(cmdShort) > 80 {
 				cmdShort = cmdShort[:80] + "..."
 			}
-			resultShort := summarizeLines(ti.Output, 3)
+			resultShort := SummarizeLines(ti.Output, 3)
 			parts = append(parts, fmt.Sprintf("$ %s\n%s", cmdShort, resultShort))
 		} else { // "full"
 			output := ti.Output

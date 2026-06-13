@@ -1,4 +1,9 @@
-package floor
+// Package acp implements the ACPAgent — an Agent backed by an external
+// Agent Client Protocol process (e.g. claude-code-acp, opencode-acp).
+// Depends only on the floor.AgentTurn interface and floor's small
+// value types. Subprocess lifecycle (spawn, MCP server URL list) lives
+// in floor/floor_acp.go because it's a Floor-level concern.
+package acp
 
 import (
 	"context"
@@ -7,26 +12,27 @@ import (
 
 	acpsdk "github.com/coder/acp-go-sdk"
 	"github.com/openfloorcontrol/ofc/blueprint"
+	"github.com/openfloorcontrol/ofc/floor"
 )
 
-// ACPAgent is an agent backed by the Agent Client Protocol (external process).
-type ACPAgent struct {
+// Agent is an agent backed by the Agent Client Protocol (external process).
+type Agent struct {
 	agent *blueprint.Agent
 }
 
-// NewACPAgent creates an ACP agent from a blueprint agent definition.
-func NewACPAgent(agent *blueprint.Agent) *ACPAgent {
-	return &ACPAgent{agent: agent}
+// New creates an ACP agent from a blueprint agent definition.
+func New(agent *blueprint.Agent) *Agent {
+	return &Agent{agent: agent}
 }
 
-func (a *ACPAgent) AgentID() string { return a.agent.ID }
+func (a *Agent) AgentID() string { return a.agent.ID }
 
 // Run executes one ACP agent turn: build context, prompt session, post results.
 // Blocks until complete.
-func (a *ACPAgent) Run(ctx context.Context, turn AgentTurn) error {
+func (a *Agent) Run(ctx context.Context, turn floor.AgentTurn) error {
 	subproc, ok := turn.ACPSubprocess()
 	if !ok {
-		turn.Status(AgentErrorEvent{
+		turn.Status(floor.AgentErrorEvent{
 			AgentID: a.agent.ID,
 			Err:     fmt.Errorf("no ACP subprocess for agent %s", a.agent.ID),
 		})
@@ -38,27 +44,27 @@ func (a *ACPAgent) Run(ctx context.Context, turn AgentTurn) error {
 
 	// Wire ACP callbacks to stream events
 	client.OnToken = func(token string) {
-		turn.Stream(TokenStreamed{AgentID: a.agent.ID, Token: token})
+		turn.Stream(floor.TokenStreamed{AgentID: a.agent.ID, Token: token})
 	}
 	client.OnToolCall = func(id, title string) {
-		turn.Stream(ToolCallStarted{AgentID: a.agent.ID, ID: id, Title: title})
+		turn.Stream(floor.ToolCallStarted{AgentID: a.agent.ID, ID: id, Title: title})
 	}
 	client.OnToolOutput = func(id, output string) {
-		turn.Stream(ToolCallOutput{AgentID: a.agent.ID, ID: id, Output: output})
+		turn.Stream(floor.ToolCallOutput{AgentID: a.agent.ID, ID: id, Output: output})
 	}
 	client.OnToolResult = func(id, title, output string) {
-		turn.Stream(ToolCallResult{AgentID: a.agent.ID, ID: id, Title: title, Output: output})
+		turn.Stream(floor.ToolCallResult{AgentID: a.agent.ID, ID: id, Title: title, Output: output})
 	}
 
 	// Emit agent label before first token
-	turn.Stream(AgentLabel{AgentID: a.agent.ID})
+	turn.Stream(floor.AgentLabel{AgentID: a.agent.ID})
 
 	blocks := a.buildACPContext(turn)
 	turn.Debug("ACP prompt for %s (%d blocks)", a.agent.ID, len(blocks))
 
 	stopReason, err := subproc.Prompt(ctx, blocks)
 	if err != nil {
-		turn.Status(AgentErrorEvent{
+		turn.Status(floor.AgentErrorEvent{
 			AgentID: a.agent.ID,
 			Err:     fmt.Errorf("ACP prompt failed: %w", err),
 			Partial: client.ResponseText.String(),
@@ -68,9 +74,9 @@ func (a *ACPAgent) Run(ctx context.Context, turn AgentTurn) error {
 	_ = stopReason
 
 	// Convert ACP tool interactions to floor tool interactions
-	var interactions []ToolInteraction
+	var interactions []floor.ToolInteraction
 	for _, ti := range client.Interactions {
-		interactions = append(interactions, ToolInteraction{
+		interactions = append(interactions, floor.ToolInteraction{
 			Command: ti.Command,
 			Output:  ti.Output,
 		})
@@ -80,12 +86,12 @@ func (a *ACPAgent) Run(ctx context.Context, turn AgentTurn) error {
 
 	// Check for [PASS]
 	if strings.Contains(strings.ToLower(content), "[pass]") {
-		turn.Status(AgentPassedEvent{AgentID: a.agent.ID})
+		turn.Status(floor.AgentPassedEvent{AgentID: a.agent.ID})
 		return nil
 	}
 
 	// Post the final message
-	turn.Reply(ChatMessage{
+	turn.Reply(floor.ChatMessage{
 		From:             a.agent.ID,
 		Content:          content,
 		ToolInteractions: interactions,
@@ -98,7 +104,7 @@ func (a *ACPAgent) Run(ctx context.Context, turn AgentTurn) error {
 // agents maintain their own session state, so we skip the agent's own
 // messages (it already remembers them) and only send the system prompt
 // once.
-func (a *ACPAgent) buildACPContext(turn AgentTurn) []acpsdk.ContentBlock {
+func (a *Agent) buildACPContext(turn floor.AgentTurn) []acpsdk.ContentBlock {
 	var blocks []acpsdk.ContentBlock
 
 	delta := turn.Delta()
@@ -128,7 +134,7 @@ func (a *ACPAgent) buildACPContext(turn AgentTurn) []acpsdk.ContentBlock {
 			sb.WriteString(msg.Content)
 
 			if len(msg.ToolInteractions) > 0 {
-				summary := formatToolInteractions(msg.ToolInteractions, a.agent.ToolContext)
+				summary := floor.FormatToolInteractions(msg.ToolInteractions, a.agent.ToolContext)
 				if summary != "" {
 					sb.WriteString("\n")
 					sb.WriteString(summary)

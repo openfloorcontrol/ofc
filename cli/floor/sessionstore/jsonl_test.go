@@ -1,11 +1,30 @@
-package floor
+package sessionstore
 
 import (
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/openfloorcontrol/ofc/floor"
 )
+
+// newMemMsg builds a message_posted event for tests. Duplicated from
+// floor.store_test (same one-liner) so this package's tests don't have
+// to import unexported helpers from floor.
+func newMemMsg(content string) floor.MessagePostedEvent {
+	return floor.MessagePostedEvent{Message: floor.ChatMessage{From: "@user", Content: content}}
+}
+
+func extractMessages(events []floor.StoredEvent) []floor.ChatMessage {
+	out := make([]floor.ChatMessage, 0, len(events))
+	for _, ev := range events {
+		if mp, ok := ev.Event.(floor.MessagePostedEvent); ok {
+			out = append(out, mp.Message)
+		}
+	}
+	return out
+}
 
 func jsonlTempPath(t *testing.T) string {
 	t.Helper()
@@ -17,17 +36,17 @@ func TestJSONLStoreAppendAndReload(t *testing.T) {
 	path := jsonlTempPath(t)
 
 	// Write some events with one store instance, close it.
-	s, err := NewJSONLStore(path)
+	s, err := NewJSONL(path)
 	if err != nil {
-		t.Fatalf("NewJSONLStore: %v", err)
+		t.Fatalf("NewJSONL: %v", err)
 	}
-	s.Append(AppendOpts{
+	s.Append(floor.AppendOpts{
 		SessionID: "sid",
 		RoomID:    "#main",
 		Event:     newMemMsg("hi"),
 		VisibleTo: []string{"@a", "@b"},
 	})
-	s.Append(AppendOpts{
+	s.Append(floor.AppendOpts{
 		SessionID: "sid",
 		RoomID:    "#main",
 		Event:     newMemMsg("psst"),
@@ -39,14 +58,14 @@ func TestJSONLStoreAppendAndReload(t *testing.T) {
 	}
 
 	// Reopen — events and refs should be preserved.
-	s2, err := NewJSONLStore(path)
+	s2, err := NewJSONL(path)
 	if err != nil {
-		t.Fatalf("NewJSONLStore reload: %v", err)
+		t.Fatalf("NewJSONL reload: %v", err)
 	}
 	defer s2.Close()
 
 	// Read (display) should see only the public event.
-	pub, _ := s2.Read("sid", EventFilter{})
+	pub, _ := s2.Read("sid", floor.EventFilter{})
 	if len(pub) != 1 {
 		t.Errorf("expected 1 public event after reload, got %d", len(pub))
 	}
@@ -55,12 +74,12 @@ func TestJSONLStoreAppendAndReload(t *testing.T) {
 	}
 
 	// ReadForAgent @a should see both events.
-	aEvents, _ := s2.ReadForAgent("sid", "@a", EventFilter{})
+	aEvents, _ := s2.ReadForAgent("sid", "@a", floor.EventFilter{})
 	if len(aEvents) != 2 {
 		t.Errorf("@a: expected 2 events after reload, got %d", len(aEvents))
 	}
 	// @b should see only the public one (psst was VisibleTo=[@a])
-	bEvents, _ := s2.ReadForAgent("sid", "@b", EventFilter{})
+	bEvents, _ := s2.ReadForAgent("sid", "@b", floor.EventFilter{})
 	if len(bEvents) != 1 {
 		t.Errorf("@b: expected 1 event after reload, got %d", len(bEvents))
 	}
@@ -69,16 +88,16 @@ func TestJSONLStoreAppendAndReload(t *testing.T) {
 func TestJSONLStoreClearReapplied(t *testing.T) {
 	path := jsonlTempPath(t)
 
-	s, _ := NewJSONLStore(path)
-	s.Append(AppendOpts{SessionID: "sid", RoomID: "#main", Event: newMemMsg("a"), VisibleTo: []string{"@x"}})
-	s.Append(AppendOpts{SessionID: "sid", RoomID: "#sub", Event: newMemMsg("b"), VisibleTo: []string{"@x"}})
-	s.Clear("sid", EventFilter{RoomID: "#main"})
+	s, _ := NewJSONL(path)
+	s.Append(floor.AppendOpts{SessionID: "sid", RoomID: "#main", Event: newMemMsg("a"), VisibleTo: []string{"@x"}})
+	s.Append(floor.AppendOpts{SessionID: "sid", RoomID: "#sub", Event: newMemMsg("b"), VisibleTo: []string{"@x"}})
+	s.Clear("sid", floor.EventFilter{RoomID: "#main"})
 	s.Close()
 
-	s2, _ := NewJSONLStore(path)
+	s2, _ := NewJSONL(path)
 	defer s2.Close()
 
-	all, _ := s2.Read("sid", EventFilter{})
+	all, _ := s2.Read("sid", floor.EventFilter{})
 	if len(all) != 1 {
 		t.Fatalf("expected 1 event after Clear + reload, got %d", len(all))
 	}
@@ -87,7 +106,7 @@ func TestJSONLStoreClearReapplied(t *testing.T) {
 	}
 
 	// Agent refs to cleared events should be gone too.
-	x, _ := s2.ReadForAgent("sid", "@x", EventFilter{})
+	x, _ := s2.ReadForAgent("sid", "@x", floor.EventFilter{})
 	if len(x) != 1 {
 		t.Errorf("@x: expected 1 event, got %d", len(x))
 	}
@@ -96,16 +115,16 @@ func TestJSONLStoreClearReapplied(t *testing.T) {
 func TestJSONLStoreMultipleSessions(t *testing.T) {
 	path := jsonlTempPath(t)
 
-	s, _ := NewJSONLStore(path)
-	s.Append(AppendOpts{SessionID: "s1", Event: newMemMsg("from s1"), VisibleTo: []string{"@x"}})
-	s.Append(AppendOpts{SessionID: "s2", Event: newMemMsg("from s2"), VisibleTo: []string{"@x"}})
+	s, _ := NewJSONL(path)
+	s.Append(floor.AppendOpts{SessionID: "s1", Event: newMemMsg("from s1"), VisibleTo: []string{"@x"}})
+	s.Append(floor.AppendOpts{SessionID: "s2", Event: newMemMsg("from s2"), VisibleTo: []string{"@x"}})
 	s.Close()
 
-	s2, _ := NewJSONLStore(path)
+	s2, _ := NewJSONL(path)
 	defer s2.Close()
 
-	e1, _ := s2.Read("s1", EventFilter{})
-	e2, _ := s2.Read("s2", EventFilter{})
+	e1, _ := s2.Read("s1", floor.EventFilter{})
+	e2, _ := s2.Read("s2", floor.EventFilter{})
 	if len(e1) != 1 || len(e2) != 1 {
 		t.Fatalf("session isolation broken: s1=%d s2=%d", len(e1), len(e2))
 	}
@@ -119,8 +138,8 @@ func TestJSONLStoreTruncatedLineRecovery(t *testing.T) {
 
 	// Write a valid event, then corrupt the file by appending a
 	// truncated line (simulating a crash mid-write).
-	s, _ := NewJSONLStore(path)
-	s.Append(AppendOpts{SessionID: "sid", Event: newMemMsg("good"), VisibleTo: []string{"@a"}})
+	s, _ := NewJSONL(path)
+	s.Append(floor.AppendOpts{SessionID: "sid", Event: newMemMsg("good"), VisibleTo: []string{"@a"}})
 	s.Close()
 
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
@@ -132,13 +151,13 @@ func TestJSONLStoreTruncatedLineRecovery(t *testing.T) {
 	f.Close()
 
 	// Reload should tolerate the truncated line and recover the good event.
-	s2, err := NewJSONLStore(path)
+	s2, err := NewJSONL(path)
 	if err != nil {
 		t.Fatalf("reload after truncation: %v", err)
 	}
 	defer s2.Close()
 
-	events, _ := s2.Read("sid", EventFilter{})
+	events, _ := s2.Read("sid", floor.EventFilter{})
 	if len(events) != 1 {
 		t.Errorf("expected 1 recovered event, got %d", len(events))
 	}
@@ -148,8 +167,8 @@ func TestJSONLStoreFileFormatIsLineDelimitedJSON(t *testing.T) {
 	// Sanity check: opening the file in any JSONL parser should work.
 	// Verify each line is a valid JSON object with a "kind" field.
 	path := jsonlTempPath(t)
-	s, _ := NewJSONLStore(path)
-	s.Append(AppendOpts{
+	s, _ := NewJSONL(path)
+	s.Append(floor.AppendOpts{
 		SessionID: "sid",
 		RoomID:    "#main",
 		Event:     newMemMsg("hello"),
@@ -176,18 +195,18 @@ func TestJSONLStoreFileFormatIsLineDelimitedJSON(t *testing.T) {
 func TestJSONLStoreSeqMonotonicAcrossReload(t *testing.T) {
 	path := jsonlTempPath(t)
 
-	s, _ := NewJSONLStore(path)
-	a, _ := s.Append(AppendOpts{SessionID: "sid", Event: newMemMsg("1")})
-	b, _ := s.Append(AppendOpts{SessionID: "sid", Event: newMemMsg("2")})
+	s, _ := NewJSONL(path)
+	a, _ := s.Append(floor.AppendOpts{SessionID: "sid", Event: newMemMsg("1")})
+	b, _ := s.Append(floor.AppendOpts{SessionID: "sid", Event: newMemMsg("2")})
 	s.Close()
 	if a.Seq != 1 || b.Seq != 2 {
 		t.Fatalf("initial seqs unexpected: %d, %d", a.Seq, b.Seq)
 	}
 
 	// Reload; next Append should get Seq 3, not 1.
-	s2, _ := NewJSONLStore(path)
+	s2, _ := NewJSONL(path)
 	defer s2.Close()
-	c, _ := s2.Append(AppendOpts{SessionID: "sid", Event: newMemMsg("3")})
+	c, _ := s2.Append(floor.AppendOpts{SessionID: "sid", Event: newMemMsg("3")})
 	if c.Seq != 3 {
 		t.Errorf("expected Seq 3 after reload, got %d", c.Seq)
 	}

@@ -11,7 +11,6 @@ import (
 type RunOnceConfig struct {
 	Blueprint *blueprint.Blueprint // floor blueprint (furniture, agent config)
 	AgentID   string               // which agent to run
-	Prompt    string               // override the agent's system prompt (empty = use blueprint prompt)
 	Input     string               // the user input to post
 }
 
@@ -21,46 +20,29 @@ type RunOnceResult struct {
 	ToolInteractions []ToolInteraction
 }
 
-// RunOnce starts a floor, runs one agent against one input, and returns the response.
-// No controller, no multi-agent turn-taking — just: start floor, run agent, get response.
-func RunOnce(cfg RunOnceConfig) (*RunOnceResult, error) {
-	// Find the agent definition in the blueprint
-	var agentDef *blueprint.Agent
-	for i := range cfg.Blueprint.Agents {
-		if cfg.Blueprint.Agents[i].ID == cfg.AgentID {
-			agentDef = &cfg.Blueprint.Agents[i]
-			break
-		}
+// RunOnce starts a floor, posts a single user message, runs the given
+// agent against it once, and returns the response.
+//
+// No controller, no multi-agent turn-taking — just: start floor, run
+// agent, get response. Used by eval/ for one-shot LLM evaluation.
+//
+// The caller constructs the agent (typically llm.New or acp.New) so
+// this package doesn't have to import the agent subpackages.
+func RunOnce(cfg RunOnceConfig, agent Agent) (*RunOnceResult, error) {
+	if agent == nil {
+		return nil, fmt.Errorf("RunOnce: agent is nil")
 	}
-	if agentDef == nil {
-		return nil, fmt.Errorf("agent %q not found in blueprint", cfg.AgentID)
-	}
-
-	// Override prompt if specified
-	if cfg.Prompt != "" {
-		agentDef.Prompt = cfg.Prompt
-	}
-
 	// Create and start the floor (furniture, API server, etc.)
-	floor := NewFloor(cfg.Blueprint)
-	if err := floor.Start(func(string) {}); err != nil {
+	f := NewFloor(cfg.Blueprint)
+	if err := f.Start(func(string) {}); err != nil {
 		return nil, fmt.Errorf("start floor: %w", err)
 	}
-	defer floor.Stop()
+	defer f.Stop()
 
-	sess := floor.DefaultSession()
+	sess := f.DefaultSession()
 
 	// Post user input
 	sess.MainRoom.Post(ChatMessage{From: "@user", Content: cfg.Input})
-
-	// Build and run the agent synchronously
-	var agent Agent
-	switch agentDef.Type {
-	case "acp":
-		agent = NewACPAgent(agentDef)
-	default:
-		agent = NewLLMAgent(agentDef)
-	}
 
 	turn := NewAgentTurn(sess, sess.MainRoom, sess.Floor, cfg.AgentID)
 	if err := agent.Run(context.Background(), turn); err != nil {

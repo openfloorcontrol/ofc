@@ -10,6 +10,8 @@ import (
 	"github.com/openfloorcontrol/ofc/blueprint"
 	"github.com/openfloorcontrol/ofc/eval"
 	"github.com/openfloorcontrol/ofc/floor"
+	acpagent "github.com/openfloorcontrol/ofc/floor/agents/acp"
+	llmagent "github.com/openfloorcontrol/ofc/floor/agents/llm"
 )
 
 // FloorResult holds the collected events and messages from a floor run.
@@ -48,9 +50,9 @@ func runFloor(t *testing.T, bp *blueprint.Blueprint, prompt string) *FloorResult
 		a := &bp.Agents[i]
 		switch a.Type {
 		case "acp":
-			agents[a.ID] = floor.NewACPAgent(a)
+			agents[a.ID] = acpagent.New(a)
 		default:
-			agents[a.ID] = floor.NewLLMAgent(a)
+			agents[a.ID] = llmagent.New(a)
 		}
 	}
 

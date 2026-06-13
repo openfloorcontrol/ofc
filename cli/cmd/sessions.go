@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/openfloorcontrol/ofc/floor"
+	"github.com/openfloorcontrol/ofc/floor/sessionstore"
 	"github.com/spf13/cobra"
 )
 
@@ -165,7 +166,7 @@ var sessionsShowCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		store, err := floor.NewJSONLStore(path)
+		store, err := sessionstore.NewJSONL(path)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error opening store: %v\n", err)
 			os.Exit(1)
@@ -219,7 +220,7 @@ var sessionsShowCmd = &cobra.Command{
 // stored meta (if any), and closes. Used by `ofc sessions ls` to enrich
 // the listing without loading the full session into memory long-term.
 func readSessionMeta(path string) (floor.SessionMeta, error) {
-	store, err := floor.NewJSONLStore(path)
+	store, err := sessionstore.NewJSONL(path)
 	if err != nil {
 		return floor.SessionMeta{}, err
 	}

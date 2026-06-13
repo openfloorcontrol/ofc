@@ -1,4 +1,8 @@
-package floor
+// Package sessionstore holds file- and database-backed implementations
+// of the floor.SessionStore interface. The in-memory default
+// (floor.MemoryStore) stays in floor/ to avoid an import cycle with
+// floor.NewFloor.
+package sessionstore
 
 import (
 	"bufio"
@@ -8,6 +12,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/openfloorcontrol/ofc/floor"
 )
 
 // JSONLStore persists session events to a JSON Lines file. Each Append
@@ -15,29 +21,30 @@ import (
 // flushed to disk before returning). Clear writes a clear-record so
 // reload reapplies the deletion.
 //
-// Reads go to an in-memory mirror (a MemoryStore) so they're fast; the
-// file is write-only at runtime. On startup, the file is replayed into
-// the mirror.
+// Reads go to an in-memory mirror (a floor.MemoryStore) so they're fast;
+// the file is write-only at runtime. On startup, the file is replayed
+// into the mirror.
 //
-// File format: one JSON object per line. Three record kinds:
+// File format: one JSON object per line. Four record kinds:
 //
 //	{"kind":"event","session_id":"...","seq":1,"time":"...","room_id":"...",
 //	 "private":false,"payload_type":"message_posted","payload":{...}}
 //	{"kind":"ref","session_id":"...","agent_id":"@hiro","event_seq":1}
 //	{"kind":"clear","session_id":"...","filter":{"room_id":"#main"}}
+//	{"kind":"meta","session_id":"...","meta":{...}}
 type JSONLStore struct {
 	mu   sync.Mutex
 	path string
 	file *os.File
-	mem  *MemoryStore
+	mem  *floor.MemoryStore
 }
 
-// NewJSONLStore opens (or creates) the given path, replays existing
-// records into an in-memory mirror, then opens the file for appending.
-func NewJSONLStore(path string) (*JSONLStore, error) {
+// NewJSONL opens (or creates) the given path, replays existing records
+// into an in-memory mirror, then opens the file for appending.
+func NewJSONL(path string) (*JSONLStore, error) {
 	s := &JSONLStore{
 		path: path,
-		mem:  NewMemoryStore(),
+		mem:  floor.NewMemoryStore(),
 	}
 	if err := s.load(); err != nil {
 		return nil, fmt.Errorf("load %s: %w", path, err)
@@ -66,7 +73,7 @@ func (s *JSONLStore) Close() error {
 
 // Append writes the event and its visibility refs to disk, then mirrors
 // them in memory. Returns the StoredEvent with Seq and Time populated.
-func (s *JSONLStore) Append(opts AppendOpts) (StoredEvent, error) {
+func (s *JSONLStore) Append(opts floor.AppendOpts) (floor.StoredEvent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -122,14 +129,14 @@ func (s *JSONLStore) Append(opts AppendOpts) (StoredEvent, error) {
 }
 
 // Read delegates to the in-memory mirror.
-func (s *JSONLStore) Read(sessionID string, filter EventFilter) ([]StoredEvent, error) {
+func (s *JSONLStore) Read(sessionID string, filter floor.EventFilter) ([]floor.StoredEvent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.mem.Read(sessionID, filter)
 }
 
 // ReadForAgent delegates to the in-memory mirror.
-func (s *JSONLStore) ReadForAgent(sessionID, agentID string, filter EventFilter) ([]StoredEvent, error) {
+func (s *JSONLStore) ReadForAgent(sessionID, agentID string, filter floor.EventFilter) ([]floor.StoredEvent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.mem.ReadForAgent(sessionID, agentID, filter)
@@ -138,7 +145,7 @@ func (s *JSONLStore) ReadForAgent(sessionID, agentID string, filter EventFilter)
 // SetMeta writes a meta-record to the file and applies it to the mirror.
 // Append-only: a later SetMeta overrides earlier ones at load time
 // because replay applies records in order (the last one wins).
-func (s *JSONLStore) SetMeta(sessionID string, meta SessionMeta) error {
+func (s *JSONLStore) SetMeta(sessionID string, meta floor.SessionMeta) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -158,14 +165,14 @@ func (s *JSONLStore) SetMeta(sessionID string, meta SessionMeta) error {
 }
 
 // GetMeta delegates to the in-memory mirror.
-func (s *JSONLStore) GetMeta(sessionID string) (SessionMeta, error) {
+func (s *JSONLStore) GetMeta(sessionID string) (floor.SessionMeta, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.mem.GetMeta(sessionID)
 }
 
 // Clear writes a clear-record to the file and applies it to the mirror.
-func (s *JSONLStore) Clear(sessionID string, filter EventFilter) error {
+func (s *JSONLStore) Clear(sessionID string, filter floor.EventFilter) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -211,15 +218,15 @@ type refRecord struct {
 }
 
 type clearRecord struct {
-	Kind      string      `json:"kind"`
-	SessionID string      `json:"session_id"`
-	Filter    EventFilter `json:"filter"`
+	Kind      string            `json:"kind"`
+	SessionID string            `json:"session_id"`
+	Filter    floor.EventFilter `json:"filter"`
 }
 
 type metaRecord struct {
-	Kind      string      `json:"kind"`
-	SessionID string      `json:"session_id"`
-	Meta      SessionMeta `json:"meta"`
+	Kind      string            `json:"kind"`
+	SessionID string            `json:"session_id"`
+	Meta      floor.SessionMeta `json:"meta"`
 }
 
 // writeAndSync writes each record followed by '\n', then fsyncs.
@@ -254,10 +261,6 @@ func (s *JSONLStore) load() error {
 	buf := make([]byte, 0, 64*1024)
 	scanner.Buffer(buf, 16*1024*1024)
 
-	// Track the lowest-Seq event we've written to memory so we can
-	// detect orphaned refs (ref before the matching event) — shouldn't
-	// happen with our write order, but be defensive on reload.
-
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
@@ -279,7 +282,7 @@ func (s *JSONLStore) load() error {
 				return fmt.Errorf("decode event payload (seq %d): %w", er.Seq, err)
 			}
 			// Append directly into the mirror, preserving Seq + Time.
-			s.mem.appendRaw(er.SessionID, StoredEvent{
+			s.mem.AppendRaw(er.SessionID, floor.StoredEvent{
 				Seq:     er.Seq,
 				Time:    er.Time,
 				RoomID:  er.RoomID,
@@ -291,7 +294,7 @@ func (s *JSONLStore) load() error {
 			if err := json.Unmarshal(line, &rr); err != nil {
 				break
 			}
-			s.mem.addRef(rr.SessionID, rr.AgentID, rr.EventSeq)
+			s.mem.AddRef(rr.SessionID, rr.AgentID, rr.EventSeq)
 		case "clear":
 			var cr clearRecord
 			if err := json.Unmarshal(line, &cr); err != nil {
@@ -318,10 +321,10 @@ func (s *JSONLStore) load() error {
 
 // unmarshalSessionEvent dispatches by PayloadType to the concrete type.
 // Future event types add their own case here.
-func unmarshalSessionEvent(payloadType string, payload json.RawMessage) (SessionEvent, error) {
+func unmarshalSessionEvent(payloadType string, payload json.RawMessage) (floor.SessionEvent, error) {
 	switch payloadType {
 	case "message_posted":
-		var p MessagePostedEvent
+		var p floor.MessagePostedEvent
 		if err := json.Unmarshal(payload, &p); err != nil {
 			return nil, err
 		}

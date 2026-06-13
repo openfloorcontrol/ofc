@@ -1,4 +1,9 @@
-package floor
+// Package llm implements the LLMAgent — an Agent backed by an
+// OpenAI-compatible chat-completion API. Depends only on the
+// floor.AgentTurn interface and floor's small value types
+// (ChatMessage, Event variants, ToolInteraction). It does not reach
+// into the Floor or Session concrete types.
+package llm
 
 import (
 	"context"
@@ -7,36 +12,37 @@ import (
 	"strings"
 
 	"github.com/openfloorcontrol/ofc/blueprint"
+	"github.com/openfloorcontrol/ofc/floor"
 	"github.com/openfloorcontrol/ofc/furniture"
-	"github.com/openfloorcontrol/ofc/llm"
+	llmsdk "github.com/openfloorcontrol/ofc/llm"
 	"github.com/openfloorcontrol/ofc/sandbox"
 )
 
-// LLMAgent is an agent backed by an OpenAI-compatible LLM API.
-type LLMAgent struct {
+// Agent is an agent backed by an OpenAI-compatible LLM API.
+type Agent struct {
 	agent *blueprint.Agent
 }
 
-// NewLLMAgent creates an LLM agent from a blueprint agent definition.
-func NewLLMAgent(agent *blueprint.Agent) *LLMAgent {
-	return &LLMAgent{agent: agent}
+// New creates an LLM agent from a blueprint agent definition.
+func New(agent *blueprint.Agent) *Agent {
+	return &Agent{agent: agent}
 }
 
-func (a *LLMAgent) AgentID() string { return a.agent.ID }
+func (a *Agent) AgentID() string { return a.agent.ID }
 
 // Run executes one LLM agent turn: build context, call LLM, handle tool calls,
 // post results to the bound room. Blocks until complete.
-func (a *LLMAgent) Run(ctx context.Context, turn AgentTurn) error {
-	client := llm.NewClient(a.agent.Endpoint, a.agent.APIKey)
+func (a *Agent) Run(ctx context.Context, turn floor.AgentTurn) error {
+	client := llmsdk.NewClient(a.agent.Endpoint, a.agent.APIKey)
 	messages := a.buildContext(turn)
 	tools := a.buildTools(turn)
 
 	var fullResponse strings.Builder
-	var interactions []ToolInteraction
+	var interactions []floor.ToolInteraction
 	maxIterations := 10
 
 	// Emit agent label before first token
-	turn.Stream(AgentLabel{AgentID: a.agent.ID})
+	turn.Stream(floor.AgentLabel{AgentID: a.agent.ID})
 
 	for i := 0; i < maxIterations; i++ {
 		// Check for cancellation
@@ -47,10 +53,10 @@ func (a *LLMAgent) Run(ctx context.Context, turn AgentTurn) error {
 		}
 
 		result, err := client.ChatStream(a.agent.Model, messages, a.agent.Temperature, tools, func(token string) {
-			turn.Stream(TokenStreamed{AgentID: a.agent.ID, Token: token})
+			turn.Stream(floor.TokenStreamed{AgentID: a.agent.ID, Token: token})
 		})
 		if err != nil {
-			turn.Status(AgentErrorEvent{
+			turn.Status(floor.AgentErrorEvent{
 				AgentID: a.agent.ID,
 				Err:     err,
 				Partial: fullResponse.String(),
@@ -68,18 +74,18 @@ func (a *LLMAgent) Run(ctx context.Context, turn AgentTurn) error {
 		// Execute tool calls
 		expanded := a.expandToolCalls(turn, result.ToolCalls)
 		for _, ex := range expanded {
-			turn.Stream(ToolCallResult{AgentID: a.agent.ID, ID: ex.Call.ID, Title: ex.Title, Output: ex.Output})
+			turn.Stream(floor.ToolCallResult{AgentID: a.agent.ID, ID: ex.Call.ID, Title: ex.Title, Output: ex.Output})
 
-			interactions = append(interactions, ToolInteraction{
+			interactions = append(interactions, floor.ToolInteraction{
 				Command: ex.Title,
 				Output:  ex.Output,
 			})
 
-			messages = append(messages, llm.Message{
+			messages = append(messages, llmsdk.Message{
 				Role:      "assistant",
-				ToolCalls: []llm.ToolCall{ex.Call},
+				ToolCalls: []llmsdk.ToolCall{ex.Call},
 			})
-			messages = append(messages, llm.Message{
+			messages = append(messages, llmsdk.Message{
 				Role:       "tool",
 				Content:    ex.Output,
 				ToolCallID: ex.Call.ID,
@@ -91,12 +97,12 @@ func (a *LLMAgent) Run(ctx context.Context, turn AgentTurn) error {
 
 	// Check for [PASS] or empty response (LLM returned nothing)
 	if strings.Contains(strings.ToLower(content), "[pass]") || (strings.TrimSpace(content) == "" && len(interactions) == 0) {
-		turn.Status(AgentPassedEvent{AgentID: a.agent.ID})
+		turn.Status(floor.AgentPassedEvent{AgentID: a.agent.ID})
 		return nil
 	}
 
 	// Post the final message
-	turn.Reply(ChatMessage{
+	turn.Reply(floor.ChatMessage{
 		From:             a.agent.ID,
 		Content:          content,
 		ToolInteractions: interactions,
@@ -106,8 +112,8 @@ func (a *LLMAgent) Run(ctx context.Context, turn AgentTurn) error {
 
 // buildContext converts the agent's accumulated context to LLM messages,
 // applying tool_context filtering.
-func (a *LLMAgent) buildContext(turn AgentTurn) []llm.Message {
-	messages := []llm.Message{
+func (a *Agent) buildContext(turn floor.AgentTurn) []llmsdk.Message {
+	messages := []llmsdk.Message{
 		{Role: "system", Content: a.agent.Prompt},
 	}
 
@@ -116,7 +122,7 @@ func (a *LLMAgent) buildContext(turn AgentTurn) []llm.Message {
 	for _, msg := range chatMsgs {
 		if msg.From == "@system" {
 			// System messages (room transitions, etc.)
-			messages = append(messages, llm.Message{
+			messages = append(messages, llmsdk.Message{
 				Role:    "system",
 				Content: msg.Content,
 			})
@@ -124,10 +130,10 @@ func (a *LLMAgent) buildContext(turn AgentTurn) []llm.Message {
 			// Own messages: role = "assistant", full tool context
 			if len(msg.ToolInteractions) > 0 {
 				// Batch all tool calls into one assistant message
-				var calls []llm.ToolCall
+				var calls []llmsdk.ToolCall
 				for i, ti := range msg.ToolInteractions {
 					callID := fmt.Sprintf("call_%d", i)
-					calls = append(calls, llm.ToolCall{
+					calls = append(calls, llmsdk.ToolCall{
 						ID:   callID,
 						Type: "function",
 						Function: struct {
@@ -139,14 +145,14 @@ func (a *LLMAgent) buildContext(turn AgentTurn) []llm.Message {
 						},
 					})
 				}
-				messages = append(messages, llm.Message{
+				messages = append(messages, llmsdk.Message{
 					Role:      "assistant",
 					ToolCalls: calls,
 				})
 				// Tool results
 				for i, ti := range msg.ToolInteractions {
 					callID := fmt.Sprintf("call_%d", i)
-					messages = append(messages, llm.Message{
+					messages = append(messages, llmsdk.Message{
 						Role:       "tool",
 						Content:    ti.Output,
 						ToolCallID: callID,
@@ -154,13 +160,13 @@ func (a *LLMAgent) buildContext(turn AgentTurn) []llm.Message {
 				}
 				// Final response after tool use
 				if msg.Content != "" {
-					messages = append(messages, llm.Message{
+					messages = append(messages, llmsdk.Message{
 						Role:    "assistant",
 						Content: msg.Content,
 					})
 				}
 			} else {
-				messages = append(messages, llm.Message{
+				messages = append(messages, llmsdk.Message{
 					Role:    "assistant",
 					Content: msg.Content,
 				})
@@ -169,12 +175,12 @@ func (a *LLMAgent) buildContext(turn AgentTurn) []llm.Message {
 			// Other participants: role = "user", apply tool_context filtering
 			content := msg.Content
 			if len(msg.ToolInteractions) > 0 {
-				toolSummary := formatToolInteractions(msg.ToolInteractions, a.agent.ToolContext)
+				toolSummary := floor.FormatToolInteractions(msg.ToolInteractions, a.agent.ToolContext)
 				if toolSummary != "" {
 					content += "\n\n" + toolSummary
 				}
 			}
-			messages = append(messages, llm.Message{
+			messages = append(messages, llmsdk.Message{
 				Role:    "user",
 				Content: content,
 				Name:    strings.TrimPrefix(msg.From, "@"),
@@ -186,10 +192,10 @@ func (a *LLMAgent) buildContext(turn AgentTurn) []llm.Message {
 }
 
 // buildTools constructs the tool list for this agent.
-func (a *LLMAgent) buildTools(turn AgentTurn) []llm.Tool {
-	var tools []llm.Tool
+func (a *Agent) buildTools(turn floor.AgentTurn) []llmsdk.Tool {
+	var tools []llmsdk.Tool
 	if a.agent.CanUseSandbox && turn.Sandbox() != nil {
-		tools = append(tools, llm.BashTool)
+		tools = append(tools, llmsdk.BashTool)
 	}
 	for _, fname := range a.agent.Furniture {
 		f, ok := turn.Furniture(fname)
@@ -204,7 +210,7 @@ func (a *LLMAgent) buildTools(turn AgentTurn) []llm.Tool {
 }
 
 // expandToolCalls processes tool calls, splitting concatenated JSON arguments.
-func (a *LLMAgent) expandToolCalls(turn AgentTurn, toolCalls []llm.ToolCall) []expandedCall {
+func (a *Agent) expandToolCalls(turn floor.AgentTurn, toolCalls []llmsdk.ToolCall) []expandedCall {
 	var result []expandedCall
 	for _, tc := range toolCalls {
 		result = append(result, a.dispatchToolCall(turn, tc)...)
@@ -213,7 +219,7 @@ func (a *LLMAgent) expandToolCalls(turn AgentTurn, toolCalls []llm.ToolCall) []e
 }
 
 // dispatchToolCall executes a tool call.
-func (a *LLMAgent) dispatchToolCall(turn AgentTurn, tc llm.ToolCall) []expandedCall {
+func (a *Agent) dispatchToolCall(turn floor.AgentTurn, tc llmsdk.ToolCall) []expandedCall {
 	name := tc.Function.Name
 
 	// Check for furniture tool (namespaced as furniture__tool)
@@ -229,7 +235,7 @@ func (a *LLMAgent) dispatchToolCall(turn AgentTurn, tc llm.ToolCall) []expandedC
 	return []expandedCall{{Call: tc, Title: name, Output: fmt.Sprintf("[ERROR: unknown tool %q]", name)}}
 }
 
-func (a *LLMAgent) dispatchFurnitureCall(turn AgentTurn, tc llm.ToolCall, furnitureName, toolName string) []expandedCall {
+func (a *Agent) dispatchFurnitureCall(turn floor.AgentTurn, tc llmsdk.ToolCall, furnitureName, toolName string) []expandedCall {
 	f, ok := turn.Furniture(furnitureName)
 	if !ok {
 		return []expandedCall{{
@@ -256,7 +262,7 @@ func (a *LLMAgent) dispatchFurnitureCall(turn AgentTurn, tc llm.ToolCall, furnit
 		if i > 0 {
 			callID = fmt.Sprintf("%s_%d", tc.ID, i)
 		}
-		turn.Stream(ToolCallStarted{AgentID: a.agent.ID, ID: callID, Title: title})
+		turn.Stream(floor.ToolCallStarted{AgentID: a.agent.ID, ID: callID, Title: title})
 
 		callResult, err := f.Call(toolName, args)
 		var output string
@@ -268,7 +274,7 @@ func (a *LLMAgent) dispatchFurnitureCall(turn AgentTurn, tc llm.ToolCall, furnit
 		}
 
 		argsJSON, _ := json.Marshal(args)
-		call := llm.ToolCall{
+		call := llmsdk.ToolCall{
 			ID:   tc.ID,
 			Type: tc.Type,
 		}
@@ -287,7 +293,7 @@ func (a *LLMAgent) dispatchFurnitureCall(turn AgentTurn, tc llm.ToolCall, furnit
 	return expanded
 }
 
-func (a *LLMAgent) dispatchBashCall(sb *sandbox.Sandbox, tc llm.ToolCall) []expandedCall {
+func (a *Agent) dispatchBashCall(sb *sandbox.Sandbox, tc llmsdk.ToolCall) []expandedCall {
 	if sb == nil {
 		return []expandedCall{{Call: tc, Title: "bash", Output: "[ERROR: no sandbox available]"}}
 	}
@@ -311,15 +317,15 @@ func (a *LLMAgent) dispatchBashCall(sb *sandbox.Sandbox, tc llm.ToolCall) []expa
 
 // expandedCall holds one tool call with its result, ready for the message history.
 type expandedCall struct {
-	Call   llm.ToolCall
+	Call   llmsdk.ToolCall
 	Title  string
 	Output string
 }
 
 // furnitureToolToLLM converts a furniture tool to an LLM tool definition.
 // Tool names are namespaced as {furniture}__{tool} to avoid collisions.
-func furnitureToolToLLM(furnitureName string, t furniture.Tool) llm.Tool {
-	tool := llm.Tool{Type: "function"}
+func furnitureToolToLLM(furnitureName string, t furniture.Tool) llmsdk.Tool {
+	tool := llmsdk.Tool{Type: "function"}
 	tool.Function.Name = furnitureName + "__" + t.Name
 	tool.Function.Description = fmt.Sprintf("[%s] %s", furnitureName, t.Description)
 	tool.Function.Parameters = t.Parameters
@@ -344,3 +350,4 @@ func parseJSONObjects(s string) ([]map[string]interface{}, error) {
 	}
 	return results, nil
 }
+

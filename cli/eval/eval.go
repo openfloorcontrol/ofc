@@ -8,6 +8,7 @@ import (
 
 	"github.com/openfloorcontrol/ofc/blueprint"
 	"github.com/openfloorcontrol/ofc/floor"
+	llmagent "github.com/openfloorcontrol/ofc/floor/agents/llm"
 )
 
 // Result holds the structured evaluation output.
@@ -33,12 +34,24 @@ Where 1 = very poor, 2 = poor, 3 = acceptable, 4 = good, 5 = excellent.`
 func Run(input string, evalPrompt string, agentID string, bp *blueprint.Blueprint) (*Result, error) {
 	systemPrompt := fmt.Sprintf(systemPromptTemplate, evalPrompt)
 
+	// Find the agent definition; override its prompt with the eval system prompt.
+	var agentDef *blueprint.Agent
+	for i := range bp.Agents {
+		if bp.Agents[i].ID == agentID {
+			agentDef = &bp.Agents[i]
+			break
+		}
+	}
+	if agentDef == nil {
+		return nil, fmt.Errorf("agent %q not found in blueprint", agentID)
+	}
+	agentDef.Prompt = systemPrompt
+
 	result, err := floor.RunOnce(floor.RunOnceConfig{
 		Blueprint: bp,
 		AgentID:   agentID,
-		Prompt:    systemPrompt,
 		Input:     input,
-	})
+	}, llmagent.New(agentDef))
 	if err != nil {
 		return nil, fmt.Errorf("eval run: %w", err)
 	}

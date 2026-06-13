@@ -13,6 +13,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/openfloorcontrol/ofc/blueprint"
 	"github.com/openfloorcontrol/ofc/floor"
+	acpagent "github.com/openfloorcontrol/ofc/floor/agents/acp"
+	llmagent "github.com/openfloorcontrol/ofc/floor/agents/llm"
+	"github.com/openfloorcontrol/ofc/floor/sessionstore"
 	"github.com/spf13/cobra"
 )
 
@@ -187,9 +190,9 @@ func buildAgents(bp *blueprint.Blueprint) map[string]floor.Agent {
 		a := &bp.Agents[i]
 		switch a.Type {
 		case "acp":
-			agents[a.ID] = floor.NewACPAgent(a)
+			agents[a.ID] = acpagent.New(a)
 		default:
-			agents[a.ID] = floor.NewLLMAgent(a)
+			agents[a.ID] = llmagent.New(a)
 		}
 	}
 	return agents
@@ -256,7 +259,7 @@ func applySessionLog(f *floor.Floor, bp *blueprint.Blueprint) error {
 	if err != nil {
 		return err
 	}
-	store, err := floor.NewJSONLStore(path)
+	store, err := sessionstore.NewJSONL(path)
 	if err != nil {
 		return fmt.Errorf("session store: %w", err)
 	}
