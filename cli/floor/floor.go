@@ -52,7 +52,7 @@ type Floor struct {
 	ACPSubprocesses map[string]*acpclient.Subprocess
 
 	Sandbox   *sandbox.Sandbox
-	APIServer *APIServer
+	APIServer APIServer // interface; concrete impl in floor/api/. Caller assigns before Start.
 
 	// Store persists session events (messages with per-agent visibility refs).
 	// Defaults to NewMemoryStore() in NewFloor; can be overridden before
@@ -149,14 +149,14 @@ func joinAgentIDs(ids []string, exclude string) string {
 // Start initializes API server, sandbox, then applies the blueprint as a
 // sequence of mutations (AddFurniture, AddAgent). Same primitives that
 // future runtime mutations will use.
+//
+// The caller must assign f.APIServer (e.g. via floor/api.New()) before
+// calling Start. If running in web mode (ServeWebDist), the caller is
+// also responsible for setting an auth token on the server beforehand —
+// floor itself doesn't import floor/api and so can't construct one.
 func (f *Floor) Start(renderInfo func(string)) error {
-	// 1. API server (always — serves floor message endpoints + furniture MCP)
-	f.APIServer = NewAPIServer()
-
-	// Generate auth token for web mode
-	if f.ServeWebDist {
-		token := GenerateToken()
-		f.APIServer.SetAuthToken(token)
+	if f.APIServer == nil {
+		return fmt.Errorf("Floor.Start: APIServer is nil — assign one (e.g. api.New()) before calling Start")
 	}
 
 	// Register floor API against the default session's chat.

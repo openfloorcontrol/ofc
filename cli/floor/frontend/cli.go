@@ -1,4 +1,4 @@
-package floor
+package frontend
 
 import (
 	"bufio"
@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/openfloorcontrol/ofc/floor"
 )
 
 // CLIFrontend provides terminal-based interaction for the floor.
@@ -17,8 +19,8 @@ type CLIFrontend struct {
 	Headless bool // skip stdin reader (web-only mode)
 }
 
-// NewCLIFrontend creates a CLI frontend with terminal output and optional log file.
-func NewCLIFrontend(logPath string, debug bool, colorMap map[string]string) *CLIFrontend {
+// NewCLI creates a CLI frontend with terminal output and optional log file.
+func NewCLI(logPath string, debug bool, colorMap map[string]string) *CLIFrontend {
 	return &CLIFrontend{
 		out:      NewOutput(logPath, debug),
 		colorMap: colorMap,
@@ -56,19 +58,19 @@ func (f *CLIFrontend) Debug(msg string) {
 // RunLoop is the event-driven main loop for CLI.
 // It reads from the unified event channel (main floor + rooms), renders events,
 // and dispatches agents to the correct context.
-func (f *CLIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]Agent, initialPrompt string) error {
+func (f *CLIFrontend) RunLoop(fl *floor.Floor, ctrl *floor.Controller, agents map[string]floor.Agent, initialPrompt string) error {
 	// Start floor infrastructure
-	if err := floor.Start(func(msg string) {
+	if err := fl.Start(func(msg string) {
 		f.renderSystemInfo(msg)
 	}); err != nil {
 		return err
 	}
-	defer floor.Stop()
+	defer fl.Stop()
 	defer f.Close()
 
-	f.renderHeader(floor)
+	f.renderHeader(fl)
 
-	sess := floor.DefaultSession()
+	sess := fl.DefaultSession()
 
 	// If the session has prior history (resumed from disk), replay the
 	// last turn so the user sees the context they're picking up.
@@ -80,13 +82,13 @@ func (f *CLIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 
 	if !f.Headless {
 		// Spawn stdin reader goroutine (waits for readyForInput before each prompt)
-		go f.readStdinLoop(floor, readyForInput)
+		go f.readStdinLoop(fl, readyForInput)
 	}
 
 	// If initial prompt, post it as @user (or handle as command)
 	if initialPrompt != "" {
-		f.renderStream(AgentLabel{AgentID: "@user"}, "")
-		f.renderStream(TokenStreamed{AgentID: "@user", Token: initialPrompt + "\n"}, "")
+		f.renderStream(floor.AgentLabel{AgentID: "@user"}, "")
+		f.renderStream(floor.TokenStreamed{AgentID: "@user", Token: initialPrompt + "\n"}, "")
 		sess.MainRoom.PostUserInput(initialPrompt)
 	} else if !f.Headless {
 		// No initial prompt — ready for user input immediately
@@ -94,11 +96,11 @@ func (f *CLIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 	}
 
 	var cancelAgent context.CancelFunc
-	oneShot := initialPrompt != "" && !IsCommand(initialPrompt)
+	oneShot := initialPrompt != "" && !floor.IsCommand(initialPrompt)
 
 	// signalReady sends readyForInput if the decision means "back to user"
 	// Only signal for main floor events (rooms are autonomous)
-	signalReady := func(roomID string, d Decision) {
+	signalReady := func(roomID string, d floor.Decision) {
 		if roomID == "" && d.Action == "wait" {
 			select {
 			case readyForInput <- struct{}{}:
@@ -119,7 +121,7 @@ func (f *CLIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 		ev := tagged.Event
 
 		switch e := ev.(type) {
-		case MessagePosted:
+		case floor.MessagePosted:
 			f.renderMessagePosted(e)
 
 			decision := DecideAndAutoClose(ec, e, sess, ctrl, f.renderSystemInfo)
@@ -131,13 +133,13 @@ func (f *CLIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 			}
 			signalReady(ec.RoomID, decision)
 
-		case StreamEvent:
+		case floor.StreamEvent:
 			f.renderStream(e.Event, ec.RoomID)
 
-		case AgentFinished:
+		case floor.AgentFinished:
 			f.out.Print("\n") // newline after streaming
 
-		case AgentPassedEvent:
+		case floor.AgentPassedEvent:
 			f.out.Terminal("\r\033[K")
 			label := e.AgentID
 			if ec.RoomID != "" {
@@ -154,7 +156,7 @@ func (f *CLIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 			}
 			signalReady(ec.RoomID, decision)
 
-		case AgentErrorEvent:
+		case floor.AgentErrorEvent:
 			f.out.Terminal("\r\033[K")
 			f.out.AgentLabel(e.AgentID, f.agentColor(e.AgentID))
 			f.out.Print("[ERROR: %v]\n", e.Err)
@@ -165,8 +167,8 @@ func (f *CLIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 			}
 			signalReady(ec.RoomID, decision)
 
-		case UserCommandEvent:
-			decision := HandleCommand(e.Command, sess, ctrl)
+		case floor.UserCommandEvent:
+			decision := floor.HandleCommand(e.Command, sess, ctrl)
 			switch decision.Action {
 			case "stop":
 				f.out.Print("\n%sGoodbye! ofc. 🎤%s\n", Dim, Reset)
@@ -186,7 +188,7 @@ func (f *CLIFrontend) RunLoop(floor *Floor, ctrl *Controller, agents map[string]
 }
 
 // handleDecision acts on a Controller Decision by dispatching agents.
-func (f *CLIFrontend) handleDecision(sess *Session, ctrl *Controller, agents map[string]Agent, d Decision, cancelAgent *context.CancelFunc) error {
+func (f *CLIFrontend) handleDecision(sess *floor.Session, ctrl *floor.Controller, agents map[string]floor.Agent, d floor.Decision, cancelAgent *context.CancelFunc) error {
 	switch d.Action {
 	case "trigger":
 		agent, ok := agents[d.AgentID]
@@ -203,7 +205,7 @@ func (f *CLIFrontend) handleDecision(sess *Session, ctrl *Controller, agents map
 		*cancelAgent = cancel
 
 		// Build a per-turn capability handle and run the agent in a goroutine.
-		turn := NewAgentTurn(sess, sess.MainRoom, sess.Floor, d.AgentID)
+		turn := floor.NewAgentTurn(sess, sess.MainRoom, sess.Floor, d.AgentID)
 		go func() {
 			defer cancel()
 			agent.Run(ctx, turn)
@@ -229,8 +231,8 @@ func (f *CLIFrontend) handleDecision(sess *Session, ctrl *Controller, agents map
 // readStdinLoop reads lines from stdin and posts them to the default session's main room.
 // Waits for readyForInput before showing the prompt (so it doesn't
 // appear while agents are streaming).
-func (f *CLIFrontend) readStdinLoop(floor *Floor, readyForInput chan struct{}) {
-	sess := floor.DefaultSession()
+func (f *CLIFrontend) readStdinLoop(fl *floor.Floor, readyForInput chan struct{}) {
+	sess := fl.DefaultSession()
 	for range readyForInput {
 		f.out.Print("\n")
 		f.out.AgentLabel("@user", f.agentColor("@user"))
@@ -238,7 +240,7 @@ func (f *CLIFrontend) readStdinLoop(floor *Floor, readyForInput chan struct{}) {
 		input, err := f.reader.ReadString('\n')
 		if err != nil {
 			f.out.Print("%s[Interrupted]%s\n", Dim, Reset)
-			sess.MainRoom.PostEvent(UserCommandEvent{Command: "/quit"})
+			sess.MainRoom.PostEvent(floor.UserCommandEvent{Command: "/quit"})
 			return
 		}
 
@@ -260,7 +262,7 @@ func (f *CLIFrontend) readStdinLoop(floor *Floor, readyForInput chan struct{}) {
 
 // renderMessagePosted handles display of a completed message.
 // In headless mode, user messages aren't echoed by stdin, so we render them here.
-func (f *CLIFrontend) renderMessagePosted(e MessagePosted) {
+func (f *CLIFrontend) renderMessagePosted(e floor.MessagePosted) {
 	if f.Headless && e.Message.From == "@user" {
 		f.out.Print("\n")
 		f.out.AgentLabel("@user", f.agentColor("@user"))
@@ -270,24 +272,24 @@ func (f *CLIFrontend) renderMessagePosted(e MessagePosted) {
 
 // renderStream handles display of streaming events.
 // roomID is "" for main floor, "#name" for room events.
-func (f *CLIFrontend) renderStream(ev Event, roomID string) {
+func (f *CLIFrontend) renderStream(ev floor.Event, roomID string) {
 	switch e := ev.(type) {
-	case AgentLabel:
+	case floor.AgentLabel:
 		f.out.Terminal("\r\033[K") // clear "thinking..." line
 		label := e.AgentID
 		if roomID != "" {
 			label = roomID + "/" + e.AgentID
 		}
 		f.out.Print("%s%s[%s]:%s ", Bold, f.agentColor(e.AgentID), label, Reset)
-	case TokenStreamed:
+	case floor.TokenStreamed:
 		f.out.Print("%s", e.Token)
-	case ToolCallStarted:
+	case floor.ToolCallStarted:
 		f.out.Print("\n%s  ▶ %s%s\n", Dim, e.Title, Reset)
-	case ToolCallOutput:
+	case floor.ToolCallOutput:
 		if e.Output != "" {
 			f.out.Print("%s  %s%s", Dim, e.Output, Reset)
 		}
-	case ToolCallResult:
+	case floor.ToolCallResult:
 		if e.Output != "" {
 			display := e.Output
 			if len(display) > 500 {
@@ -295,7 +297,7 @@ func (f *CLIFrontend) renderStream(ev Event, roomID string) {
 			}
 			f.out.Print("%s  %s%s\n", Dim, display, Reset)
 		}
-	case AgentThinking:
+	case floor.AgentThinking:
 		f.out.Terminal("%s  thinking...%s", Dim, Reset)
 	}
 }
@@ -309,7 +311,7 @@ func (f *CLIFrontend) renderSystemInfo(text string) {
 // message and everything after) if the session has prior history. Used
 // on resume so the user sees what they're picking up. Does nothing for
 // fresh sessions.
-func (f *CLIFrontend) renderLastTurnIfAny(sess *Session) {
+func (f *CLIFrontend) renderLastTurnIfAny(sess *floor.Session) {
 	history := sess.MainRoom.History()
 	if len(history) == 0 {
 		return
@@ -333,21 +335,21 @@ func (f *CLIFrontend) renderLastTurnIfAny(sess *Session) {
 }
 
 // renderHeader prints the floor header for the new loop.
-func (f *CLIFrontend) renderHeader(floor *Floor) {
+func (f *CLIFrontend) renderHeader(fl *floor.Floor) {
 	f.renderSystemInfo(fmt.Sprintf("%s%s%s", Bold, strings.Repeat("=", 50), Reset))
-	f.renderSystemInfo(fmt.Sprintf("%sOFC - %s%s", Bold, floor.Blueprint.Name, Reset))
-	if floor.Blueprint.Description != "" {
-		f.renderSystemInfo(floor.Blueprint.Description)
+	f.renderSystemInfo(fmt.Sprintf("%sOFC - %s%s", Bold, fl.Blueprint.Name, Reset))
+	if fl.Blueprint.Description != "" {
+		f.renderSystemInfo(fl.Blueprint.Description)
 	}
 
 	var agentList []string
-	for _, a := range floor.Blueprint.Agents {
+	for _, a := range fl.Blueprint.Agents {
 		agentList = append(agentList, f.agentColor(a.ID)+a.ID+Reset)
 	}
 	f.renderSystemInfo(fmt.Sprintf("Agents: %s", strings.Join(agentList, ", ")))
-	if len(floor.Furniture) > 0 {
+	if len(fl.Furniture) > 0 {
 		var names []string
-		for name := range floor.Furniture {
+		for name := range fl.Furniture {
 			names = append(names, name)
 		}
 		f.renderSystemInfo(fmt.Sprintf("Furniture: %s", strings.Join(names, ", ")))

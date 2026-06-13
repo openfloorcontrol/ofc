@@ -1,4 +1,9 @@
-package floor
+// Package api implements the HTTP API server that exposes a floor's
+// chat, furniture, and MCP endpoints. The concrete Server type
+// satisfies the floor.APIServer interface; callers (cmd/, tests)
+// construct api.New() and assign it to Floor.APIServer before
+// Floor.Start.
+package api
 
 import (
 	"context"
@@ -18,18 +23,20 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/openfloorcontrol/ofc/blueprint"
+	"github.com/openfloorcontrol/ofc/floor"
 	"github.com/openfloorcontrol/ofc/furniture"
 )
 
-// APIServer serves MCP endpoints for furniture over HTTP.
-type APIServer struct {
+// Server serves MCP endpoints for furniture over HTTP. Implements
+// floor.APIServer.
+type Server struct {
 	echo      *echo.Echo
 	listener  net.Listener
 	authToken string
 }
 
-// NewAPIServer creates a new API server.
-func NewAPIServer() *APIServer {
+// New creates a new API server.
+func New() *Server {
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
@@ -41,12 +48,12 @@ func NewAPIServer() *APIServer {
 		AllowHeaders: []string{echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization},
 	}))
 
-	return &APIServer{echo: e}
+	return &Server{echo: e}
 }
 
 // SetAuthToken sets the token and installs auth middleware.
 // Must be called before Start(). If token is empty, no auth is enforced.
-func (s *APIServer) SetAuthToken(token string) {
+func (s *Server) SetAuthToken(token string) {
 	s.authToken = token
 	if token != "" {
 		s.echo.Use(authMiddleware(token))
@@ -54,7 +61,7 @@ func (s *APIServer) SetAuthToken(token string) {
 }
 
 // AuthToken returns the current auth token.
-func (s *APIServer) AuthToken() string {
+func (s *Server) AuthToken() string {
 	return s.authToken
 }
 
@@ -100,11 +107,11 @@ func authMiddleware(token string) echo.MiddlewareFunc {
 // Registers both Streamable HTTP and SSE transports:
 //   - /api/v1/floors/{floor}/mcp/{name}/ — Streamable HTTP
 //   - /api/v1/floors/{floor}/sse/{name}/ — SSE (legacy, used by claude-code-acp)
-func (s *APIServer) RegisterFurniture(floor, name string, mcpSrv *mcp.Server) {
+func (s *Server) RegisterFurniture(floorID, name string, mcpSrv *mcp.Server) {
 	getServer := func(r *http.Request) *mcp.Server { return mcpSrv }
 
 	// Streamable HTTP endpoint
-	httpPath := fmt.Sprintf("/api/v1/floors/%s/mcp/%s", floor, name)
+	httpPath := fmt.Sprintf("/api/v1/floors/%s/mcp/%s", floorID, name)
 	httpHandler := mcp.NewStreamableHTTPHandler(getServer, &mcp.StreamableHTTPOptions{
 		Stateless: true,
 	})
@@ -112,14 +119,14 @@ func (s *APIServer) RegisterFurniture(floor, name string, mcpSrv *mcp.Server) {
 	s.echo.Any(httpPath+"/", echo.WrapHandler(httpHandler))
 
 	// SSE endpoint (for ACP agents like claude-code-acp that only support SSE)
-	ssePath := fmt.Sprintf("/api/v1/floors/%s/sse/%s", floor, name)
+	ssePath := fmt.Sprintf("/api/v1/floors/%s/sse/%s", floorID, name)
 	sseHandler := mcp.NewSSEHandler(getServer, nil)
 	s.echo.Any(ssePath, echo.WrapHandler(sseHandler))
 	s.echo.Any(ssePath+"/", echo.WrapHandler(sseHandler))
 }
 
 // ServeStaticWeb serves the web/dist/ directory as static files with SPA fallback.
-func (s *APIServer) ServeStaticWeb(webFS fs.FS) {
+func (s *Server) ServeStaticWeb(webFS fs.FS) {
 	indexHTML, err := fs.ReadFile(webFS, "index.html")
 	if err != nil {
 		indexHTML = []byte("<html><body>index.html not found</body></html>")
@@ -182,7 +189,7 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 
 // Start begins listening in a background goroutine on the given address.
 // Pass ":0" for auto-assigned port.
-func (s *APIServer) Start(addr string) error {
+func (s *Server) Start(addr string) error {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("failed to listen on %s: %w", addr, err)
@@ -194,7 +201,7 @@ func (s *APIServer) Start(addr string) error {
 }
 
 // Stop shuts down the server.
-func (s *APIServer) Stop() error {
+func (s *Server) Stop() error {
 	if s.echo != nil {
 		return s.echo.Shutdown(context.Background())
 	}
@@ -202,7 +209,7 @@ func (s *APIServer) Stop() error {
 }
 
 // BaseURL returns the base URL of the running server (e.g. "http://localhost:12345").
-func (s *APIServer) BaseURL() string {
+func (s *Server) BaseURL() string {
 	if s.listener == nil {
 		return ""
 	}
@@ -211,7 +218,7 @@ func (s *APIServer) BaseURL() string {
 
 // RegisterFloorAPI adds message and furniture endpoints for the floor.
 // workspacePath is a func so it can be resolved lazily (sandbox may start after registration).
-func (s *APIServer) RegisterFloorAPI(chat *Room, bp *blueprint.Blueprint, furnitureMap map[string]furniture.Furniture, workspacePath func() string) {
+func (s *Server) RegisterFloorAPI(chat *floor.Room, bp *blueprint.Blueprint, furnitureMap map[string]furniture.Furniture, workspacePath func() string) {
 	s.echo.POST("/api/v1/messages", handlePostMessage(chat))
 	s.echo.GET("/api/v1/messages", handleGetMessages(chat))
 	s.echo.GET("/api/v1/events", handleSSEEvents(chat))
@@ -224,7 +231,7 @@ func (s *APIServer) RegisterFloorAPI(chat *Room, bp *blueprint.Blueprint, furnit
 // POST /api/v1/messages — inject a message into the floor chat.
 // If from is empty or "@user", routes through PostUserInput (handles slash commands).
 // Otherwise posts as the specified sender (for external agents/webhooks).
-func handlePostMessage(chat *Room) echo.HandlerFunc {
+func handlePostMessage(chat *floor.Room) echo.HandlerFunc {
 	type request struct {
 		From    string `json:"from"`
 		Content string `json:"content"`
@@ -243,7 +250,7 @@ func handlePostMessage(chat *Room) echo.HandlerFunc {
 			from = "@user"
 			chat.PostUserInput(req.Content)
 		} else {
-			chat.Post(ChatMessage{From: from, Content: req.Content})
+			chat.Post(floor.ChatMessage{From: from, Content: req.Content})
 		}
 
 		return c.JSON(http.StatusOK, map[string]interface{}{
@@ -254,11 +261,11 @@ func handlePostMessage(chat *Room) echo.HandlerFunc {
 }
 
 // GET /api/v1/messages — return chat history as JSON.
-func handleGetMessages(chat *Room) echo.HandlerFunc {
+func handleGetMessages(chat *floor.Room) echo.HandlerFunc {
 	type jsonMessage struct {
-		From             string            `json:"from"`
-		Content          string            `json:"content"`
-		ToolInteractions []ToolInteraction `json:"tool_interactions,omitempty"`
+		From             string                  `json:"from"`
+		Content          string                  `json:"content"`
+		ToolInteractions []floor.ToolInteraction `json:"tool_interactions,omitempty"`
 	}
 	return func(c echo.Context) error {
 		history := chat.History()
@@ -483,7 +490,7 @@ func handleServeFile(furnitureMap map[string]furniture.Furniture, workspacePath 
 }
 
 // GET /api/v1/events — SSE stream of chat events.
-func handleSSEEvents(chat *Room) echo.HandlerFunc {
+func handleSSEEvents(chat *floor.Room) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		c.Response().Header().Set("Content-Type", "text/event-stream")
 		c.Response().Header().Set("Cache-Control", "no-cache")
@@ -503,7 +510,7 @@ func handleSSEEvents(chat *Room) echo.HandlerFunc {
 				if !ok {
 					return nil
 				}
-				payload := EventJSON(ev)
+				payload := floor.EventJSON(ev)
 				if payload == nil {
 					continue
 				}
@@ -512,88 +519,5 @@ func handleSSEEvents(chat *Room) echo.HandlerFunc {
 				c.Response().Flush()
 			}
 		}
-	}
-}
-
-// EventJSON converts a ChatEvent to a JSON-serializable map.
-// Returns nil for events that should not be serialized (e.g. UserCommandEvent).
-// Used by SSE endpoint and JSON frontend.
-func EventJSON(ev ChatEvent) map[string]interface{} {
-	switch e := ev.(type) {
-	case MessagePosted:
-		return map[string]interface{}{
-			"type": "message_posted",
-			"message": map[string]interface{}{
-				"from":              e.Message.From,
-				"content":           e.Message.Content,
-				"tool_interactions": e.Message.ToolInteractions,
-			},
-		}
-	case StreamEvent:
-		switch se := e.Event.(type) {
-		case TokenStreamed:
-			return map[string]interface{}{
-				"type":     "token",
-				"agent_id": se.AgentID,
-				"token":    se.Token,
-			}
-		case ToolCallStarted:
-			return map[string]interface{}{
-				"type":     "tool_call_started",
-				"agent_id": se.AgentID,
-				"id":       se.ID,
-				"title":    se.Title,
-			}
-		case ToolCallOutput:
-			return map[string]interface{}{
-				"type":     "tool_call_output",
-				"agent_id": se.AgentID,
-				"id":       se.ID,
-				"output":   se.Output,
-			}
-		case ToolCallResult:
-			return map[string]interface{}{
-				"type":     "tool_call_result",
-				"agent_id": se.AgentID,
-				"id":       se.ID,
-				"title":    se.Title,
-				"output":   se.Output,
-			}
-		case AgentLabel:
-			return map[string]interface{}{
-				"type":     "agent_label",
-				"agent_id": se.AgentID,
-			}
-		case AgentThinking:
-			return map[string]interface{}{
-				"type":     "agent_thinking",
-				"agent_id": se.AgentID,
-			}
-		case FurnitureUpdated:
-			return map[string]interface{}{
-				"type": "furniture_updated",
-				"name": se.Name,
-			}
-		default:
-			return nil
-		}
-	case AgentFinished:
-		return map[string]interface{}{
-			"type":     "agent_finished",
-			"agent_id": e.AgentID,
-		}
-	case AgentPassedEvent:
-		return map[string]interface{}{
-			"type":     "agent_passed",
-			"agent_id": e.AgentID,
-		}
-	case AgentErrorEvent:
-		return map[string]interface{}{
-			"type":     "agent_error",
-			"agent_id": e.AgentID,
-			"error":    e.Err.Error(),
-		}
-	default:
-		return nil
 	}
 }

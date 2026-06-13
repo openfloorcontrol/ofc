@@ -1,4 +1,4 @@
-package floor
+package frontend
 
 import "github.com/openfloorcontrol/ofc/blueprint"
 

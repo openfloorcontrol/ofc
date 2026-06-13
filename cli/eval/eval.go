@@ -8,7 +8,8 @@ import (
 
 	"github.com/openfloorcontrol/ofc/blueprint"
 	"github.com/openfloorcontrol/ofc/floor"
-	llmagent "github.com/openfloorcontrol/ofc/floor/agents/llm"
+	"github.com/openfloorcontrol/ofc/floor/agents/llm"
+	"github.com/openfloorcontrol/ofc/floor/api"
 )
 
 // Result holds the structured evaluation output.
@@ -51,7 +52,8 @@ func Run(input string, evalPrompt string, agentID string, bp *blueprint.Blueprin
 		Blueprint: bp,
 		AgentID:   agentID,
 		Input:     input,
-	}, llmagent.New(agentDef))
+		APIServer: api.New(),
+	}, llm.New(agentDef))
 	if err != nil {
 		return nil, fmt.Errorf("eval run: %w", err)
 	}

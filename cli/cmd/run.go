@@ -13,11 +13,24 @@ import (
 	"github.com/google/uuid"
 	"github.com/openfloorcontrol/ofc/blueprint"
 	"github.com/openfloorcontrol/ofc/floor"
-	acpagent "github.com/openfloorcontrol/ofc/floor/agents/acp"
-	llmagent "github.com/openfloorcontrol/ofc/floor/agents/llm"
+	"github.com/openfloorcontrol/ofc/floor/agents/acp"
+	"github.com/openfloorcontrol/ofc/floor/agents/llm"
+	"github.com/openfloorcontrol/ofc/floor/api"
+	"github.com/openfloorcontrol/ofc/floor/frontend"
 	"github.com/openfloorcontrol/ofc/floor/sessionstore"
 	"github.com/spf13/cobra"
 )
+
+// attachAPIServer constructs and attaches an api.Server to the floor.
+// If web mode is requested, also generates an auth token. Called by
+// every runCLI/runTUI/runJSON before f.Start.
+func attachAPIServer(f *floor.Floor) {
+	srv := api.New()
+	if useWeb {
+		srv.SetAuthToken(api.GenerateToken())
+	}
+	f.APIServer = srv
+}
 
 var (
 	blueprintFile string
@@ -68,8 +81,8 @@ var runCmd = &cobra.Command{
 }
 
 func runCLI(bp *blueprint.Blueprint, initialPrompt string) {
-	cm := floor.BuildColorMap(bp)
-	frontend := floor.NewCLIFrontend(logFile, debug, cm)
+	cm := frontend.BuildColorMap(bp)
+	fe := frontend.NewCLI(logFile, debug, cm)
 
 	f := floor.NewFloor(bp)
 	if err := applySessionLog(f, bp); err != nil {
@@ -77,25 +90,26 @@ func runCLI(bp *blueprint.Blueprint, initialPrompt string) {
 		os.Exit(1)
 	}
 	if debug {
-		f.DebugFunc = frontend.Debug
+		f.DebugFunc = fe.Debug
 	}
-	f.LogWriter = frontend.LogWriter()
+	f.LogWriter = fe.LogWriter()
 
 	if useWeb {
 		f.ListenAddr = fmt.Sprintf(":%d", webPort)
 		f.ServeWebDist = true
 		f.ExternalURL = webHostname
-		frontend.Headless = true
+		fe.Headless = true
 	}
+	attachAPIServer(f)
 
 	ctrl := floor.NewController(f)
 	if debug {
-		ctrl.DebugFunc = frontend.Debug
+		ctrl.DebugFunc = fe.Debug
 	}
 
 	agents := buildAgents(bp)
 
-	if err := frontend.RunLoop(f, ctrl, agents, initialPrompt); err != nil {
+	if err := fe.RunLoop(f, ctrl, agents, initialPrompt); err != nil {
 		if err.Error() != "stop" {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -104,8 +118,8 @@ func runCLI(bp *blueprint.Blueprint, initialPrompt string) {
 }
 
 func runTUI(bp *blueprint.Blueprint, initialPrompt string) {
-	cm := floor.BuildColorMap(bp)
-	frontend, model := floor.NewTUIFrontend(logFile, debug, cm)
+	cm := frontend.BuildColorMap(bp)
+	fe, model := frontend.NewTUI(logFile, debug, cm)
 
 	f := floor.NewFloor(bp)
 	if err := applySessionLog(f, bp); err != nil {
@@ -114,21 +128,22 @@ func runTUI(bp *blueprint.Blueprint, initialPrompt string) {
 	}
 	if debug {
 		f.DebugFunc = func(msg string) {
-			frontend.Render(floor.SystemInfo{Text: "[debug] " + msg})
+			fe.Render(floor.SystemInfo{Text: "[debug] " + msg})
 		}
 	}
-	f.LogWriter = frontend.LogWriter()
+	f.LogWriter = fe.LogWriter()
 
 	var stderrWriter io.Writer = io.Discard
-	if lw := frontend.LogWriter(); lw != nil {
+	if lw := fe.LogWriter(); lw != nil {
 		stderrWriter = lw
 	}
 	f.StderrWriter = stderrWriter
+	attachAPIServer(f)
 
 	ctrl := floor.NewController(f)
 	if debug {
 		ctrl.DebugFunc = func(msg string) {
-			frontend.Render(floor.SystemInfo{Text: "[debug] " + msg})
+			fe.Render(floor.SystemInfo{Text: "[debug] " + msg})
 		}
 	}
 
@@ -140,10 +155,10 @@ func runTUI(bp *blueprint.Blueprint, initialPrompt string) {
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
 	)
-	frontend.SetProgram(p)
+	fe.SetProgram(p)
 
 	// Start the event loop (background goroutine)
-	if err := frontend.RunLoop(f, ctrl, agents, initialPrompt); err != nil {
+	if err := fe.RunLoop(f, ctrl, agents, initialPrompt); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -156,7 +171,7 @@ func runTUI(bp *blueprint.Blueprint, initialPrompt string) {
 }
 
 func runJSON(bp *blueprint.Blueprint, initialPrompt string) {
-	frontend := floor.NewJSONFrontend(logFile, debug)
+	fe := frontend.NewJSON(logFile, debug)
 
 	f := floor.NewFloor(bp)
 	if err := applySessionLog(f, bp); err != nil {
@@ -164,18 +179,19 @@ func runJSON(bp *blueprint.Blueprint, initialPrompt string) {
 		os.Exit(1)
 	}
 	if debug {
-		f.DebugFunc = frontend.Debug
+		f.DebugFunc = fe.Debug
 	}
-	f.LogWriter = frontend.LogWriter()
+	f.LogWriter = fe.LogWriter()
+	attachAPIServer(f)
 
 	ctrl := floor.NewController(f)
 	if debug {
-		ctrl.DebugFunc = frontend.Debug
+		ctrl.DebugFunc = fe.Debug
 	}
 
 	agents := buildAgents(bp)
 
-	if err := frontend.RunLoop(f, ctrl, agents, initialPrompt); err != nil {
+	if err := fe.RunLoop(f, ctrl, agents, initialPrompt); err != nil {
 		if err.Error() != "stop" {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -190,9 +206,9 @@ func buildAgents(bp *blueprint.Blueprint) map[string]floor.Agent {
 		a := &bp.Agents[i]
 		switch a.Type {
 		case "acp":
-			agents[a.ID] = acpagent.New(a)
+			agents[a.ID] = acp.New(a)
 		default:
-			agents[a.ID] = llmagent.New(a)
+			agents[a.ID] = llm.New(a)
 		}
 	}
 	return agents

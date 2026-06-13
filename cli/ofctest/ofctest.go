@@ -12,6 +12,7 @@ import (
 	"github.com/openfloorcontrol/ofc/floor"
 	acpagent "github.com/openfloorcontrol/ofc/floor/agents/acp"
 	llmagent "github.com/openfloorcontrol/ofc/floor/agents/llm"
+	"github.com/openfloorcontrol/ofc/floor/frontend"
 )
 
 // FloorResult holds the collected events and messages from a floor run.
@@ -72,7 +73,7 @@ func runFloor(t *testing.T, bp *blueprint.Blueprint, prompt string) *FloorResult
 	}
 
 	for tagged := range unified {
-		ec, ok := floor.ResolveEventContext(sess, ctrl, tagged)
+		ec, ok := frontend.ResolveEventContext(sess, ctrl, tagged)
 		if !ok {
 			continue
 		}
@@ -89,7 +90,7 @@ func runFloor(t *testing.T, bp *blueprint.Blueprint, prompt string) *FloorResult
 		// Drive the controller
 		switch ev.(type) {
 		case floor.MessagePosted, floor.AgentPassedEvent, floor.AgentErrorEvent:
-			decision := floor.DecideAndAutoClose(ec, ev, sess, ctrl, onCloseInfo)
+			decision := frontend.DecideAndAutoClose(ec, ev, sess, ctrl, onCloseInfo)
 
 			switch decision.Action {
 			case "trigger":

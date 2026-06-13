@@ -1,4 +1,4 @@
-package floor
+package floor_test
 
 import (
 	"context"
@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/openfloorcontrol/ofc/blueprint"
+	"github.com/openfloorcontrol/ofc/floor"
+	"github.com/openfloorcontrol/ofc/floor/api"
 )
 
 // --- Test infrastructure ---
@@ -17,24 +19,24 @@ import (
 // testAgent is a fake agent with a configurable response function.
 type testAgent struct {
 	id       string
-	response func(turn AgentTurn) string // return "" to pass
+	response func(turn floor.AgentTurn) string // return "" to pass
 }
 
 func (a *testAgent) AgentID() string { return a.id }
 
-func (a *testAgent) Run(ctx context.Context, turn AgentTurn) error {
+func (a *testAgent) Run(ctx context.Context, turn floor.AgentTurn) error {
 	resp := a.response(turn)
 	if resp == "" {
-		turn.Status(AgentPassedEvent{AgentID: a.id})
+		turn.Status(floor.AgentPassedEvent{AgentID: a.id})
 		return nil
 	}
-	turn.Reply(ChatMessage{From: a.id, Content: resp})
+	turn.Reply(floor.ChatMessage{From: a.id, Content: resp})
 	return nil
 }
 
 // testLoop is a minimal event loop — the core of CLIFrontend.RunLoop
 // without terminal I/O. Runs until ctx is cancelled.
-func testLoop(ctx context.Context, sess *Session, ctrl *Controller, agents map[string]Agent) {
+func testLoop(ctx context.Context, sess *floor.Session, ctrl *floor.Controller, agents map[string]floor.Agent) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -43,13 +45,13 @@ func testLoop(ctx context.Context, sess *Session, ctrl *Controller, agents map[s
 			if !ok {
 				return
 			}
-			var decision Decision
+			var decision floor.Decision
 			switch e := ev.(type) {
-			case MessagePosted:
+			case floor.MessagePosted:
 				decision = ctrl.Decide(sess.MainRoom, e)
-			case AgentPassedEvent:
+			case floor.AgentPassedEvent:
 				decision = ctrl.Decide(sess.MainRoom, e)
-			case AgentErrorEvent:
+			case floor.AgentErrorEvent:
 				decision = ctrl.Decide(sess.MainRoom, e)
 			default:
 				continue
@@ -57,7 +59,7 @@ func testLoop(ctx context.Context, sess *Session, ctrl *Controller, agents map[s
 			if decision.Action == "trigger" {
 				agent, ok := agents[decision.AgentID]
 				if ok {
-					turn := NewAgentTurn(sess, sess.MainRoom, sess.Floor, decision.AgentID)
+					turn := floor.NewAgentTurn(sess, sess.MainRoom, sess.Floor, decision.AgentID)
 					go func() {
 						_ = agent.Run(ctx, turn)
 					}()
@@ -69,30 +71,30 @@ func testLoop(ctx context.Context, sess *Session, ctrl *Controller, agents map[s
 
 // setupTestFloor creates a Floor with API server and event loop running.
 // Returns the API base URL and a cleanup function.
-func setupTestFloor(t *testing.T, bp *blueprint.Blueprint, agents map[string]Agent) (string, func()) {
+func setupTestFloor(t *testing.T, bp *blueprint.Blueprint, agents map[string]floor.Agent) (string, func()) {
 	t.Helper()
 
-	floor := NewFloor(bp)
-	sess := floor.DefaultSession()
+	f := floor.NewFloor(bp)
+	sess := f.DefaultSession()
 
-	api := NewAPIServer()
-	api.RegisterFloorAPI(sess.MainRoom, bp, nil, func() string { return "" })
-	if err := api.Start(":0"); err != nil {
+	srv := api.New()
+	f.APIServer = srv
+	srv.RegisterFloorAPI(sess.MainRoom, bp, nil, func() string { return "" })
+	if err := srv.Start(":0"); err != nil {
 		t.Fatalf("failed to start API server: %v", err)
 	}
-	floor.APIServer = api
 
-	ctrl := NewController(floor)
+	ctrl := floor.NewController(f)
 	ctx, cancel := context.WithCancel(context.Background())
 	go testLoop(ctx, sess, ctrl, agents)
 
 	cleanup := func() {
 		cancel()
-		api.Stop()
+		srv.Stop()
 		sess.Close()
 	}
 
-	return api.BaseURL(), cleanup
+	return srv.BaseURL(), cleanup
 }
 
 // pollMessages polls GET /api/v1/messages until the expected message count
@@ -155,10 +157,10 @@ func TestIntegrationPostMessageTriggersAgent(t *testing.T) {
 			{ID: "@echo", Activation: "always", ToolContext: "full"},
 		},
 	}
-	agents := map[string]Agent{
+	agents := map[string]floor.Agent{
 		"@echo": &testAgent{
 			id: "@echo",
-			response: func(turn AgentTurn) string {
+			response: func(turn floor.AgentTurn) string {
 				entries := turn.Entries()
 				last := entries[len(entries)-1]
 				return "echo: " + last.Content
@@ -190,10 +192,10 @@ func TestIntegrationMentionDelegation(t *testing.T) {
 	}
 
 	leadTurns := 0
-	agents := map[string]Agent{
+	agents := map[string]floor.Agent{
 		"@lead": &testAgent{
 			id: "@lead",
-			response: func(turn AgentTurn) string {
+			response: func(turn floor.AgentTurn) string {
 				leadTurns++
 				if leadTurns == 1 {
 					return "asking @helper? for help"
@@ -203,7 +205,7 @@ func TestIntegrationMentionDelegation(t *testing.T) {
 		},
 		"@helper": &testAgent{
 			id: "@helper",
-			response: func(turn AgentTurn) string {
+			response: func(turn floor.AgentTurn) string {
 				return "helped!"
 			},
 		},
@@ -238,14 +240,14 @@ func TestIntegrationAgentPass(t *testing.T) {
 			{ID: "@b", Activation: "always", ToolContext: "full"},
 		},
 	}
-	agents := map[string]Agent{
+	agents := map[string]floor.Agent{
 		"@a": &testAgent{
 			id:       "@a",
-			response: func(turn AgentTurn) string { return "" }, // pass
+			response: func(turn floor.AgentTurn) string { return "" }, // pass
 		},
 		"@b": &testAgent{
 			id: "@b",
-			response: func(turn AgentTurn) string {
+			response: func(turn floor.AgentTurn) string {
 				return "I'm here"
 			},
 		},
@@ -269,10 +271,10 @@ func TestIntegrationSSEStream(t *testing.T) {
 			{ID: "@bot", Activation: "always", ToolContext: "full"},
 		},
 	}
-	agents := map[string]Agent{
+	agents := map[string]floor.Agent{
 		"@bot": &testAgent{
 			id: "@bot",
-			response: func(turn AgentTurn) string {
+			response: func(turn floor.AgentTurn) string {
 				return "bot reply"
 			},
 		},
@@ -327,10 +329,10 @@ func TestIntegrationWebhookFromExternalAgent(t *testing.T) {
 			{ID: "@bot", Activation: "always", ToolContext: "full"},
 		},
 	}
-	agents := map[string]Agent{
+	agents := map[string]floor.Agent{
 		"@bot": &testAgent{
 			id: "@bot",
-			response: func(turn AgentTurn) string {
+			response: func(turn floor.AgentTurn) string {
 				entries := turn.Entries()
 				last := entries[len(entries)-1]
 				return fmt.Sprintf("got message from %s: %s", last.From, last.Content)
@@ -474,10 +476,10 @@ func TestIntegrationMultipleMessages(t *testing.T) {
 			{ID: "@echo", Activation: "always", ToolContext: "full"},
 		},
 	}
-	agents := map[string]Agent{
+	agents := map[string]floor.Agent{
 		"@echo": &testAgent{
 			id: "@echo",
-			response: func(turn AgentTurn) string {
+			response: func(turn floor.AgentTurn) string {
 				entries := turn.Entries()
 				last := entries[len(entries)-1]
 				return "echo: " + last.Content

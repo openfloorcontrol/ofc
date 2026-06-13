@@ -1,12 +1,16 @@
-package floor
+package frontend
+
+import (
+	"github.com/openfloorcontrol/ofc/floor"
+)
 
 // EventContext is the (session, controller) pair that should handle a
 // given event from the unified channel. For events from the main room
 // it's the session's own (Sess, Ctrl); for sub-room events it's the
 // room-scoped view (Sess.ForRoom(room), room.Controller).
 type EventContext struct {
-	Sess   *Session
-	Ctrl   *Controller
+	Sess   *floor.Session
+	Ctrl   *floor.Controller
 	RoomID string // "" for the main room
 }
 
@@ -14,7 +18,7 @@ type EventContext struct {
 // handle an event from the unified channel. Returns ok=false if the
 // event refers to a sub-room that no longer exists (stale event after
 // the room closed); callers should skip such events.
-func ResolveEventContext(sess *Session, ctrl *Controller, tagged TaggedEvent) (EventContext, bool) {
+func ResolveEventContext(sess *floor.Session, ctrl *floor.Controller, tagged floor.TaggedEvent) (EventContext, bool) {
 	if tagged.RoomID == "" {
 		return EventContext{Sess: sess, Ctrl: ctrl, RoomID: ""}, true
 	}
@@ -43,13 +47,13 @@ func ResolveEventContext(sess *Session, ctrl *Controller, tagged TaggedEvent) (E
 // rooms map.
 func DecideAndAutoClose(
 	ec EventContext,
-	ev ChatEvent,
-	sess *Session,
-	ctrl *Controller,
+	ev floor.ChatEvent,
+	sess *floor.Session,
+	ctrl *floor.Controller,
 	onClose func(info string),
-) Decision {
+) floor.Decision {
 	decision := ec.Ctrl.Decide(ec.Sess.MainRoom, ev)
-	if info := TryAutoCloseRoom(ec.RoomID, decision, sess, ctrl); info != "" && onClose != nil {
+	if info := floor.TryAutoCloseRoom(ec.RoomID, decision, sess, ctrl); info != "" && onClose != nil {
 		onClose(info)
 	}
 	return decision
