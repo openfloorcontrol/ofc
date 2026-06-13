@@ -12,7 +12,7 @@ import (
 	"github.com/openfloorcontrol/ofc/floor"
 	acpagent "github.com/openfloorcontrol/ofc/floor/agents/acp"
 	llmagent "github.com/openfloorcontrol/ofc/floor/agents/llm"
-	"github.com/openfloorcontrol/ofc/floor/frontend"
+	"github.com/openfloorcontrol/ofc/frontend"
 )
 
 // FloorResult holds the collected events and messages from a floor run.

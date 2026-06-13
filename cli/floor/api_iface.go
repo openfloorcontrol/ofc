@@ -9,7 +9,7 @@ import (
 )
 
 // APIServer is the small surface Floor needs from the HTTP API layer.
-// The concrete implementation lives in floor/api/. Floor.APIServer is
+// The concrete implementation lives in the top-level api/ package. Floor.APIServer is
 // typed as this interface so the engine doesn't import the api package
 // (callers — typically cmd/ — construct api.New() and assign it).
 //

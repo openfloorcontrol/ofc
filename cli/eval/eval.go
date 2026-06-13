@@ -9,7 +9,7 @@ import (
 	"github.com/openfloorcontrol/ofc/blueprint"
 	"github.com/openfloorcontrol/ofc/floor"
 	"github.com/openfloorcontrol/ofc/floor/agents/llm"
-	"github.com/openfloorcontrol/ofc/floor/api"
+	"github.com/openfloorcontrol/ofc/api"
 )
 
 // Result holds the structured evaluation output.

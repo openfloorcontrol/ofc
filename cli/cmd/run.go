@@ -15,8 +15,8 @@ import (
 	"github.com/openfloorcontrol/ofc/floor"
 	"github.com/openfloorcontrol/ofc/floor/agents/acp"
 	"github.com/openfloorcontrol/ofc/floor/agents/llm"
-	"github.com/openfloorcontrol/ofc/floor/api"
-	"github.com/openfloorcontrol/ofc/floor/frontend"
+	"github.com/openfloorcontrol/ofc/api"
+	"github.com/openfloorcontrol/ofc/frontend"
 	"github.com/openfloorcontrol/ofc/floor/sessionstore"
 	"github.com/spf13/cobra"
 )

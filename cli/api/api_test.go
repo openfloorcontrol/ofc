@@ -11,7 +11,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/openfloorcontrol/ofc/blueprint"
 	"github.com/openfloorcontrol/ofc/floor"
-	"github.com/openfloorcontrol/ofc/floor/api"
+	"github.com/openfloorcontrol/ofc/api"
 	"github.com/openfloorcontrol/ofc/furniture"
 )
 

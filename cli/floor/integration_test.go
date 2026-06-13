@@ -11,7 +11,7 @@ import (
 
 	"github.com/openfloorcontrol/ofc/blueprint"
 	"github.com/openfloorcontrol/ofc/floor"
-	"github.com/openfloorcontrol/ofc/floor/api"
+	"github.com/openfloorcontrol/ofc/api"
 )
 
 // --- Test infrastructure ---
