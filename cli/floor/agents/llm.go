@@ -1,9 +1,9 @@
-// Package llm implements the LLMAgent — an Agent backed by an
-// OpenAI-compatible chat-completion API. Depends only on the
-// floor.AgentTurn interface and floor's small value types
-// (ChatMessage, Event variants, ToolInteraction). It does not reach
-// into the Floor or Session concrete types.
-package llm
+// Package agents implements concrete Agent types — LLMAgent (OpenAI-compatible
+// chat-completion API) and ACPAgent (external Agent Client Protocol process).
+// Both depend only on the floor.AgentTurn interface and floor's small value
+// types (ChatMessage, Event variants, ToolInteraction). Neither reaches into
+// the Floor or Session concrete types.
+package agents
 
 import (
 	"context"
@@ -18,21 +18,21 @@ import (
 	"github.com/openfloorcontrol/ofc/sandbox"
 )
 
-// Agent is an agent backed by an OpenAI-compatible LLM API.
-type Agent struct {
+// LLMAgent is an agent backed by an OpenAI-compatible LLM API.
+type LLMAgent struct {
 	agent *blueprint.Agent
 }
 
-// New creates an LLM agent from a blueprint agent definition.
-func New(agent *blueprint.Agent) *Agent {
-	return &Agent{agent: agent}
+// NewLLM creates an LLM agent from a blueprint agent definition.
+func NewLLM(agent *blueprint.Agent) *LLMAgent {
+	return &LLMAgent{agent: agent}
 }
 
-func (a *Agent) AgentID() string { return a.agent.ID }
+func (a *LLMAgent) AgentID() string { return a.agent.ID }
 
 // Run executes one LLM agent turn: build context, call LLM, handle tool calls,
 // post results to the bound room. Blocks until complete.
-func (a *Agent) Run(ctx context.Context, turn floor.AgentTurn) error {
+func (a *LLMAgent) Run(ctx context.Context, turn floor.AgentTurn) error {
 	client := llmsdk.NewClient(a.agent.Endpoint, a.agent.APIKey)
 	messages := a.buildContext(turn)
 	tools := a.buildTools(turn)
@@ -112,7 +112,7 @@ func (a *Agent) Run(ctx context.Context, turn floor.AgentTurn) error {
 
 // buildContext converts the agent's accumulated context to LLM messages,
 // applying tool_context filtering.
-func (a *Agent) buildContext(turn floor.AgentTurn) []llmsdk.Message {
+func (a *LLMAgent) buildContext(turn floor.AgentTurn) []llmsdk.Message {
 	messages := []llmsdk.Message{
 		{Role: "system", Content: a.agent.Prompt},
 	}
@@ -192,7 +192,7 @@ func (a *Agent) buildContext(turn floor.AgentTurn) []llmsdk.Message {
 }
 
 // buildTools constructs the tool list for this agent.
-func (a *Agent) buildTools(turn floor.AgentTurn) []llmsdk.Tool {
+func (a *LLMAgent) buildTools(turn floor.AgentTurn) []llmsdk.Tool {
 	var tools []llmsdk.Tool
 	if a.agent.CanUseSandbox && turn.Sandbox() != nil {
 		tools = append(tools, llmsdk.BashTool)
@@ -210,7 +210,7 @@ func (a *Agent) buildTools(turn floor.AgentTurn) []llmsdk.Tool {
 }
 
 // expandToolCalls processes tool calls, splitting concatenated JSON arguments.
-func (a *Agent) expandToolCalls(turn floor.AgentTurn, toolCalls []llmsdk.ToolCall) []expandedCall {
+func (a *LLMAgent) expandToolCalls(turn floor.AgentTurn, toolCalls []llmsdk.ToolCall) []expandedCall {
 	var result []expandedCall
 	for _, tc := range toolCalls {
 		result = append(result, a.dispatchToolCall(turn, tc)...)
@@ -219,7 +219,7 @@ func (a *Agent) expandToolCalls(turn floor.AgentTurn, toolCalls []llmsdk.ToolCal
 }
 
 // dispatchToolCall executes a tool call.
-func (a *Agent) dispatchToolCall(turn floor.AgentTurn, tc llmsdk.ToolCall) []expandedCall {
+func (a *LLMAgent) dispatchToolCall(turn floor.AgentTurn, tc llmsdk.ToolCall) []expandedCall {
 	name := tc.Function.Name
 
 	// Check for furniture tool (namespaced as furniture__tool)
@@ -235,7 +235,7 @@ func (a *Agent) dispatchToolCall(turn floor.AgentTurn, tc llmsdk.ToolCall) []exp
 	return []expandedCall{{Call: tc, Title: name, Output: fmt.Sprintf("[ERROR: unknown tool %q]", name)}}
 }
 
-func (a *Agent) dispatchFurnitureCall(turn floor.AgentTurn, tc llmsdk.ToolCall, furnitureName, toolName string) []expandedCall {
+func (a *LLMAgent) dispatchFurnitureCall(turn floor.AgentTurn, tc llmsdk.ToolCall, furnitureName, toolName string) []expandedCall {
 	f, ok := turn.Furniture(furnitureName)
 	if !ok {
 		return []expandedCall{{
@@ -293,7 +293,7 @@ func (a *Agent) dispatchFurnitureCall(turn floor.AgentTurn, tc llmsdk.ToolCall, 
 	return expanded
 }
 
-func (a *Agent) dispatchBashCall(sb *sandbox.Sandbox, tc llmsdk.ToolCall) []expandedCall {
+func (a *LLMAgent) dispatchBashCall(sb *sandbox.Sandbox, tc llmsdk.ToolCall) []expandedCall {
 	if sb == nil {
 		return []expandedCall{{Call: tc, Title: "bash", Output: "[ERROR: no sandbox available]"}}
 	}
@@ -350,4 +350,3 @@ func parseJSONObjects(s string) ([]map[string]interface{}, error) {
 	}
 	return results, nil
 }
-

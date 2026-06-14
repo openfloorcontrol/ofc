@@ -1,9 +1,4 @@
-// Package acp implements the ACPAgent — an Agent backed by an external
-// Agent Client Protocol process (e.g. claude-code-acp, opencode-acp).
-// Depends only on the floor.AgentTurn interface and floor's small
-// value types. Subprocess lifecycle (spawn, MCP server URL list) lives
-// in floor/floor_acp.go because it's a Floor-level concern.
-package acp
+package agents
 
 import (
 	"context"
@@ -15,21 +10,23 @@ import (
 	"github.com/openfloorcontrol/ofc/floor"
 )
 
-// Agent is an agent backed by the Agent Client Protocol (external process).
-type Agent struct {
+// ACPAgent is an agent backed by the Agent Client Protocol (external process).
+// Subprocess lifecycle (spawn, MCP server URL list) lives in floor/floor_acp.go
+// because it's a Floor-level concern.
+type ACPAgent struct {
 	agent *blueprint.Agent
 }
 
-// New creates an ACP agent from a blueprint agent definition.
-func New(agent *blueprint.Agent) *Agent {
-	return &Agent{agent: agent}
+// NewACP creates an ACP agent from a blueprint agent definition.
+func NewACP(agent *blueprint.Agent) *ACPAgent {
+	return &ACPAgent{agent: agent}
 }
 
-func (a *Agent) AgentID() string { return a.agent.ID }
+func (a *ACPAgent) AgentID() string { return a.agent.ID }
 
 // Run executes one ACP agent turn: build context, prompt session, post results.
 // Blocks until complete.
-func (a *Agent) Run(ctx context.Context, turn floor.AgentTurn) error {
+func (a *ACPAgent) Run(ctx context.Context, turn floor.AgentTurn) error {
 	subproc, ok := turn.ACPSubprocess()
 	if !ok {
 		turn.Status(floor.AgentErrorEvent{
@@ -104,7 +101,7 @@ func (a *Agent) Run(ctx context.Context, turn floor.AgentTurn) error {
 // agents maintain their own session state, so we skip the agent's own
 // messages (it already remembers them) and only send the system prompt
 // once.
-func (a *Agent) buildACPContext(turn floor.AgentTurn) []acpsdk.ContentBlock {
+func (a *ACPAgent) buildACPContext(turn floor.AgentTurn) []acpsdk.ContentBlock {
 	var blocks []acpsdk.ContentBlock
 
 	delta := turn.Delta()

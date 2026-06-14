@@ -39,8 +39,7 @@ cli/                          # Go module (github.com/openfloorcontrol/ofc)
     run_once.go               # RunOnce helper (used by eval/)
   floor/sessionstore/         # File/DB-backed SessionStore implementations
     jsonl.go                  # JSONLStore: append-only file + in-memory mirror, crash-recovery
-  floor/agents/llm/           # LLMAgent — implements floor.Agent through floor.AgentTurn
-  floor/agents/acp/           # ACPAgent — implements floor.Agent through floor.AgentTurn
+  floor/agents/               # LLMAgent + ACPAgent — implement floor.Agent through floor.AgentTurn
   frontend/                   # CLI / TUI / JSON frontends (composition layer)
     cli.go                    # CLIFrontend: stdin/stdout, unified event loop
     tui.go                    # TUIFrontend: Bubble Tea
@@ -108,8 +107,8 @@ User Input → Room.PostUserInput() → ChatEvent → Frontend event loop
 
 ## Two Agent Paths
 
-- **LLM agents** (`floor/agents/llm/`, factory `llm.New`): Builds `[]llmsdk.Message` from `turn.Entries()`. Calls OpenAI-compatible API. Furniture tools injected as function calls namespaced `{furniture}__{tool}`; dispatched through `turn.Furniture(name).Call(...)`. `can_use_sandbox` gates the bash tool, which uses `turn.Sandbox()`.
-- **ACP agents** (`floor/agents/acp/`, factory `acp.New`, e.g. Claude Code, OpenCode): Send delta context via `turn.Delta()` / `turn.MarkSent()`. Subprocess obtained via `turn.ACPSubprocess()`; prompt sent over stdio. Floor exposes furniture as MCP server URLs at startup (`floor/floor_acp.go` builds the list — SSE preferred when both transports advertised, HTTP fallback). ACP agents also have built-in file read/write and terminal execution via FloorClient callbacks.
+- **LLM agents** (`floor/agents/llm.go`, factory `agents.NewLLM`): Builds `[]llmsdk.Message` from `turn.Entries()`. Calls OpenAI-compatible API. Furniture tools injected as function calls namespaced `{furniture}__{tool}`; dispatched through `turn.Furniture(name).Call(...)`. `can_use_sandbox` gates the bash tool, which uses `turn.Sandbox()`.
+- **ACP agents** (`floor/agents/acp.go`, factory `agents.NewACP`, e.g. Claude Code, OpenCode): Send delta context via `turn.Delta()` / `turn.MarkSent()`. Subprocess obtained via `turn.ACPSubprocess()`; prompt sent over stdio. Floor exposes furniture as MCP server URLs at startup (`floor/floor_acp.go` builds the list — SSE preferred when both transports advertised, HTTP fallback). ACP agents also have built-in file read/write and terminal execution via FloorClient callbacks.
 
 ## Furniture System
 

@@ -13,8 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/openfloorcontrol/ofc/blueprint"
 	"github.com/openfloorcontrol/ofc/floor"
-	"github.com/openfloorcontrol/ofc/floor/agents/acp"
-	"github.com/openfloorcontrol/ofc/floor/agents/llm"
+	"github.com/openfloorcontrol/ofc/floor/agents"
 	"github.com/openfloorcontrol/ofc/api"
 	"github.com/openfloorcontrol/ofc/frontend"
 	"github.com/openfloorcontrol/ofc/floor/sessionstore"
@@ -201,17 +200,17 @@ func runJSON(bp *blueprint.Blueprint, initialPrompt string) {
 
 // buildAgents creates Agent instances from the blueprint.
 func buildAgents(bp *blueprint.Blueprint) map[string]floor.Agent {
-	agents := make(map[string]floor.Agent)
+	out := make(map[string]floor.Agent)
 	for i := range bp.Agents {
 		a := &bp.Agents[i]
 		switch a.Type {
 		case "acp":
-			agents[a.ID] = acp.New(a)
+			out[a.ID] = agents.NewACP(a)
 		default:
-			agents[a.ID] = llm.New(a)
+			out[a.ID] = agents.NewLLM(a)
 		}
 	}
-	return agents
+	return out
 }
 
 func init() {

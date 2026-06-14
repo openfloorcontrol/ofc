@@ -8,7 +8,7 @@ import (
 
 	"github.com/openfloorcontrol/ofc/blueprint"
 	"github.com/openfloorcontrol/ofc/floor"
-	"github.com/openfloorcontrol/ofc/floor/agents/llm"
+	"github.com/openfloorcontrol/ofc/floor/agents"
 	"github.com/openfloorcontrol/ofc/api"
 )
 
@@ -53,7 +53,7 @@ func Run(input string, evalPrompt string, agentID string, bp *blueprint.Blueprin
 		AgentID:   agentID,
 		Input:     input,
 		APIServer: api.New(),
-	}, llm.New(agentDef))
+	}, agents.NewLLM(agentDef))
 	if err != nil {
 		return nil, fmt.Errorf("eval run: %w", err)
 	}

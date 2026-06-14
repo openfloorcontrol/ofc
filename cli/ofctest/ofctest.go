@@ -10,8 +10,7 @@ import (
 	"github.com/openfloorcontrol/ofc/blueprint"
 	"github.com/openfloorcontrol/ofc/eval"
 	"github.com/openfloorcontrol/ofc/floor"
-	acpagent "github.com/openfloorcontrol/ofc/floor/agents/acp"
-	llmagent "github.com/openfloorcontrol/ofc/floor/agents/llm"
+	floor_agents "github.com/openfloorcontrol/ofc/floor/agents"
 	"github.com/openfloorcontrol/ofc/frontend"
 )
 
@@ -46,14 +45,14 @@ func runFloor(t *testing.T, bp *blueprint.Blueprint, prompt string) *FloorResult
 
 	ctrl := floor.NewController(f)
 
-	agents := make(map[string]floor.Agent)
+	agentMap := make(map[string]floor.Agent)
 	for i := range bp.Agents {
 		a := &bp.Agents[i]
 		switch a.Type {
 		case "acp":
-			agents[a.ID] = acpagent.New(a)
+			agentMap[a.ID] = floor_agents.NewACP(a)
 		default:
-			agents[a.ID] = llmagent.New(a)
+			agentMap[a.ID] = floor_agents.NewLLM(a)
 		}
 	}
 
@@ -94,7 +93,7 @@ func runFloor(t *testing.T, bp *blueprint.Blueprint, prompt string) *FloorResult
 
 			switch decision.Action {
 			case "trigger":
-				agent, ok := agents[decision.AgentID]
+				agent, ok := agentMap[decision.AgentID]
 				if !ok {
 					continue
 				}
