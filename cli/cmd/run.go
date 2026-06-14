@@ -66,6 +66,11 @@ var runCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
+		// Apply blueprint config to flag globals where the flag wasn't
+		// explicitly passed. CLI flag wins over Config; Config wins over
+		// the cobra-registered default.
+		applyBlueprintConfig(cmd, &bp.Config)
+
 		var initialPrompt string
 		if len(args) > 0 {
 			initialPrompt = args[0]
@@ -79,6 +84,46 @@ var runCmd = &cobra.Command{
 			runCLI(bp, initialPrompt)
 		}
 	},
+}
+
+// applyBlueprintConfig copies non-empty values from bp.Config into the
+// flag globals — but only when the corresponding flag wasn't explicitly
+// passed on the command line. Frontend selection ("cli"/"tui"/"json")
+// is translated into the boolean flag globals the runCmd dispatch
+// reads. cobra's Changed() lets us tell "user didn't pass --debug" from
+// "user passed --debug=false".
+func applyBlueprintConfig(cmd *cobra.Command, cfg *blueprint.Config) {
+	fs := cmd.Flags()
+	if !fs.Changed("debug") && cfg.Debug {
+		debug = true
+	}
+	if !fs.Changed("log") && cfg.Log != "" {
+		logFile = cfg.Log
+	}
+	if !fs.Changed("web") && cfg.Web.Enabled {
+		useWeb = true
+	}
+	if !fs.Changed("port") && cfg.Web.Port != 0 {
+		webPort = cfg.Web.Port
+	}
+	if !fs.Changed("hostname") && cfg.Web.Hostname != "" {
+		webHostname = cfg.Web.Hostname
+	}
+	if !fs.Changed("db") && cfg.Store.Type == "postgres" && cfg.Store.DSN != "" {
+		dbDSN = cfg.Store.DSN
+	}
+	switch cfg.Frontend {
+	case "tui":
+		if !fs.Changed("tui") {
+			useTUI = true
+		}
+	case "json":
+		if !fs.Changed("json") {
+			useJSON = true
+		}
+	case "cli", "":
+		// default — nothing to do
+	}
 }
 
 func runCLI(bp *blueprint.Blueprint, initialPrompt string) {

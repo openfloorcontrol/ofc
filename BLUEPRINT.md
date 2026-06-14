@@ -36,9 +36,30 @@ workstations:
 | `name` | yes | Floor name, shown in the header |
 | `description` | no | Short description of the floor |
 | `defaults` | no | Default `endpoint` and `model` for all agents |
+| `config` | no | Runtime knobs (frontend, web, store, debug, log) — see [Config](#config) |
 | `agents` | yes | List of agents on this floor |
 | `furniture` | no | List of shared furniture (task boards, MCP servers) |
 | `workstations` | no | List of workstations (sandboxed environments) |
+
+## Config
+
+The `config:` section carries runtime/deployment defaults for this project — what historically came from CLI flags or env vars. Per-invocation knobs (`--file`, `--session`, the initial prompt) stay on the command line.
+
+```yaml
+config:
+  frontend: cli         # cli | tui | json
+  debug: false
+  log: ""               # path; empty = no log file
+  web:
+    enabled: false
+    port: 8080
+    hostname: ""        # external URL for printed link
+  store:
+    type: jsonl         # jsonl | postgres
+    dsn: ${OFC_DATABASE_URL}  # ${VAR} expansion — keep secrets out of the file
+```
+
+Precedence: a CLI flag wins when explicitly passed (`cobra` `Changed()` semantics); otherwise the blueprint `config:` value is used; otherwise the built-in default. Profiles (`profiles:` overlays) and `~/.ofc/defaults.yaml` are noted but not yet implemented.
 
 ## Agents
 

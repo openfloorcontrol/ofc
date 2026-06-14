@@ -103,11 +103,55 @@ type FurnitureDef struct {
 	Config  map[string]string `yaml:"config,omitempty"`  // type-specific configuration
 }
 
+// Config holds runtime/deployment knobs — things that historically came
+// from CLI flags or env vars. Lives inside the blueprint so each project
+// can carry its own "how to run this" defaults. Per-invocation knobs
+// (--file, --session, the initial prompt) are intentionally NOT here.
+//
+// Future: profiles (dev/prod overlays) and ~/.ofc/defaults.yaml will
+// layer above and below this, respectively. Not implemented yet — when
+// they land, precedence will be:
+//   CLI flag (if explicitly set) > env > profile > config > defaults.yaml > built-in
+//
+// Today there is one layer of precedence: a CLI flag wins when
+// explicitly set (cobra Changed()); otherwise Config provides the value.
+type Config struct {
+	// Frontend selects the terminal frontend: "cli" (default), "tui",
+	// or "json".
+	Frontend string `yaml:"frontend,omitempty"`
+
+	Web   WebConfig   `yaml:"web,omitempty"`
+	Store StoreConfig `yaml:"store,omitempty"`
+
+	// Debug toggles per-component debug output.
+	Debug bool `yaml:"debug,omitempty"`
+
+	// Log is an output log path. Empty means no log file.
+	Log string `yaml:"log,omitempty"`
+}
+
+// WebConfig groups web-UI settings.
+type WebConfig struct {
+	Enabled  bool   `yaml:"enabled,omitempty"`
+	Port     int    `yaml:"port,omitempty"`
+	Hostname string `yaml:"hostname,omitempty"` // external URL for printed link
+}
+
+// StoreConfig selects the session-store backend.
+type StoreConfig struct {
+	// Type is "jsonl" (default) or "postgres".
+	Type string `yaml:"type,omitempty"`
+	// DSN is the Postgres connection string when Type is "postgres".
+	// Supports ${VAR} env expansion so secrets stay out of the blueprint.
+	DSN string `yaml:"dsn,omitempty"`
+}
+
 // Blueprint is a complete floor configuration
 type Blueprint struct {
 	Name         string         `yaml:"name"`
 	Description  string         `yaml:"description"`
 	Defaults     Defaults       `yaml:"defaults"`
+	Config       Config         `yaml:"config,omitempty"`
 	Agents       []Agent        `yaml:"agents"`
 	Workstations []Workstation  `yaml:"workstations"`
 	Furniture    []FurnitureDef `yaml:"furniture,omitempty"`
@@ -178,8 +222,9 @@ func Load(path string) (*Blueprint, error) {
 		}
 	}
 
-	// Expand environment variables in API keys
+	// Expand environment variables in API keys and store DSN.
 	bp.Defaults.APIKey = os.ExpandEnv(bp.Defaults.APIKey)
+	bp.Config.Store.DSN = os.ExpandEnv(bp.Config.Store.DSN)
 
 	// Apply defaults
 	for i := range bp.Agents {

@@ -392,6 +392,7 @@ Things noted during design but explicitly deferred. The bigger items (REST mutat
 - **Mutation protection.** Confirmation flows or access control to prevent accidentally removing critical furniture/agents from a Floor with active sessions.
 - **Cross-session search.** Linear scan over JSONL works for small N; the SQL backend (Phase 3 Step 8) makes larger-scale search easy as a follow-on.
 - **Renaming `MemoryTaskBoard`.** The built-in in-memory TaskBoard is explicitly ephemeral. Rename / README note to make the prototyping/production distinction obvious.
+- **Blueprint config: profiles + user-level defaults.** The `config:` section in the blueprint now carries runtime knobs (frontend, web, store, debug, log) so projects can ship their own "how to run this" defaults. Two layers are noted but not yet built: (1) `profiles:` overlays inside the blueprint (e.g. `dev`/`prod` selected via `--profile` or `OFC_PROFILE`), and (2) `~/.ofc/defaults.yaml` for machine-wide fallbacks. When those land, precedence becomes: CLI flag > env > profile > config > defaults.yaml > built-in.
 
 ## Related Docs
 
