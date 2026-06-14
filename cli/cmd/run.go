@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -42,6 +43,7 @@ var (
 	useJSON       bool
 	sessionLog    string
 	sessionID     string
+	dbDSN         string
 
 	// resolvedSessionID is the actual UUID used by this invocation —
 	// either passed via --session, or freshly generated. Captured here
@@ -83,11 +85,7 @@ func runCLI(bp *blueprint.Blueprint, initialPrompt string) {
 	cm := frontend.BuildColorMap(bp)
 	fe := frontend.NewCLI(logFile, debug, cm)
 
-	f := floor.NewFloor(bp)
-	if err := applySessionLog(f, bp); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
+	f := newFloorWithStore(bp)
 	if debug {
 		f.DebugFunc = fe.Debug
 	}
@@ -120,11 +118,7 @@ func runTUI(bp *blueprint.Blueprint, initialPrompt string) {
 	cm := frontend.BuildColorMap(bp)
 	fe, model := frontend.NewTUI(logFile, debug, cm)
 
-	f := floor.NewFloor(bp)
-	if err := applySessionLog(f, bp); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
+	f := newFloorWithStore(bp)
 	if debug {
 		f.DebugFunc = func(msg string) {
 			fe.Render(floor.SystemInfo{Text: "[debug] " + msg})
@@ -172,11 +166,7 @@ func runTUI(bp *blueprint.Blueprint, initialPrompt string) {
 func runJSON(bp *blueprint.Blueprint, initialPrompt string) {
 	fe := frontend.NewJSON(logFile, debug)
 
-	f := floor.NewFloor(bp)
-	if err := applySessionLog(f, bp); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
+	f := newFloorWithStore(bp)
 	if debug {
 		f.DebugFunc = fe.Debug
 	}
@@ -224,87 +214,108 @@ func init() {
 	runCmd.Flags().BoolVar(&useJSON, "json", false, "Output events as JSONL to stdout")
 	runCmd.Flags().StringVar(&sessionLog, "session-log", "", "Persist session events to a JSONL file (explicit path, overrides --session)")
 	runCmd.Flags().StringVar(&sessionID, "session", "", "Session UUID to resume (default: generate a new one)")
+	runCmd.Flags().StringVar(&dbDSN, "db", "", "Postgres DSN for session storage (overrides JSONL; falls back to OFC_DATABASE_URL)")
 }
 
-// resolveSessionPath picks the JSONL path for this invocation:
-//   - --session-log <path>: explicit, used as-is. Caller responsible for paths.
-//   - --session <uuid>:     resolves to default sessions dir + uuid.jsonl
-//   - neither:              generates a fresh UUID, uses default sessions dir
+// resolveSessionID picks the floor's session UUID for this invocation:
+//   - --session <uuid>: that UUID, marked as resuming
+//   - otherwise:        a fresh UUID
 //
-// Sets resolvedSessionID as a side effect so callers can print it.
-// Returns ("", false, err) on error, ("", false, nil) if no persistence
-// is configured (impossible today since we default to UUID).
-func resolveSessionPath() (string, bool, error) {
-	if sessionLog != "" {
-		// Explicit path. The session UUID inside the JSONL file is
-		// whatever's there (or "default" for our hardcoded sessionID
-		// at this layer); we don't surface it.
-		resolvedSessionID = sessionLog
-		return sessionLog, false, nil
-	}
-
-	var resuming bool
+// Sets resolvedSessionID as a side effect so frontends can print it.
+func resolveSessionID() (sid string, resuming bool) {
 	if sessionID == "" {
 		sessionID = uuid.NewString()
 	} else {
 		resuming = true
 	}
 	resolvedSessionID = sessionID
-
-	path, err := sessionPath(sessionID)
-	if err != nil {
-		return "", false, err
-	}
-	return path, resuming, nil
+	return sessionID, resuming
 }
 
-// internalSessionID is the key used inside a JSONL file for the session's
-// events and meta. The externally-meaningful identifier is the UUID
-// (the file name); internally we use "default" so multiple files don't
-// confuse each other at the record level.
-const internalSessionID = "default"
-
-// applySessionLog overrides Floor.Store with a JSONLStore at the resolved
-// path. Prints a "Session: <uuid>" line so the user knows what to
-// reference later. On a fresh session, records SessionMeta (cwd,
-// blueprint path, name, hash, version, time). On resume, fetches
-// existing meta and warns on any mismatch.
-func applySessionLog(f *floor.Floor, bp *blueprint.Blueprint) error {
-	path, resuming, err := resolveSessionPath()
-	if err != nil {
-		return err
+// newFloorWithStore resolves the session UUID, constructs the Floor
+// with that UUID as its default session, and attaches the configured
+// session store (Postgres if --db / OFC_DATABASE_URL, else JSONL). On
+// error it prints to stderr and exits — every caller (runCLI, runTUI,
+// runJSON) handles failure the same way.
+func newFloorWithStore(bp *blueprint.Blueprint) *floor.Floor {
+	sid, resuming := resolveSessionID()
+	f := floor.NewFloorWithSession(bp, sid)
+	if err := applySessionStore(f, bp, resuming); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
 	}
-	store, err := sessionstore.NewJSONL(path)
-	if err != nil {
-		return fmt.Errorf("session store: %w", err)
+	return f
+}
+
+// applySessionStore picks the session-store backend for this
+// invocation. --db (or OFC_DATABASE_URL) selects Postgres; otherwise
+// JSONL. Either way SessionMeta is written on fresh sessions and
+// checked on resume. The session UUID is f.DefaultSessionID() —
+// shared across both backends.
+func applySessionStore(f *floor.Floor, bp *blueprint.Blueprint, resuming bool) error {
+	dsn := dbDSN
+	if dsn == "" {
+		dsn = os.Getenv("OFC_DATABASE_URL")
+	}
+
+	var store floor.SessionStore
+	var label string
+	if dsn != "" {
+		pg, err := sessionstore.OpenPostgres(context.Background(), dsn)
+		if err != nil {
+			return fmt.Errorf("session store: %w", err)
+		}
+		store = pg
+		label = "postgres"
+	} else {
+		path, err := jsonlPathForSession(sessionID)
+		if err != nil {
+			return err
+		}
+		jl, err := sessionstore.NewJSONL(path)
+		if err != nil {
+			return fmt.Errorf("session store: %w", err)
+		}
+		store = jl
+		label = "jsonl"
 	}
 	f.Store = store
+	sid := f.DefaultSessionID()
 
 	if !useJSON {
 		if sessionLog != "" {
 			fmt.Fprintf(os.Stderr, "Session log: %s\n", sessionLog)
 		} else if resuming {
-			fmt.Fprintf(os.Stderr, "Resuming session %s\n", resolvedSessionID)
+			fmt.Fprintf(os.Stderr, "Resuming session %s (%s)\n", sid, label)
 		} else {
-			fmt.Fprintf(os.Stderr, "Session: %s\n", resolvedSessionID)
+			fmt.Fprintf(os.Stderr, "Session: %s (%s)\n", sid, label)
 		}
 	}
 
 	if resuming {
-		if existing, err := store.GetMeta(internalSessionID); err == nil {
+		if existing, err := store.GetMeta(sid); err == nil {
 			warnOnMetaMismatch(existing, bp, blueprintFile)
 		}
-		// If no meta recorded (older file), stay silent.
+		// If no meta recorded (older file/row), stay silent.
 	} else {
 		meta, err := makeSessionMeta(bp, blueprintFile)
 		if err != nil {
 			// Non-fatal — meta is for hygiene, not correctness.
 			fmt.Fprintf(os.Stderr, "[warning] could not record session meta: %v\n", err)
-		} else if err := store.SetMeta(internalSessionID, meta); err != nil {
+		} else if err := store.SetMeta(sid, meta); err != nil {
 			fmt.Fprintf(os.Stderr, "[warning] could not write session meta: %v\n", err)
 		}
 	}
 	return nil
+}
+
+// jsonlPathForSession returns the on-disk JSONL path for a session UUID.
+// Honors --session-log <path> as an explicit override.
+func jsonlPathForSession(sid string) (string, error) {
+	if sessionLog != "" {
+		return sessionLog, nil
+	}
+	return sessionPath(sid)
 }
 
 // makeSessionMeta builds a SessionMeta for the current invocation. The

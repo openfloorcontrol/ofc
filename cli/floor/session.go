@@ -15,9 +15,10 @@ const MainRoomID = "#main"
 // lives in Floor.Store; Session is the runtime structure that organizes
 // who can see what.
 //
-// In v1 each Floor has exactly one Session ("default"). The struct is
-// designed so multi-session support is "just add another entry to
-// Floor.Sessions" — no API changes needed.
+// In v1 each Floor has exactly one Session, keyed by its UUID (see
+// Floor.DefaultSessionID). The struct is designed so multi-session
+// support is "just add another entry to Floor.Sessions" — no API
+// changes needed.
 //
 // Session implements SessionView so Room and AgentContext can hold a
 // view (interface) rather than a concrete *Session back-pointer.

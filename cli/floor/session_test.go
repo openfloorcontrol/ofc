@@ -30,8 +30,11 @@ func TestNewFloorCreatesDefaultSession(t *testing.T) {
 	if def == nil {
 		t.Fatal("DefaultSession() should not return nil")
 	}
-	if def.ID() != "default" {
-		t.Errorf("expected default session ID 'default', got %q", def.ID())
+	if def.ID() == "" {
+		t.Error("default session ID should not be empty")
+	}
+	if def.ID() != f.DefaultSessionID() {
+		t.Errorf("DefaultSession().ID()=%q != DefaultSessionID()=%q", def.ID(), f.DefaultSessionID())
 	}
 	if def.Floor != f {
 		t.Error("default session should back-reference its Floor")

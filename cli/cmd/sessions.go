@@ -175,8 +175,9 @@ var sessionsShowCmd = &cobra.Command{
 
 		fmt.Printf("# Session %s\n\n", id)
 
-		// Print meta header if recorded.
-		if meta, err := store.GetMeta("default"); err == nil {
+		// Print meta header if recorded. The on-disk UUID *is* the
+		// session id — both the filename and the records inside use it.
+		if meta, err := store.GetMeta(id); err == nil {
 			fmt.Printf("- **Blueprint**: %s\n", meta.BlueprintName)
 			if meta.BlueprintPath != "" {
 				fmt.Printf("- **Blueprint path**: %s\n", meta.BlueprintPath)
@@ -193,9 +194,7 @@ var sessionsShowCmd = &cobra.Command{
 			fmt.Println()
 		}
 
-		// Files written by ofc run use "default" as the internal session
-		// id. (The file name is the externally-visible UUID.)
-		events, err := store.Read("default", floor.EventFilter{})
+		events, err := store.Read(id, floor.EventFilter{})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error reading session: %v\n", err)
 			os.Exit(1)
@@ -219,13 +218,16 @@ var sessionsShowCmd = &cobra.Command{
 // readSessionMeta opens a JSONL store at the given path, fetches the
 // stored meta (if any), and closes. Used by `ofc sessions ls` to enrich
 // the listing without loading the full session into memory long-term.
+// The session UUID is taken from the file's basename (path/<uuid>.jsonl).
 func readSessionMeta(path string) (floor.SessionMeta, error) {
 	store, err := sessionstore.NewJSONL(path)
 	if err != nil {
 		return floor.SessionMeta{}, err
 	}
 	defer store.Close()
-	return store.GetMeta("default")
+	base := filepath.Base(path)
+	sid := strings.TrimSuffix(base, filepath.Ext(base))
+	return store.GetMeta(sid)
 }
 
 // shortCWD returns the last 2 path segments of a directory, prefixed

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/google/uuid"
 	acpclient "github.com/openfloorcontrol/ofc/acp"
 	"github.com/openfloorcontrol/ofc/blueprint"
 	"github.com/openfloorcontrol/ofc/furniture"
@@ -59,9 +60,15 @@ type Floor struct {
 	// Start() for backed implementations (JSONL, SQL, etc.).
 	Store SessionStore
 
-	// Sessions on this Floor. In v1 there is always one default session
-	// keyed as "default", created by NewFloor.
+	// Sessions on this Floor. In v1 there is always one default session,
+	// keyed by its UUID, created by NewFloor / NewFloorWithSession. The
+	// UUID is stored in defaultSessionUUID.
 	Sessions map[string]*Session
+
+	// defaultSessionUUID is the key under which the floor's default
+	// session lives in Sessions. Set at construction time; immutable.
+	// Read via DefaultSession() / DefaultSessionID().
+	defaultSessionUUID string
 
 	ListenAddr   string // API server listen address (default ":0" for auto)
 	ServeWebDist bool   // serve web/dist/ as static files
@@ -87,15 +94,24 @@ type Floor struct {
 // Both phases go through the same AddAgent / AddFurniture mutation
 // primitives — there is no separate "blueprint loading" code path.
 func NewFloor(bp *blueprint.Blueprint) *Floor {
+	return NewFloorWithSession(bp, uuid.NewString())
+}
+
+// NewFloorWithSession is like NewFloor but uses the provided UUID for
+// the floor's default session, instead of generating a fresh one. Used
+// when resuming a stored session — the caller resolves the UUID from
+// --session / on-disk state and passes it in.
+func NewFloorWithSession(bp *blueprint.Blueprint, sessionID string) *Floor {
 	f := &Floor{
-		Blueprint:       bp,
-		Furniture:       make(map[string]furniture.Furniture),
-		ACPSubprocesses: make(map[string]*acpclient.Subprocess),
-		Store:           NewMemoryStore(),
-		Sessions:        make(map[string]*Session),
-		DebugFunc:       func(string) {},
+		Blueprint:          bp,
+		Furniture:          make(map[string]furniture.Furniture),
+		ACPSubprocesses:    make(map[string]*acpclient.Subprocess),
+		Store:              NewMemoryStore(),
+		Sessions:           make(map[string]*Session),
+		DebugFunc:          func(string) {},
+		defaultSessionUUID: sessionID,
 	}
-	f.Sessions["default"] = NewSession("default", f)
+	f.Sessions[sessionID] = NewSession(sessionID, f)
 
 	// Apply LLM agents now. ACP agents need the API server and so wait
 	// for Start(); furniture also needs the API server for MCP routes.
@@ -112,9 +128,17 @@ func NewFloor(bp *blueprint.Blueprint) *Floor {
 }
 
 // DefaultSession returns the floor's default session.
-// In v1 every floor has exactly one session, created at NewFloor time.
+// In v1 every floor has exactly one session, created at construction time
+// and keyed by its UUID.
 func (f *Floor) DefaultSession() *Session {
-	return f.Sessions["default"]
+	return f.Sessions[f.defaultSessionUUID]
+}
+
+// DefaultSessionID returns the UUID of the floor's default session.
+// Useful for stores that need to key by the same UUID Floor uses
+// internally (e.g. SetMeta).
+func (f *Floor) DefaultSessionID() string {
+	return f.defaultSessionUUID
 }
 
 // Agents implements AgentRegistry. Returns the live agent set.
