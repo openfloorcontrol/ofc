@@ -116,11 +116,17 @@ ofc version             Print version info
 | Flag | Description |
 |------|-------------|
 | `--file`, `-f` | Blueprint file path (default: `blueprint.yaml`) |
+| `--session <uuid>` | Resume a session by UUID (default: generate a new one) |
 | `--debug` | Enable debug output |
 | `--log <file>` | Log output to file (plain text, no colors) |
 | `--tui` | Terminal UI with split layout |
+| `--json` | Output events as JSONL to stdout |
 | `--web` | Web UI with chat, furniture panels, inline images |
 | `--port` | Web UI port (default: `8080`) |
+| `--hostname <url>` | External URL for the printed web link (e.g. `https://ofc.example.com`) |
+| `--db <dsn>` | Postgres DSN for session storage (overrides JSONL; falls back to `OFC_DATABASE_URL`) |
+
+Most of these have blueprint-level defaults — see the `config:` section in [BLUEPRINT.md](BLUEPRINT.md#config). A CLI flag wins when explicitly passed; otherwise the blueprint's `config:` value is used.
 
 ### Commands during a conversation
 
