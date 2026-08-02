@@ -11,6 +11,7 @@ func EventJSON(ev ChatEvent) map[string]interface{} {
 			"message": map[string]interface{}{
 				"from":              e.Message.From,
 				"content":           e.Message.Content,
+				"reasoning":         e.Message.Reasoning,
 				"tool_interactions": e.Message.ToolInteractions,
 			},
 		}
@@ -49,10 +50,11 @@ func EventJSON(ev ChatEvent) map[string]interface{} {
 				"type":     "agent_label",
 				"agent_id": se.AgentID,
 			}
-		case AgentThinking:
+		case ThoughtStreamed:
 			return map[string]interface{}{
-				"type":     "agent_thinking",
+				"type":     "thought",
 				"agent_id": se.AgentID,
+				"token":    se.Token,
 			}
 		case FurnitureUpdated:
 			return map[string]interface{}{

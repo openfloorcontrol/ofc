@@ -34,10 +34,11 @@ func (a *LLMAgent) AgentID() string { return a.agent.ID }
 // post results to the bound room. Blocks until complete.
 func (a *LLMAgent) Run(ctx context.Context, turn floor.AgentTurn) error {
 	client := llmsdk.NewClient(a.agent.Endpoint, a.agent.APIKey)
+	client.Thinking = thinkingConfig(a.agent)
 	messages := a.buildContext(turn)
 	tools := a.buildTools(turn)
 
-	var fullResponse strings.Builder
+	var fullResponse, fullReasoning strings.Builder
 	var interactions []floor.ToolInteraction
 	maxIterations := 10
 
@@ -52,9 +53,15 @@ func (a *LLMAgent) Run(ctx context.Context, turn floor.AgentTurn) error {
 		default:
 		}
 
-		result, err := client.ChatStream(a.agent.Model, messages, a.agent.Temperature, tools, func(token string) {
-			turn.Stream(floor.TokenStreamed{AgentID: a.agent.ID, Token: token})
-		})
+		result, err := client.ChatStream(a.agent.Model, messages, a.agent.Temperature, tools,
+			llmsdk.StreamHandler{
+				OnToken: func(token string) {
+					turn.Stream(floor.TokenStreamed{AgentID: a.agent.ID, Token: token})
+				},
+				OnThought: func(token string) {
+					turn.Stream(floor.ThoughtStreamed{AgentID: a.agent.ID, Token: token})
+				},
+			})
 		if err != nil {
 			turn.Status(floor.AgentErrorEvent{
 				AgentID: a.agent.ID,
@@ -65,6 +72,7 @@ func (a *LLMAgent) Run(ctx context.Context, turn floor.AgentTurn) error {
 		}
 
 		fullResponse.WriteString(result.Content)
+		fullReasoning.WriteString(result.Reasoning)
 
 		// No tool calls — done
 		if len(result.ToolCalls) == 0 {
@@ -112,9 +120,20 @@ func (a *LLMAgent) Run(ctx context.Context, turn floor.AgentTurn) error {
 	turn.Reply(floor.ChatMessage{
 		From:             a.agent.ID,
 		Content:          content,
+		Reasoning:        fullReasoning.String(),
 		ToolInteractions: interactions,
 	})
 	return nil
+}
+
+// thinkingConfig maps the agent's blueprint settings onto the client's
+// reasoning separation. An unset mode means auto.
+func thinkingConfig(a *blueprint.Agent) llmsdk.Thinking {
+	t := llmsdk.Thinking{Mode: llmsdk.Mode(a.Thinking)}
+	if len(a.ThinkingTags) == 2 {
+		t.OpenTag, t.CloseTag = a.ThinkingTags[0], a.ThinkingTags[1]
+	}
+	return t
 }
 
 // buildContext converts the agent's accumulated context to LLM messages,

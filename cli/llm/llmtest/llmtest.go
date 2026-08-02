@@ -106,6 +106,11 @@ type Response struct {
 	// is ignored.
 	Chunks []string
 
+	// Reasoning is sent as a reasoning_content delta ahead of the text, the
+	// way servers that separate thinking server-side do it. Models that
+	// inline their thinking instead are scripted through Content/Chunks.
+	Reasoning string
+
 	// ToolCalls are emitted after the text, each as its own frame.
 	ToolCalls []Call
 }
@@ -181,9 +186,10 @@ func (m *Mock) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // --- SSE emission ---
 
 type wireDelta struct {
-	Role      string         `json:"role,omitempty"`
-	Content   string         `json:"content,omitempty"`
-	ToolCalls []wireToolCall `json:"tool_calls,omitempty"`
+	Role             string         `json:"role,omitempty"`
+	Content          string         `json:"content,omitempty"`
+	ReasoningContent string         `json:"reasoning_content,omitempty"`
+	ToolCalls        []wireToolCall `json:"tool_calls,omitempty"`
 }
 
 type wireToolCall struct {
@@ -237,6 +243,9 @@ func writeStream(w http.ResponseWriter, model string, resp Response) {
 	}
 
 	send(wireDelta{Role: "assistant"}, "")
+	if resp.Reasoning != "" {
+		send(wireDelta{ReasoningContent: resp.Reasoning}, "")
+	}
 	for _, text := range resp.frames() {
 		send(wireDelta{Content: text}, "")
 	}

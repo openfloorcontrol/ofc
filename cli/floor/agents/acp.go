@@ -43,6 +43,9 @@ func (a *ACPAgent) Run(ctx context.Context, turn floor.AgentTurn) error {
 	client.OnToken = func(token string) {
 		turn.Stream(floor.TokenStreamed{AgentID: a.agent.ID, Token: token})
 	}
+	client.OnThought = func(token string) {
+		turn.Stream(floor.ThoughtStreamed{AgentID: a.agent.ID, Token: token})
+	}
 	client.OnToolCall = func(id, title string) {
 		turn.Stream(floor.ToolCallStarted{AgentID: a.agent.ID, ID: id, Title: title})
 	}

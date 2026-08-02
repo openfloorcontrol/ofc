@@ -88,6 +88,11 @@ type Agent struct {
 	PromptFile    string   `yaml:"prompt_file"`
 	Activation    string   `yaml:"activation"`
 	CanUseSandbox bool     `yaml:"can_use_sandbox"`
+	// Thinking selects how reasoning is separated from the answer:
+	// "auto" (default), "tags", "field" or "none".
+	Thinking string `yaml:"thinking,omitempty"`
+	// ThinkingTags overrides the inline tag pair, e.g. ["<think>", "</think>"].
+	ThinkingTags []string `yaml:"thinking_tags,omitempty"`
 	Temperature   float64  `yaml:"temperature"`
 	ToolContext   string   `yaml:"tool_context"`
 	Furniture     []string `yaml:"furniture,omitempty"` // names of accessible furniture
@@ -107,6 +112,7 @@ type Defaults struct {
 	Endpoint string `yaml:"endpoint"`
 	Model    string `yaml:"model"`
 	APIKey   string `yaml:"api_key,omitempty"` // supports ${VAR} env expansion
+	Thinking string `yaml:"thinking,omitempty"`
 }
 
 // FurnitureDef configures a piece of furniture on the floor.
@@ -257,6 +263,9 @@ func Load(path string) (*Blueprint, error) {
 		}
 		if bp.Agents[i].APIKey == "" {
 			bp.Agents[i].APIKey = bp.Defaults.APIKey
+		}
+		if bp.Agents[i].Thinking == "" {
+			bp.Agents[i].Thinking = bp.Defaults.Thinking
 		}
 		if bp.Agents[i].Temperature == 0 {
 			bp.Agents[i].Temperature = 0.7

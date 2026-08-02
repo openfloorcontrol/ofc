@@ -83,8 +83,12 @@ type ChatResponse struct {
 type StreamChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content   string `json:"content"`
-			ToolCalls []struct {
+			Content string `json:"content"`
+			// Servers that separate reasoning server-side put it here.
+			// reasoning_content is DeepSeek/vLLM; reasoning is OpenRouter.
+			ReasoningContent string `json:"reasoning_content"`
+			Reasoning        string `json:"reasoning"`
+			ToolCalls        []struct {
 				Index    int    `json:"index"`
 				ID       string `json:"id"`
 				Type     string `json:"type"`
@@ -101,13 +105,25 @@ type StreamChunk struct {
 // ChatResult contains the response and any tool calls
 type ChatResult struct {
 	Content   string
+	Reasoning string
 	ToolCalls []ToolCall
+}
+
+// StreamHandler receives the response as it arrives. Reasoning is delivered
+// separately from answer content so callers never have to unpick one from the
+// other; either callback may be nil.
+type StreamHandler struct {
+	OnToken   func(string)
+	OnThought func(string)
 }
 
 // Client is an OpenAI-compatible API client
 type Client struct {
 	Endpoint string
 	APIKey   string
+
+	// Thinking controls reasoning separation. The zero value means auto.
+	Thinking Thinking
 }
 
 // NewClient creates a new LLM client
@@ -119,7 +135,7 @@ func NewClient(endpoint, apiKey string) *Client {
 }
 
 // ChatStream sends a chat request and streams the response
-func (c *Client) ChatStream(model string, messages []Message, temperature float64, tools []Tool, onToken func(string)) (*ChatResult, error) {
+func (c *Client) ChatStream(model string, messages []Message, temperature float64, tools []Tool, h StreamHandler) (*ChatResult, error) {
 	req := ChatRequest{
 		Model:       model,
 		Messages:    messages,
@@ -155,9 +171,27 @@ func (c *Client) ChatStream(model string, messages []Message, temperature float6
 	}
 
 	// Parse SSE stream
-	var fullContent strings.Builder
+	var fullContent, fullReasoning strings.Builder
 	toolCalls := make(map[int]*ToolCall) // Index -> ToolCall
 	reader := bufio.NewReader(resp.Body)
+
+	thinking := c.Thinking.normalize()
+	onContent := func(s string) {
+		fullContent.WriteString(s)
+		if h.OnToken != nil {
+			h.OnToken(s)
+		}
+	}
+	onThought := func(s string) {
+		fullReasoning.WriteString(s)
+		if h.OnThought != nil {
+			h.OnThought(s)
+		}
+	}
+	var split *splitter
+	if thinking.scansTags() {
+		split = &splitter{openTag: thinking.OpenTag, closeTag: thinking.CloseTag}
+	}
 
 	for {
 		line, err := reader.ReadString('\n')
@@ -165,7 +199,10 @@ func (c *Client) ChatStream(model string, messages []Message, temperature float6
 			if err == io.EOF {
 				break
 			}
-			return &ChatResult{Content: fullContent.String()}, err
+			return &ChatResult{
+				Content:   fullContent.String(),
+				Reasoning: fullReasoning.String(),
+			}, err
 		}
 
 		line = strings.TrimSpace(line)
@@ -186,11 +223,21 @@ func (c *Client) ChatStream(model string, messages []Message, temperature float6
 		if len(chunk.Choices) > 0 {
 			delta := chunk.Choices[0].Delta
 
+			// Reasoning the server already separated for us
+			if thinking.readsField() {
+				if r := delta.ReasoningContent; r != "" {
+					onThought(r)
+				} else if r := delta.Reasoning; r != "" {
+					onThought(r)
+				}
+			}
+
 			// Handle content
 			if delta.Content != "" {
-				fullContent.WriteString(delta.Content)
-				if onToken != nil {
-					onToken(delta.Content)
+				if split != nil {
+					split.Write(delta.Content, onContent, onThought)
+				} else {
+					onContent(delta.Content)
 				}
 			}
 
@@ -217,6 +264,10 @@ func (c *Client) ChatStream(model string, messages []Message, temperature float6
 		}
 	}
 
+	if split != nil {
+		split.Close(onContent, onThought)
+	}
+
 	// Convert tool calls map to slice
 	var resultToolCalls []ToolCall
 	for i := 0; i < len(toolCalls); i++ {
@@ -227,6 +278,7 @@ func (c *Client) ChatStream(model string, messages []Message, temperature float6
 
 	return &ChatResult{
 		Content:   fullContent.String(),
+		Reasoning: fullReasoning.String(),
 		ToolCalls: resultToolCalls,
 	}, nil
 }

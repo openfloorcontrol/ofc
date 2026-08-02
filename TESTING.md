@@ -18,6 +18,7 @@ Each line is a self-contained event:
 {"type":"floor_started","name":"my-floor","agents":["@planner","@coder"],"furniture":["tasks"]}
 {"type":"message_posted","message":{"from":"@user","content":"add a task for testing"}}
 {"type":"agent_label","agent_id":"@planner"}
+{"type":"thought","agent_id":"@planner","token":"The user wants a task "}
 {"type":"token","agent_id":"@planner","token":"Let me "}
 {"type":"tool_call_started","agent_id":"@planner","id":"tc1","title":"tasks.add_task"}
 {"type":"tool_call_result","agent_id":"@planner","id":"tc1","title":"tasks.add_task","output":"{...}"}
@@ -25,6 +26,10 @@ Each line is a self-contained event:
 {"type":"message_posted","message":{"from":"@planner","content":"I've added the task."}}
 {"type":"floor_stopped"}
 ```
+
+`thought` events carry model reasoning (`<think>` blocks or `reasoning_content`).
+They are separate from `token` because reasoning is displayed but never fed back
+as context — see [thinking](BLUEPRINT.md#thinking) for the modes.
 
 ### Quick checks with jq
 

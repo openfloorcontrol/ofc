@@ -6,6 +6,7 @@ import "strings"
 type ChatMessage struct {
 	From             string            // "@user", "@data", "@code", "@system"
 	Content          string            // The text content
+	Reasoning        string            // Model reasoning, if any — displayed but never fed back as context
 	ToolInteractions []ToolInteraction // Tool calls made during this turn
 }
 
@@ -22,7 +23,7 @@ type MessagePosted struct {
 // StreamEvent wraps a streaming event (tokens, tool calls) from an agent.
 // These are NOT stored in history — they're ephemeral display events.
 type StreamEvent struct {
-	Event Event // TokenStreamed, ToolCallStarted, ToolCallResult, AgentLabel, AgentThinking
+	Event Event // TokenStreamed, ThoughtStreamed, ToolCallStarted, ToolCallResult, AgentLabel
 }
 
 // AgentFinished is emitted when an agent's Run() completes (with a message).

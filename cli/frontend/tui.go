@@ -56,6 +56,12 @@ type tuiDisplayMsg struct {
 	Event floor.Event
 }
 
+// tuiThinkingMsg shows the dispatch spinner. Frontend-local UI state — the
+// engine has no equivalent event.
+type tuiThinkingMsg struct {
+	AgentID string
+}
+
 // tuiPassedMsg signals [PASS] in the TUI.
 type tuiPassedMsg struct {
 	AgentID string
@@ -237,7 +243,7 @@ func (t *TUIFrontend) dispatchDecision(sess *floor.Session, agents map[string]fl
 
 		// Show thinking
 		if t.program != nil {
-			t.program.Send(tuiDisplayMsg{Event: floor.AgentThinking{AgentID: d.AgentID}})
+			t.program.Send(tuiThinkingMsg{AgentID: d.AgentID})
 		}
 
 		ctx, cancel := context.WithCancel(context.Background())
@@ -286,6 +292,10 @@ type tuiModel struct {
 	ready    bool
 	width    int
 	height   int
+
+	// thinking tracks whether a collapsed reasoning marker is currently
+	// appended after the agent label.
+	thinking bool
 }
 
 // SetChat sets the Chat reference for posting user messages.
@@ -378,6 +388,12 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.appendContent(fmt.Sprintf("%s%s%s\n", Dim, msg.Text, Reset))
 		return m, nil
 
+	case tuiThinkingMsg:
+		color := m.agentColor(msg.AgentID)
+		m.appendContent(fmt.Sprintf("\n%s%s[%s]:%s %sthinking...%s",
+			Bold, color, msg.AgentID, Reset, Dim, Reset))
+		return m, nil
+
 	case tuiPassedMsg:
 		color := m.agentColor(msg.AgentID)
 		m.replaceThinking(msg.AgentID)
@@ -410,14 +426,27 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *tuiModel) handleDisplayEvent(ev floor.Event) (tea.Model, tea.Cmd) {
 	switch e := ev.(type) {
-	case floor.AgentThinking:
-		color := m.agentColor(e.AgentID)
-		m.appendContent(fmt.Sprintf("\n%s%s[%s]:%s %sthinking...%s", Bold, color, e.AgentID, Reset, Dim, Reset))
+	case floor.ThoughtStreamed:
+		// The label is already on the line — only the marker is appended,
+		// and it is stripped again when the answer starts.
+		if !m.thinking {
+			m.thinking = true
+			m.appendContent(fmt.Sprintf("%sthinking...%s", Dim, Reset))
+		}
 	case floor.AgentLabel:
+		m.thinking = false
 		m.replaceThinking(e.AgentID)
 	case floor.TokenStreamed:
+		if m.thinking {
+			m.thinking = false
+			m.replaceThinking(e.AgentID)
+		}
 		m.appendContent(e.Token)
 	case floor.ToolCallStarted:
+		if m.thinking {
+			m.thinking = false
+			m.replaceThinking(e.AgentID)
+		}
 		m.appendContent(fmt.Sprintf("\n%s  > %s%s\n", Dim, e.Title, Reset))
 	case floor.ToolCallResult:
 		if e.Output != "" {

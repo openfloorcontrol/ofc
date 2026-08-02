@@ -35,7 +35,7 @@ workstations:
 |-------|----------|-------------|
 | `name` | yes | Floor name, shown in the header |
 | `description` | no | Short description of the floor |
-| `defaults` | no | Default `endpoint`, `model` and `api_key` for all agents |
+| `defaults` | no | Default `endpoint`, `model`, `api_key` and `thinking` for all agents |
 | `config` | no | Runtime knobs (frontend, web, store, debug, log) — see [Config](#config) |
 | `agents` | yes | List of agents on this floor |
 | `furniture` | no | List of shared furniture (task boards, MCP servers) |
@@ -142,6 +142,37 @@ overrides it. Keep the secret in the environment rather than the file — see
 [Environment variables](#environment-variables). With no key at all the header is
 omitted entirely, which is what lets local endpoints like Ollama work.
 
+### Thinking
+
+Reasoning models emit their thinking either inline as `<think>…</think>` or as a
+separate `reasoning_content` field on the stream, depending on the inference
+server. OFC separates it from the answer either way: reasoning is streamed to
+frontends as its own event and kept on the message, but it is **never** fed back
+as context — not to other agents, and not to the model that produced it.
+
+```yaml
+agents:
+  - id: "@thinker"
+    thinking: auto                              # default
+    thinking_tags: ["<think>", "</think>"]      # optional, this is the default pair
+```
+
+| Mode | Behavior |
+|------|----------|
+| `auto` | Both: read the `reasoning_content` field and scan for inline tags. |
+| `field` | Only the `reasoning_content` / `reasoning` field. |
+| `tags` | Only inline tags. |
+| `none` | No separation — tags stay in the answer, for models where they're real output. |
+
+Set `thinking` under `defaults:` to apply it to every agent. Tags may be split
+across streaming chunks; that's handled. Use `thinking_tags` for models with a
+different convention, e.g. `["◁think▷", "◁/think▷"]`.
+
+The barebone CLI collapses reasoning to a single `thinking…` line that clears
+when the answer starts, and never writes it to the log file. `--json` emits it
+as `{"type":"thought",…}` so a frontend can show as much or as little as it
+likes.
+
 ### ACP agents
 
 ACP agents are external processes that speak the [Agent Client Protocol](https://agentclientprotocol.com). The floor launches them and communicates over stdio:
@@ -232,6 +263,8 @@ are passed through unchanged — there's no overhead for non-templated prompts.
 | `model` | `defaults.model` | LLM model name |
 | `endpoint` | `defaults.endpoint` | OpenAI-compatible API URL |
 | `api_key` | `defaults.api_key` | Bearer token for `endpoint`. Omitted from the request when empty. |
+| `thinking` | `defaults.thinking`, else `auto` | How reasoning is separated: `auto`, `field`, `tags`, `none` — see [Thinking](#thinking) |
+| `thinking_tags` | `["<think>", "</think>"]` | Inline tag pair to scan for |
 
 **ACP-only fields:**
 

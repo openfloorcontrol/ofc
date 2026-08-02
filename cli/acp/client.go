@@ -31,13 +31,14 @@ type FloorClient struct {
 	LogWriter    io.Writer    // optional log file writer (plain text, no ANSI)
 
 	// Per-prompt state (set before each Prompt call, reset after)
-	OnToken      func(string)
-	OnToolCall   func(id, title string)
-	OnToolOutput func(id, output string) // streaming output for in-flight tool call
-	OnToolResult func(id, title, output string)
-	ResponseText strings.Builder
-	Interactions []ToolInteraction
-	toolCalls      map[string]string          // toolCallId → title
+	OnToken        func(string)
+	OnThought      func(string) // agent reasoning, kept out of the response text
+	OnToolCall     func(id, title string)
+	OnToolOutput   func(id, output string) // streaming output for in-flight tool call
+	OnToolResult   func(id, title, output string)
+	ResponseText   strings.Builder
+	Interactions   []ToolInteraction
+	toolCalls      map[string]string           // toolCallId → title
 	toolCallOutput map[string]*strings.Builder // toolCallId → accumulated output
 	lastToolCallID string                      // most recent tool_call ID (for terminal correlation)
 	termToolCalls  map[string]string           // terminalId → toolCallId
@@ -80,7 +81,6 @@ func (c *FloorClient) debug(msg string) {
 		fmt.Fprintf(c.LogWriter, "  [acp] %s\n", msg)
 	}
 }
-
 
 // --- acp.Client interface ---
 
@@ -155,9 +155,18 @@ func (c *FloorClient) SessionUpdate(ctx context.Context, params acpsdk.SessionNo
 		}
 
 	case u.AgentThoughtChunk != nil:
-		// Silently consume thoughts
+		if u.AgentThoughtChunk.Content.Text != nil {
+			c.mu.Lock()
+			onThought := c.OnThought
+			c.mu.Unlock()
+			if onThought != nil {
+				onThought(u.AgentThoughtChunk.Content.Text.Text)
+			}
+		}
+
 	case u.Plan != nil:
-		// Silently consume plan updates
+		// TODO: surface plan updates (Claude Code's todo list) as floor
+		// events instead of dropping them.
 	}
 
 	return nil

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/openfloorcontrol/ofc/floor"
 )
@@ -17,6 +18,12 @@ type CLIFrontend struct {
 	colorMap map[string]string
 	reader   *bufio.Reader
 	Headless bool // skip stdin reader (web-only mode)
+
+	// Reasoning is collapsed into a single line that is rewritten in place
+	// and cleared once the answer starts, so it never fills the transcript.
+	agentLabel    string // last rendered label, restored after clearing
+	thinking      bool
+	thinkingSince time.Time
 }
 
 // NewCLI creates a CLI frontend with terminal output and optional log file.
@@ -137,6 +144,7 @@ func (f *CLIFrontend) RunLoop(fl *floor.Floor, ctrl *floor.Controller, agents ma
 			f.renderStream(e.Event, ec.RoomID)
 
 		case floor.AgentFinished:
+			f.clearThinking()
 			f.out.Print("\n") // newline after streaming
 
 		case floor.AgentPassedEvent:
@@ -275,31 +283,53 @@ func (f *CLIFrontend) renderMessagePosted(e floor.MessagePosted) {
 func (f *CLIFrontend) renderStream(ev floor.Event, roomID string) {
 	switch e := ev.(type) {
 	case floor.AgentLabel:
-		f.out.Terminal("\r\033[K") // clear "thinking..." line
+		f.out.Terminal("\r\033[K") // clear the dispatch "thinking..." line
 		label := e.AgentID
 		if roomID != "" {
 			label = roomID + "/" + e.AgentID
 		}
-		f.out.Print("%s%s[%s]:%s ", Bold, f.agentColor(e.AgentID), label, Reset)
+		f.thinking = false
+		f.agentLabel = fmt.Sprintf("%s%s[%s]:%s ", Bold, f.agentColor(e.AgentID), label, Reset)
+		f.out.Print("%s", f.agentLabel)
+	case floor.ThoughtStreamed:
+		if !f.thinking {
+			f.thinking = true
+			f.thinkingSince = time.Now()
+		}
+		f.out.Terminal("\r\033[K%s%sthinking… (%ds)%s", f.agentLabel, Dim,
+			int(time.Since(f.thinkingSince).Seconds()), Reset)
 	case floor.TokenStreamed:
+		f.clearThinking()
 		f.out.Print("%s", e.Token)
 	case floor.ToolCallStarted:
+		f.clearThinking()
 		f.out.Print("\n%s  ▶ %s%s\n", Dim, e.Title, Reset)
 	case floor.ToolCallOutput:
 		if e.Output != "" {
+			f.clearThinking()
 			f.out.Print("%s  %s%s", Dim, e.Output, Reset)
 		}
 	case floor.ToolCallResult:
 		if e.Output != "" {
+			f.clearThinking()
 			display := e.Output
 			if len(display) > 500 {
 				display = display[:500] + "..."
 			}
 			f.out.Print("%s  %s%s\n", Dim, display, Reset)
 		}
-	case floor.AgentThinking:
-		f.out.Terminal("%s  thinking...%s", Dim, Reset)
 	}
+}
+
+// clearThinking removes the collapsed reasoning line and puts the agent label
+// back. The label goes through Terminal rather than Print because AgentLabel
+// already wrote it to the log file.
+func (f *CLIFrontend) clearThinking() {
+	if !f.thinking {
+		return
+	}
+	f.thinking = false
+	f.out.Terminal("\r\033[K%s", f.agentLabel)
 }
 
 // renderSystemInfo shows a system info message.

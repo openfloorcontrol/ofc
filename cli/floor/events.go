@@ -27,8 +27,16 @@ type AgentDone struct {
 
 // --- Stream events (agent → frontend, bypass controller) ---
 
-// TokenStreamed is a single token received from an agent.
+// TokenStreamed is a single token of an agent's answer.
 type TokenStreamed struct {
+	AgentID string
+	Token   string
+}
+
+// ThoughtStreamed is a single token of an agent's reasoning. Kept separate
+// from TokenStreamed so frontends can decide how much of it to show, and so
+// it never reaches another agent's context.
+type ThoughtStreamed struct {
 	AgentID string
 	Token   string
 }
@@ -55,11 +63,6 @@ type ToolCallResult struct {
 	Output  string
 }
 
-// AgentThinking indicates an agent is processing (for spinners).
-type AgentThinking struct {
-	AgentID string
-}
-
 // AgentLabel is emitted before streaming begins so the frontend can render the agent's label.
 type AgentLabel struct {
 	AgentID string
@@ -81,9 +84,9 @@ type TaggedEvent struct {
 func (SystemInfo) eventMarker()       {}
 func (AgentDone) eventMarker()        {}
 func (TokenStreamed) eventMarker()    {}
+func (ThoughtStreamed) eventMarker()  {}
 func (ToolCallStarted) eventMarker()  {}
 func (ToolCallOutput) eventMarker()   {}
 func (ToolCallResult) eventMarker()   {}
-func (AgentThinking) eventMarker()    {}
 func (AgentLabel) eventMarker()       {}
 func (FurnitureUpdated) eventMarker() {}

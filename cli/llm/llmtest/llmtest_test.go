@@ -25,7 +25,7 @@ func TestStreamsContent(t *testing.T) {
 	var streamed strings.Builder
 	result, err := client.ChatStream("test-model",
 		[]llm.Message{{Role: "user", Content: "hi"}}, 0.7, nil,
-		func(tok string) { streamed.WriteString(tok) })
+		llm.StreamHandler{OnToken: func(tok string) { streamed.WriteString(tok) }})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestChunksArriveSeparately(t *testing.T) {
 
 	var tokens []string
 	result, err := client.ChatStream("m", []llm.Message{{Role: "user", Content: "hi"}}, 0.7, nil,
-		func(tok string) { tokens = append(tokens, tok) })
+		llm.StreamHandler{OnToken: func(tok string) { tokens = append(tokens, tok) }})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestToolCalls(t *testing.T) {
 		},
 	})
 
-	result, err := client.ChatStream("m", []llm.Message{{Role: "user", Content: "hi"}}, 0.7, nil, nil)
+	result, err := client.ChatStream("m", []llm.Message{{Role: "user", Content: "hi"}}, 0.7, nil, llm.StreamHandler{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -92,6 +92,73 @@ func TestToolCalls(t *testing.T) {
 	}
 }
 
+// Reasoning arriving in the delta field must never land in Content.
+func TestReasoningField(t *testing.T) {
+	_, client := newServer(t, "", llmtest.Response{
+		Reasoning: "The user wants a greeting.",
+		Content:   "Hello.",
+	})
+
+	var thoughts, tokens strings.Builder
+	result, err := client.ChatStream("m", []llm.Message{{Role: "user", Content: "hi"}}, 0.7, nil,
+		llm.StreamHandler{
+			OnToken:   func(s string) { tokens.WriteString(s) },
+			OnThought: func(s string) { thoughts.WriteString(s) },
+		})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Content != "Hello." {
+		t.Errorf("content = %q, want the answer only", result.Content)
+	}
+	if result.Reasoning != "The user wants a greeting." {
+		t.Errorf("reasoning = %q, want the delta field", result.Reasoning)
+	}
+	if tokens.String() != "Hello." || thoughts.String() != "The user wants a greeting." {
+		t.Errorf("streamed to the wrong channels: tokens=%q thoughts=%q", tokens.String(), thoughts.String())
+	}
+}
+
+// Inline tags are separated too, including when a tag straddles frames.
+func TestReasoningInlineTags(t *testing.T) {
+	_, client := newServer(t, "", llmtest.Response{
+		Chunks: []string{"<th", "ink>weighing options</thi", "nk>Hello."},
+	})
+
+	result, err := client.ChatStream("m", []llm.Message{{Role: "user", Content: "hi"}}, 0.7, nil,
+		llm.StreamHandler{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Content != "Hello." {
+		t.Errorf("content = %q, want the answer with the think block removed", result.Content)
+	}
+	if result.Reasoning != "weighing options" {
+		t.Errorf("reasoning = %q, want the think block body", result.Reasoning)
+	}
+}
+
+// ModeNone leaves the tags alone, for models where they are real output.
+func TestThinkingModeNone(t *testing.T) {
+	_, client := newServer(t, "", llmtest.Response{Content: "<think>kept</think>Hello."})
+	client.Thinking = llm.Thinking{Mode: llm.ModeNone}
+
+	result, err := client.ChatStream("m", []llm.Message{{Role: "user", Content: "hi"}}, 0.7, nil,
+		llm.StreamHandler{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Content != "<think>kept</think>Hello." {
+		t.Errorf("content = %q, want it untouched", result.Content)
+	}
+	if result.Reasoning != "" {
+		t.Errorf("reasoning = %q, want none extracted", result.Reasoning)
+	}
+}
+
 func TestRecordsAuthorizationAndTools(t *testing.T) {
 	mock, client := newServer(t, "sk-test", llmtest.Response{Content: "ok"})
 
@@ -100,7 +167,7 @@ func TestRecordsAuthorizationAndTools(t *testing.T) {
 	tool.Function.Description = "Add a task"
 
 	if _, err := client.ChatStream("m", []llm.Message{{Role: "user", Content: "hi"}}, 0.7,
-		[]llm.Tool{tool}, nil); err != nil {
+		[]llm.Tool{tool}, llm.StreamHandler{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -116,7 +183,7 @@ func TestRecordsAuthorizationAndTools(t *testing.T) {
 func TestNoAPIKeyMeansNoAuthHeader(t *testing.T) {
 	mock, client := newServer(t, "", llmtest.Response{Content: "ok"})
 
-	if _, err := client.ChatStream("m", []llm.Message{{Role: "user", Content: "hi"}}, 0.7, nil, nil); err != nil {
+	if _, err := client.ChatStream("m", []llm.Message{{Role: "user", Content: "hi"}}, 0.7, nil, llm.StreamHandler{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got := mock.Requests()[0].Authorization; got != "" {
@@ -128,11 +195,11 @@ func TestNoAPIKeyMeansNoAuthHeader(t *testing.T) {
 func TestScriptExhausted(t *testing.T) {
 	_, client := newServer(t, "", llmtest.Response{Content: "only one"})
 
-	if _, err := client.ChatStream("m", []llm.Message{{Role: "user", Content: "hi"}}, 0.7, nil, nil); err != nil {
+	if _, err := client.ChatStream("m", []llm.Message{{Role: "user", Content: "hi"}}, 0.7, nil, llm.StreamHandler{}); err != nil {
 		t.Fatalf("first call: %v", err)
 	}
 
-	_, err := client.ChatStream("m", []llm.Message{{Role: "user", Content: "hi"}}, 0.7, nil, nil)
+	_, err := client.ChatStream("m", []llm.Message{{Role: "user", Content: "hi"}}, 0.7, nil, llm.StreamHandler{})
 	if err == nil {
 		t.Fatal("expected the second call to fail")
 	}
