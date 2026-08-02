@@ -16,8 +16,13 @@ import (
 // Returns the input unchanged if no <% marker is found (zero overhead for plain prompts).
 //
 // Available functions:
-//   - readfile "path" — read a file (paths relative to blueprint directory)
-//   - env "VAR"      — read an environment variable
+//   - readfile "path"     — read a file (paths relative to blueprint directory)
+//   - env "VAR"           — read an environment variable; unset is an error
+//   - env "VAR" "default" — read an environment variable, with a fallback
+//
+// The env function mirrors the ${VAR} / ${VAR-default} policy used for the
+// rest of the blueprint (see env.go): a reference with no default has to
+// resolve, otherwise the mistake disappears into the prompt silently.
 //
 // Example:
 //
@@ -41,7 +46,16 @@ func expandPromptTemplate(prompt string, bpDir string) (string, error) {
 			}
 			return string(data), nil
 		},
-		"env": os.Getenv,
+		"env": func(name string, def ...string) (string, error) {
+			if val, ok := os.LookupEnv(name); ok {
+				return val, nil
+			}
+			if len(def) > 0 {
+				return def[0], nil
+			}
+			return "", fmt.Errorf("environment variable %s is not set "+
+				"(use <%% env %q \"default\" %%> to make it optional)", name, name)
+		},
 	}
 
 	tmpl, err := template.New("prompt").Delims("<%", "%>").Funcs(funcs).Parse(prompt)
@@ -58,22 +72,25 @@ func expandPromptTemplate(prompt string, bpDir string) (string, error) {
 
 // Agent configuration
 type Agent struct {
-	ID          string            `yaml:"id"`
-	Name        string            `yaml:"name"`
-	Type        string            `yaml:"type"`    // "llm" (default) or "acp"
-	Model       string            `yaml:"model"`
-	Endpoint    string            `yaml:"endpoint"`
-	APIKey      string            `yaml:"api_key,omitempty"` // supports ${VAR} env expansion
-	Command     string            `yaml:"command"` // ACP: command to launch agent
-	Args        []string          `yaml:"args"`    // ACP: args for the command
-	Env         map[string]string `yaml:"env"`     // ACP: env vars for agent process
-	Prompt      string            `yaml:"prompt"`
-	PromptFile  string            `yaml:"prompt_file"`
-	Activation  string            `yaml:"activation"`
-	CanUseSandbox bool            `yaml:"can_use_sandbox"`
-	Temperature float64           `yaml:"temperature"`
-	ToolContext string            `yaml:"tool_context"`
-	Furniture   []string          `yaml:"furniture,omitempty"` // names of accessible furniture
+	ID       string            `yaml:"id"`
+	Name     string            `yaml:"name"`
+	Type     string            `yaml:"type"` // "llm" (default) or "acp"
+	Model    string            `yaml:"model"`
+	Endpoint string            `yaml:"endpoint"`
+	APIKey   string            `yaml:"api_key,omitempty"`
+	Command  string            `yaml:"command"` // ACP: command to launch agent
+	Args     []string          `yaml:"args"`    // ACP: args for the command
+	Env      map[string]string `yaml:"env"`     // ACP: env vars for agent process
+	// Prompt is content, not configuration: it may legitimately contain a
+	// literal '$' (shell snippets, Python f-strings), so it opts out of
+	// ${VAR} expansion. Use <% env "VAR" %> inside a prompt instead.
+	Prompt        string   `yaml:"prompt" env:"-"`
+	PromptFile    string   `yaml:"prompt_file"`
+	Activation    string   `yaml:"activation"`
+	CanUseSandbox bool     `yaml:"can_use_sandbox"`
+	Temperature   float64  `yaml:"temperature"`
+	ToolContext   string   `yaml:"tool_context"`
+	Furniture     []string `yaml:"furniture,omitempty"` // names of accessible furniture
 }
 
 // Workstation configuration
@@ -111,7 +128,8 @@ type FurnitureDef struct {
 // Future: profiles (dev/prod overlays) and ~/.ofc/defaults.yaml will
 // layer above and below this, respectively. Not implemented yet — when
 // they land, precedence will be:
-//   CLI flag (if explicitly set) > env > profile > config > defaults.yaml > built-in
+//
+//	CLI flag (if explicitly set) > env > profile > config > defaults.yaml > built-in
 //
 // Today there is one layer of precedence: a CLI flag wins when
 // explicitly set (cobra Changed()); otherwise Config provides the value.
@@ -175,6 +193,13 @@ func Load(path string) (*Blueprint, error) {
 		return nil, err
 	}
 
+	// Expand ${VAR} references across the whole blueprint, before anything
+	// else looks at a value. Runs here so it only ever sees inline YAML —
+	// prompt_file contents are loaded below and are not subject to it.
+	if err := expandBlueprintEnv(&bp); err != nil {
+		return nil, err
+	}
+
 	// Resolve prompt files relative to blueprint directory, then expand templates
 	bpDir := filepath.Dir(path)
 	if absDir, err := filepath.Abs(bpDir); err == nil {
@@ -222,10 +247,6 @@ func Load(path string) (*Blueprint, error) {
 		}
 	}
 
-	// Expand environment variables in API keys and store DSN.
-	bp.Defaults.APIKey = os.ExpandEnv(bp.Defaults.APIKey)
-	bp.Config.Store.DSN = os.ExpandEnv(bp.Config.Store.DSN)
-
 	// Apply defaults
 	for i := range bp.Agents {
 		if bp.Agents[i].Endpoint == "" {
@@ -236,8 +257,6 @@ func Load(path string) (*Blueprint, error) {
 		}
 		if bp.Agents[i].APIKey == "" {
 			bp.Agents[i].APIKey = bp.Defaults.APIKey
-		} else {
-			bp.Agents[i].APIKey = os.ExpandEnv(bp.Agents[i].APIKey)
 		}
 		if bp.Agents[i].Temperature == 0 {
 			bp.Agents[i].Temperature = 0.7

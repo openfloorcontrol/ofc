@@ -35,11 +35,55 @@ workstations:
 |-------|----------|-------------|
 | `name` | yes | Floor name, shown in the header |
 | `description` | no | Short description of the floor |
-| `defaults` | no | Default `endpoint` and `model` for all agents |
+| `defaults` | no | Default `endpoint`, `model` and `api_key` for all agents |
 | `config` | no | Runtime knobs (frontend, web, store, debug, log) — see [Config](#config) |
 | `agents` | yes | List of agents on this floor |
 | `furniture` | no | List of shared furniture (task boards, MCP servers) |
 | `workstations` | no | List of workstations (sandboxed environments) |
+
+## Environment variables
+
+Any string value in a blueprint can reference an environment variable with
+`${VAR}` — not a select few fields, but every string, anywhere in the file.
+Endpoints, API keys, commands, args, MCP headers, the store DSN: if it's a
+string, it expands. The syntax follows bash:
+
+| Form | If the variable is unset | If it's set but empty |
+|------|--------------------------|-----------------------|
+| `${VAR}` | **error** — the floor doesn't start | used as-is (empty) |
+| `${VAR-default}` | `default` | used as-is (empty) |
+| `${VAR:-default}` | `default` | `default` |
+
+```yaml
+defaults:
+  endpoint: ${OFC_ENDPOINT:-http://localhost:11434/v1}   # optional
+  api_key: ${OPENAI_API_KEY}                             # required
+```
+
+A bare `${VAR}` that isn't set is a hard error, and every missing variable is
+listed at once:
+
+```
+Error loading blueprint: unset environment variables:
+  defaults.api_key: ${OPENAI_API_KEY}
+  furniture[0].headers[Authorization]: ${MCP_TOKEN}
+```
+
+Since `${VAR-}` says "optional" explicitly, an unadorned reference means the
+value is genuinely required.
+
+Two things to know:
+
+- **Only `${VAR}` is a reference.** A bare `$VAR` or a lone `$` is left alone,
+  so prices, regexes and shell snippets survive intact.
+- **`prompt:` is exempt.** Prompts are content rather than configuration and
+  routinely contain `$` (Python f-strings, shell examples). Use
+  [`<% env %>`](#prompt-templating) inside a prompt instead. Prompts loaded via
+  `prompt_file` are never touched either.
+
+Expansion happens once, when the blueprint loads, and the results are baked
+into the running floor. Changing a variable afterwards doesn't affect a floor
+that's already running.
 
 ## Config
 
@@ -56,7 +100,7 @@ config:
     hostname: ""        # external URL for printed link
   store:
     type: jsonl         # jsonl | postgres
-    dsn: ${OFC_DATABASE_URL}  # ${VAR} expansion — keep secrets out of the file
+    dsn: ${OFC_DATABASE_URL}  # keep secrets out of the file
 ```
 
 Precedence: a CLI flag wins when explicitly passed (`cobra` `Changed()` semantics); otherwise the blueprint `config:` value is used; otherwise the built-in default. Profiles (`profiles:` overlays) and `~/.ofc/defaults.yaml` are noted but not yet implemented.
@@ -83,6 +127,21 @@ agents:
       If you have nothing to add, respond with exactly: [PASS]
 ```
 
+Hosted endpoints need an `api_key`, sent as `Authorization: Bearer <key>`:
+
+```yaml
+agents:
+  - id: "@data"
+    endpoint: https://api.openai.com/v1
+    model: gpt-4o
+    api_key: ${OPENAI_API_KEY}
+```
+
+Set `api_key` under `defaults:` to share one key across agents; a per-agent value
+overrides it. Keep the secret in the environment rather than the file — see
+[Environment variables](#environment-variables). With no key at all the header is
+omitted entirely, which is what lets local endpoints like Ollama work.
+
 ### ACP agents
 
 ACP agents are external processes that speak the [Agent Client Protocol](https://agentclientprotocol.com). The floor launches them and communicates over stdio:
@@ -101,6 +160,9 @@ agents:
 Most agents need an ACP adapter — for example, Claude Code uses
 [claude-code-acp](https://github.com/zed-industries/claude-code-acp)
 (`npm i -g @zed-industries/claude-code-acp`).
+
+If credentials are required, set them through `env:` using whatever variable the
+adapter expects.
 
 ### External prompt files
 
@@ -127,7 +189,8 @@ Available functions:
 | Function | Description |
 |----------|-------------|
 | `readfile "path"` | Read a file. Paths are relative to the blueprint directory; absolute paths also work. |
-| `env "VAR"` | Read an environment variable. |
+| `env "VAR"` | Read an environment variable. Unset is an error, matching [`${VAR}`](#environment-variables). |
+| `env "VAR" "default"` | Read an environment variable, falling back to `default` when unset. |
 
 Example:
 
@@ -140,7 +203,7 @@ agents:
       Available products in the shop:
       <% readfile "data/catalog.md" %>
 
-      Today's location: <% env "SHOP_LOCATION" %>
+      Today's location: <% env "SHOP_LOCATION" "Tokyo" %>
 ```
 
 The `<% %>` delimiters were chosen instead of the default `{{ }}` to avoid conflicts with
@@ -168,6 +231,7 @@ are passed through unchanged — there's no overhead for non-templated prompts.
 |-------|---------|-------------|
 | `model` | `defaults.model` | LLM model name |
 | `endpoint` | `defaults.endpoint` | OpenAI-compatible API URL |
+| `api_key` | `defaults.api_key` | Bearer token for `endpoint`. Omitted from the request when empty. |
 
 **ACP-only fields:**
 
@@ -175,7 +239,7 @@ are passed through unchanged — there's no overhead for non-templated prompts.
 |-------|---------|-------------|
 | `command` | *required for ACP* | Command to launch the ACP agent process |
 | `args` | `[]` | Arguments for the command |
-| `env` | `{}` | Environment variables (supports `${VAR}` expansion) |
+| `env` | `{}` | Environment variables for the agent process |
 
 ## Furniture
 
@@ -214,8 +278,6 @@ furniture:
       Authorization: "Bearer ${MCP_TOKEN}"
 ```
 
-Header values support `${VAR}` environment variable expansion.
-
 ### Furniture fields
 
 | Field | Default | Description |
@@ -225,7 +287,7 @@ Header values support `${VAR}` environment variable expansion.
 | `command` | | Command to launch the MCP server (stdio transport) |
 | `args` | `[]` | Arguments for the command |
 | `url` | | URL of an already-running MCP server (HTTP transport) |
-| `headers` | `{}` | HTTP headers for URL connections (supports `${VAR}` env expansion) |
+| `headers` | `{}` | HTTP headers for URL connections |
 | `config` | `{}` | Type-specific key-value configuration |
 
 ### Agent access

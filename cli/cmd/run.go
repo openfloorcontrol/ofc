@@ -62,7 +62,12 @@ var runCmd = &cobra.Command{
 		bp, err := blueprint.Load(blueprintFile)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error loading blueprint: %v\n", err)
-			fmt.Fprintln(os.Stderr, "Create one with: ofc init")
+			// Only suggest scaffolding one when there isn't a blueprint to
+			// begin with — for a blueprint that exists but is misconfigured,
+			// "ofc init" is a red herring.
+			if os.IsNotExist(err) {
+				fmt.Fprintln(os.Stderr, "Create one with: ofc init")
+			}
 			os.Exit(1)
 		}
 

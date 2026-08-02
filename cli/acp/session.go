@@ -35,12 +35,11 @@ func NewSubprocess(command string, args []string, env map[string]string, client 
 		cmd.Stderr = os.Stderr
 	}
 
-	// Pass through environment, with overrides
+	// Pass through environment, with overrides. Values are used verbatim:
+	// blueprint.Load has already resolved ${VAR} across the whole blueprint.
 	cmd.Env = os.Environ()
 	for k, v := range env {
-		// Expand environment variable references like ${ANTHROPIC_API_KEY}
-		expanded := os.ExpandEnv(v)
-		cmd.Env = append(cmd.Env, k+"="+expanded)
+		cmd.Env = append(cmd.Env, k+"="+v)
 	}
 
 	stdin, err := cmd.StdinPipe()

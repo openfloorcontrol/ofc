@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"os/exec"
 	"strings"
 
@@ -81,19 +80,16 @@ func NewExternalMCP(ctx context.Context, name, command string, args []string, cw
 }
 
 // NewExternalMCPFromURL connects to an already-running MCP server via HTTP.
-// Headers are added to every request (values support ${VAR} env expansion).
+// Headers are added to every request, verbatim — ${VAR} references in
+// blueprint values are already resolved by blueprint.Load.
 func NewExternalMCPFromURL(ctx context.Context, name, url string, headers map[string]string) (*ExternalMCP, error) {
 	transport := &mcp.StreamableClientTransport{Endpoint: url}
 
 	if len(headers) > 0 {
-		expanded := make(map[string]string, len(headers))
-		for k, v := range headers {
-			expanded[k] = os.ExpandEnv(v)
-		}
 		transport.HTTPClient = &http.Client{
 			Transport: &headerTransport{
 				base:    http.DefaultTransport,
-				headers: expanded,
+				headers: headers,
 			},
 		}
 	}
