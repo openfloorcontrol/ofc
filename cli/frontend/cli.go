@@ -228,9 +228,6 @@ func (f *CLIFrontend) handleDecision(sess *floor.Session, ctrl *floor.Controller
 	case "stop":
 		f.out.Print("\n%sGoodbye! ofc. 🎤%s\n", Dim, Reset)
 		return fmt.Errorf("stop")
-
-	case "error":
-		f.renderSystemInfo(d.Info)
 	}
 
 	return nil

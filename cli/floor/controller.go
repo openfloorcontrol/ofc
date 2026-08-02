@@ -93,22 +93,27 @@ func (c *Controller) Decide(chat *Room, ev ChatEvent) Decision {
 		return c.decideNext(chat)
 
 	case AgentPassedEvent:
-		// Pop frame if this agent was the callee on top of stack
-		if len(c.CallStack) > 0 && c.CallStack[len(c.CallStack)-1].Callee == e.AgentID {
-			c.CallStack = c.CallStack[:len(c.CallStack)-1]
-		}
-		c.passedAgents[e.AgentID] = true
-		return c.decideNext(chat)
+		return c.endTurn(chat, e.AgentID)
 
 	case AgentErrorEvent:
-		return Decision{
-			Action: "error",
-			Info:   fmt.Sprintf("[ERROR from %s: %v]", e.AgentID, e.Err),
-		}
+		return c.endTurn(chat, e.AgentID)
 
 	default:
 		return Decision{Action: "wait"}
 	}
+}
+
+// endTurn retires an agent that finished without posting a message — it
+// either passed or errored. The agent's frame is popped and it is excluded
+// from the next poll, so a repeatedly failing agent cannot be woken in a
+// loop. The error itself reaches the user through AgentErrorEvent; as far as
+// turn-taking is concerned, control simply moves on.
+func (c *Controller) endTurn(chat *Room, agentID string) Decision {
+	if len(c.CallStack) > 0 && c.CallStack[len(c.CallStack)-1].Callee == agentID {
+		c.CallStack = c.CallStack[:len(c.CallStack)-1]
+	}
+	c.passedAgents[agentID] = true
+	return c.decideNext(chat)
 }
 
 // decideNext uses the turn-taking algorithm to pick the next agent.
