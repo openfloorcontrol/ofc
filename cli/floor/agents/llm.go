@@ -73,6 +73,17 @@ func (a *LLMAgent) Run(ctx context.Context, turn floor.AgentTurn) error {
 
 		// Execute tool calls
 		expanded := a.expandToolCalls(turn, result.ToolCalls)
+
+		calls := make([]llmsdk.ToolCall, 0, len(expanded))
+		for _, ex := range expanded {
+			calls = append(calls, ex.Call)
+		}
+		messages = append(messages, llmsdk.Message{
+			Role:      "assistant",
+			Content:   result.Content,
+			ToolCalls: calls,
+		})
+
 		for _, ex := range expanded {
 			turn.Stream(floor.ToolCallResult{AgentID: a.agent.ID, ID: ex.Call.ID, Title: ex.Title, Output: ex.Output})
 
@@ -81,10 +92,6 @@ func (a *LLMAgent) Run(ctx context.Context, turn floor.AgentTurn) error {
 				Output:  ex.Output,
 			})
 
-			messages = append(messages, llmsdk.Message{
-				Role:      "assistant",
-				ToolCalls: []llmsdk.ToolCall{ex.Call},
-			})
 			messages = append(messages, llmsdk.Message{
 				Role:       "tool",
 				Content:    ex.Output,
