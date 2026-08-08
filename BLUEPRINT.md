@@ -76,10 +76,10 @@ Two things to know:
 
 - **Only `${VAR}` is a reference.** A bare `$VAR` or a lone `$` is left alone,
   so prices, regexes and shell snippets survive intact.
-- **`prompt:` is exempt.** Prompts are content rather than configuration and
-  routinely contain `$` (Python f-strings, shell examples). Use
-  [`<% env %>`](#prompt-templating) inside a prompt instead. Prompts loaded via
-  `prompt_file` are never touched either.
+- **The boundary is the file, not the field.** Everything written in
+  `blueprint.yaml` expands, `prompt:` included. Text loaded by reference —
+  `prompt_file` contents — is not blueprint text and is left alone; use
+  [`<% env %>`](#prompt-templating) inside those.
 
 Expansion happens once, when the blueprint loads, and the results are baked
 into the running floor. Changing a variable afterwards doesn't affect a floor
@@ -240,6 +240,25 @@ agents:
 The `<% %>` delimiters were chosen instead of the default `{{ }}` to avoid conflicts with
 LLM prompt content (Ollama Modelfiles, Jinja examples, etc.). Prompts with no `<%` marker
 are passed through unchanged — there's no overhead for non-templated prompts.
+
+**Templates render on every turn.** `readfile` re-reads the file and `env`
+re-reads the variable each time the agent is woken, so a catalog an agent edits
+mid-session shows up in its own prompt on the next turn. This is the difference
+between the two mechanisms:
+
+| | `${VAR}` | `<% %>` |
+|---|---|---|
+| Applies to | any string in `blueprint.yaml` | prompts, wherever they came from |
+| Resolved | once, at load | every turn |
+
+Syntax errors still fail at startup — the template is parsed when the blueprint
+loads, and only executed per turn. Errors from the functions themselves (a
+missing `readfile` path, an unset `env` with no default) surface on the turn
+that hits them, and end that agent's turn.
+
+Worth knowing if you rely on prompt caching: a template whose output is
+identical each turn keeps the prefix stable and stays cacheable. One that
+varies invalidates it.
 
 ### Agent fields
 

@@ -130,15 +130,16 @@ func TestExpandBlueprintEnv_DollarInValueSurvives(t *testing.T) {
 }
 
 // Prompts are content and opt out — a Python f-string must survive intact.
-func TestExpandBlueprintEnv_PromptExempt(t *testing.T) {
-	prompt := `print(f"Total revenue: ${df['amount'].sum():,.2f}")`
-	bp := &Blueprint{Agents: []Agent{{ID: "@data", Prompt: prompt}}}
+// Prompts are blueprint.yaml text like any other field.
+func TestExpandBlueprintEnv_ReachesPrompts(t *testing.T) {
+	t.Setenv("OFC_SHOP", "Tokyo")
 
+	bp := &Blueprint{Agents: []Agent{{ID: "@data", Prompt: "You work in ${OFC_SHOP}."}}}
 	if err := expandBlueprintEnv(bp); err != nil {
-		t.Fatalf("prompt should not be expanded, got error: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if bp.Agents[0].Prompt != prompt {
-		t.Errorf("prompt was modified:\n got: %q\nwant: %q", bp.Agents[0].Prompt, prompt)
+	if bp.Agents[0].Prompt != "You work in Tokyo." {
+		t.Errorf("prompt = %q, want the variable expanded", bp.Agents[0].Prompt)
 	}
 }
 

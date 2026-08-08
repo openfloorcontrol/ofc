@@ -12,17 +12,16 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// expandPromptTemplate expands Go template syntax in a prompt using <% %> delimiters.
-// Returns the input unchanged if no <% marker is found (zero overhead for plain prompts).
+// parsePromptTemplate parses a prompt as a Go template using <% %> delimiters.
+// Paths given to readfile resolve against dir.
 //
 // Available functions:
 //   - readfile "path"     — read a file (paths relative to blueprint directory)
 //   - env "VAR"           — read an environment variable; unset is an error
 //   - env "VAR" "default" — read an environment variable, with a fallback
 //
-// The env function mirrors the ${VAR} / ${VAR-default} policy used for the
-// rest of the blueprint (see env.go): a reference with no default has to
-// resolve, otherwise the mistake disappears into the prompt silently.
+// The env function requires a reference to resolve unless a default is given,
+// matching the ${VAR} / ${VAR-default} policy in env.go.
 //
 // Example:
 //
@@ -30,15 +29,11 @@ import (
 //
 //	Available products:
 //	<% readfile "data/catalog.md" %>
-func expandPromptTemplate(prompt string, bpDir string) (string, error) {
-	if !strings.Contains(prompt, "<%") {
-		return prompt, nil
-	}
-
+func parsePromptTemplate(prompt string, dir string) (*template.Template, error) {
 	funcs := template.FuncMap{
 		"readfile": func(path string) (string, error) {
 			if !filepath.IsAbs(path) {
-				path = filepath.Join(bpDir, path)
+				path = filepath.Join(dir, path)
 			}
 			data, err := os.ReadFile(path)
 			if err != nil {
@@ -60,7 +55,28 @@ func expandPromptTemplate(prompt string, bpDir string) (string, error) {
 
 	tmpl, err := template.New("prompt").Delims("<%", "%>").Funcs(funcs).Parse(prompt)
 	if err != nil {
-		return "", fmt.Errorf("parse template: %w", err)
+		return nil, fmt.Errorf("parse template: %w", err)
+	}
+	return tmpl, nil
+}
+
+// RenderPrompt produces the agent's system prompt for the current turn.
+// Templates are rendered per turn, so readfile and env see the state of the
+// world at that moment. A prompt with no <% marker is returned as-is.
+//
+// Load parses and caches the template, so a syntax error surfaces at startup;
+// an agent built without Load parses on demand.
+func (a *Agent) RenderPrompt() (string, error) {
+	if !strings.Contains(a.Prompt, "<%") {
+		return a.Prompt, nil
+	}
+
+	tmpl := a.tmpl
+	if tmpl == nil {
+		var err error
+		if tmpl, err = parsePromptTemplate(a.Prompt, a.dir); err != nil {
+			return "", err
+		}
 	}
 
 	var buf bytes.Buffer
@@ -81,21 +97,26 @@ type Agent struct {
 	Command  string            `yaml:"command"` // ACP: command to launch agent
 	Args     []string          `yaml:"args"`    // ACP: args for the command
 	Env      map[string]string `yaml:"env"`     // ACP: env vars for agent process
-	// Prompt is content, not configuration: it may legitimately contain a
-	// literal '$' (shell snippets, Python f-strings), so it opts out of
-	// ${VAR} expansion. Use <% env "VAR" %> inside a prompt instead.
-	Prompt        string   `yaml:"prompt" env:"-"`
-	PromptFile    string   `yaml:"prompt_file"`
-	Activation    string   `yaml:"activation"`
-	CanUseSandbox bool     `yaml:"can_use_sandbox"`
+	// Prompt is the agent's system prompt. It may be a <% %> template, which
+	// is parsed at load and rendered on every turn — see RenderPrompt.
+	Prompt        string `yaml:"prompt"`
+	PromptFile    string `yaml:"prompt_file"`
+	Activation    string `yaml:"activation"`
+	CanUseSandbox bool   `yaml:"can_use_sandbox"`
 	// Thinking selects how reasoning is separated from the answer:
 	// "auto" (default), "tags", "field" or "none".
 	Thinking string `yaml:"thinking,omitempty"`
 	// ThinkingTags overrides the inline tag pair, e.g. ["<think>", "</think>"].
 	ThinkingTags []string `yaml:"thinking_tags,omitempty"`
-	Temperature   float64  `yaml:"temperature"`
-	ToolContext   string   `yaml:"tool_context"`
-	Furniture     []string `yaml:"furniture,omitempty"` // names of accessible furniture
+	Temperature  float64  `yaml:"temperature"`
+	ToolContext  string   `yaml:"tool_context"`
+	Furniture    []string `yaml:"furniture,omitempty"` // names of accessible furniture
+
+	// dir is the blueprint directory, used to resolve readfile paths at
+	// render time. tmpl is the parsed prompt template, nil when the prompt
+	// has no <% marker. Both are set by Load.
+	dir  string
+	tmpl *template.Template
 }
 
 // Workstation configuration
@@ -228,12 +249,16 @@ func Load(path string) (*Blueprint, error) {
 			}
 			bp.Agents[i].Prompt = string(data)
 		}
-		if bp.Agents[i].Prompt != "" {
-			expanded, err := expandPromptTemplate(bp.Agents[i].Prompt, bpDir)
+
+		// Parse the prompt template now so syntax errors fail the load, and
+		// keep it for rendering on each turn.
+		bp.Agents[i].dir = bp.Dir
+		if strings.Contains(bp.Agents[i].Prompt, "<%") {
+			tmpl, err := parsePromptTemplate(bp.Agents[i].Prompt, bp.Dir)
 			if err != nil {
 				return nil, fmt.Errorf("agent %s: prompt template: %w", bp.Agents[i].ID, err)
 			}
-			bp.Agents[i].Prompt = expanded
+			bp.Agents[i].tmpl = tmpl
 		}
 	}
 

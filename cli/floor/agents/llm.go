@@ -35,7 +35,11 @@ func (a *LLMAgent) AgentID() string { return a.agent.ID }
 func (a *LLMAgent) Run(ctx context.Context, turn floor.AgentTurn) error {
 	client := llmsdk.NewClient(a.agent.Endpoint, a.agent.APIKey)
 	client.Thinking = thinkingConfig(a.agent)
-	messages := a.buildContext(turn)
+	messages, err := a.buildContext(turn)
+	if err != nil {
+		turn.Status(floor.AgentErrorEvent{AgentID: a.agent.ID, Err: err})
+		return err
+	}
 	tools := a.buildTools(turn)
 
 	var fullResponse, fullReasoning strings.Builder
@@ -138,9 +142,14 @@ func thinkingConfig(a *blueprint.Agent) llmsdk.Thinking {
 
 // buildContext converts the agent's accumulated context to LLM messages,
 // applying tool_context filtering.
-func (a *LLMAgent) buildContext(turn floor.AgentTurn) []llmsdk.Message {
+func (a *LLMAgent) buildContext(turn floor.AgentTurn) ([]llmsdk.Message, error) {
+	prompt, err := a.agent.RenderPrompt()
+	if err != nil {
+		return nil, fmt.Errorf("agent %s: prompt template: %w", a.agent.ID, err)
+	}
+
 	messages := []llmsdk.Message{
-		{Role: "system", Content: a.agent.Prompt},
+		{Role: "system", Content: prompt},
 	}
 
 	chatMsgs := turn.Entries()
@@ -214,7 +223,7 @@ func (a *LLMAgent) buildContext(turn floor.AgentTurn) []llmsdk.Message {
 		}
 	}
 
-	return messages
+	return messages, nil
 }
 
 // buildTools constructs the tool list for this agent.

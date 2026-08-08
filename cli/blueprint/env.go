@@ -8,11 +8,8 @@ import (
 	"strings"
 )
 
-// Environment variable expansion is a property of blueprint *loading*, not of
-// individual fields: every string in the blueprint is expanded by one pass,
-// right after unmarshalling. Fields don't opt in — they opt out, with the
-// struct tag `env:"-"` (see Agent.Prompt, which is content rather than
-// configuration and may legitimately contain a literal '$').
+// Environment variable expansion is a property of blueprint loading: every
+// string in the Blueprint is expanded by one pass, right after unmarshalling.
 //
 // Expansion happens once, at load. The resulting values are baked into the
 // Blueprint: a floor started with one environment keeps behaving that way even
@@ -121,7 +118,6 @@ func resolveRef(ref, location string, missing *[]missingVar) string {
 
 // expandEnvVars walks v and expands ${VAR} references in every string it
 // reaches — struct fields, slice elements, and map values, at any depth.
-// Fields tagged `env:"-"` are skipped along with everything beneath them.
 //
 // location is the dotted path used to report missing variables; it grows as
 // the walk descends so the error names the exact field.
@@ -136,7 +132,7 @@ func expandEnvVars(v reflect.Value, location string, missing *[]missingVar) {
 		t := v.Type()
 		for i := range t.NumField() {
 			f := t.Field(i)
-			if !f.IsExported() || f.Tag.Get("env") == "-" {
+			if !f.IsExported() {
 				continue
 			}
 			expandEnvVars(v.Field(i), joinPath(location, fieldName(f)), missing)

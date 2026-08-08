@@ -7,10 +7,17 @@ import (
 	"testing"
 )
 
-func TestExpandPromptTemplate_NoMarker(t *testing.T) {
+// render builds an agent the way Load would, minus the cached template, so
+// RenderPrompt takes its on-demand parse path.
+func render(prompt, dir string) (string, error) {
+	a := Agent{Prompt: prompt, dir: dir}
+	return a.RenderPrompt()
+}
+
+func TestRenderPrompt_NoMarker(t *testing.T) {
 	// No <% marker → returns unchanged, no template parsing
 	in := "Hello {{ this }} should pass through unchanged"
-	out, err := expandPromptTemplate(in, "")
+	out, err := render(in, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -19,7 +26,7 @@ func TestExpandPromptTemplate_NoMarker(t *testing.T) {
 	}
 }
 
-func TestExpandPromptTemplate_Readfile(t *testing.T) {
+func TestRenderPrompt_Readfile(t *testing.T) {
 	dir := t.TempDir()
 	contentPath := filepath.Join(dir, "catalog.md")
 	if err := os.WriteFile(contentPath, []byte("- Product A\n- Product B\n"), 0644); err != nil {
@@ -27,7 +34,7 @@ func TestExpandPromptTemplate_Readfile(t *testing.T) {
 	}
 
 	prompt := "Available:\n<% readfile \"catalog.md\" %>"
-	out, err := expandPromptTemplate(prompt, dir)
+	out, err := render(prompt, dir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -36,18 +43,18 @@ func TestExpandPromptTemplate_Readfile(t *testing.T) {
 	}
 }
 
-func TestExpandPromptTemplate_ReadfileMissing(t *testing.T) {
+func TestRenderPrompt_ReadfileMissing(t *testing.T) {
 	prompt := `<% readfile "nonexistent.md" %>`
-	_, err := expandPromptTemplate(prompt, t.TempDir())
+	_, err := render(prompt, t.TempDir())
 	if err == nil {
 		t.Fatal("expected error for missing file, got nil")
 	}
 }
 
-func TestExpandPromptTemplate_Env(t *testing.T) {
+func TestRenderPrompt_Env(t *testing.T) {
 	t.Setenv("OFC_TEST_VAR", "hello")
 	prompt := `<% env "OFC_TEST_VAR" %>`
-	out, err := expandPromptTemplate(prompt, "")
+	out, err := render(prompt, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -56,12 +63,85 @@ func TestExpandPromptTemplate_Env(t *testing.T) {
 	}
 }
 
-func TestExpandPromptTemplate_ParseError(t *testing.T) {
+func TestRenderPrompt_ParseError(t *testing.T) {
 	// Unclosed action
 	prompt := `<% readfile "x" `
-	_, err := expandPromptTemplate(prompt, "")
+	_, err := render(prompt, "")
 	if err == nil {
 		t.Fatal("expected parse error, got nil")
+	}
+}
+
+// Each render reads the world again, so a file edited mid-session shows up on
+// the next turn.
+func TestRenderPrompt_ReReadsPerRender(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "catalog.md")
+	if err := os.WriteFile(path, []byte("first"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := Agent{Prompt: `<% readfile "catalog.md" %>`, dir: dir}
+
+	first, err := a.RenderPrompt()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("second"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	second, err := a.RenderPrompt()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if first != "first" || second != "second" {
+		t.Errorf("renders = %q then %q, want the file re-read each time", first, second)
+	}
+}
+
+// A template syntax error fails the load rather than the first turn.
+func TestLoad_PromptTemplateSyntaxErrorFailsLoad(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "blueprint.yaml")
+	yaml := "name: test\nagents:\n  - id: \"@a\"\n    prompt: '<% readfile \"x\" '\n"
+	if err := os.WriteFile(path, []byte(yaml), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected Load to reject an unparseable prompt template")
+	} else if !strings.Contains(err.Error(), "prompt template") {
+		t.Errorf("error should name the prompt template, got: %v", err)
+	}
+}
+
+// Load leaves the template unrendered so each turn can render it afresh.
+func TestLoad_KeepsPromptTemplateUnrendered(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "catalog.md"), []byte("PRODUCTS"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "blueprint.yaml")
+	yaml := "name: test\nagents:\n  - id: \"@a\"\n    prompt: 'Stock: <% readfile \"catalog.md\" %>'\n"
+	if err := os.WriteFile(path, []byte(yaml), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	bp, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(bp.Agents[0].Prompt, "<% readfile") {
+		t.Errorf("Prompt = %q, want the raw template", bp.Agents[0].Prompt)
+	}
+
+	out, err := bp.Agents[0].RenderPrompt()
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if out != "Stock: PRODUCTS" {
+		t.Errorf("rendered = %q, want the catalog inlined", out)
 	}
 }
 
@@ -84,34 +164,6 @@ func TestLoad_DirIsAbsolute(t *testing.T) {
 	}
 	if !filepath.IsAbs(bp.Dir) {
 		t.Errorf("expected absolute Dir, got: %q", bp.Dir)
-	}
-}
-
-func TestLoad_PromptTemplate(t *testing.T) {
-	dir := t.TempDir()
-	catalog := filepath.Join(dir, "catalog.md")
-	if err := os.WriteFile(catalog, []byte("CATALOG-CONTENT"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	bpYAML := `name: test
-agents:
-  - id: "@a"
-    prompt: |
-      You are an agent.
-      <% readfile "catalog.md" %>
-`
-	bpPath := filepath.Join(dir, "blueprint.yaml")
-	if err := os.WriteFile(bpPath, []byte(bpYAML), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	bp, err := Load(bpPath)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if !strings.Contains(bp.Agents[0].Prompt, "CATALOG-CONTENT") {
-		t.Errorf("expected catalog content in prompt, got: %q", bp.Agents[0].Prompt)
 	}
 }
 

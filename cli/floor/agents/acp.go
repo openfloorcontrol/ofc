@@ -59,7 +59,11 @@ func (a *ACPAgent) Run(ctx context.Context, turn floor.AgentTurn) error {
 	// Emit agent label before first token
 	turn.Stream(floor.AgentLabel{AgentID: a.agent.ID})
 
-	blocks := a.buildACPContext(turn)
+	blocks, err := a.buildACPContext(turn)
+	if err != nil {
+		turn.Status(floor.AgentErrorEvent{AgentID: a.agent.ID, Err: err})
+		return err
+	}
 	turn.Debug("ACP prompt for %s (%d blocks)", a.agent.ID, len(blocks))
 
 	stopReason, err := subproc.Prompt(ctx, blocks)
@@ -104,7 +108,7 @@ func (a *ACPAgent) Run(ctx context.Context, turn floor.AgentTurn) error {
 // agents maintain their own session state, so we skip the agent's own
 // messages (it already remembers them) and only send the system prompt
 // once.
-func (a *ACPAgent) buildACPContext(turn floor.AgentTurn) []acpsdk.ContentBlock {
+func (a *ACPAgent) buildACPContext(turn floor.AgentTurn) ([]acpsdk.ContentBlock, error) {
 	var blocks []acpsdk.ContentBlock
 
 	delta := turn.Delta()
@@ -115,7 +119,11 @@ func (a *ACPAgent) buildACPContext(turn floor.AgentTurn) []acpsdk.ContentBlock {
 
 	// Only include system prompt on first prompt (ACP agent remembers it)
 	if isFirstPrompt && a.agent.Prompt != "" {
-		blocks = append(blocks, acpsdk.TextBlock("[System] "+a.agent.Prompt))
+		prompt, err := a.agent.RenderPrompt()
+		if err != nil {
+			return nil, fmt.Errorf("agent %s: prompt template: %w", a.agent.ID, err)
+		}
+		blocks = append(blocks, acpsdk.TextBlock("[System] "+prompt))
 	}
 
 	for _, msg := range delta {
@@ -150,5 +158,5 @@ func (a *ACPAgent) buildACPContext(turn floor.AgentTurn) []acpsdk.ContentBlock {
 	// Mark all entries as sent so next Delta() only returns new messages.
 	turn.MarkSent()
 
-	return blocks
+	return blocks, nil
 }
