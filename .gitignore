@@ -21,7 +21,6 @@ cli/ofc
 *.png
 *.jpg
 *.csv
-!examples/*/workspace/*.csv
 !history/**/*.png
 !site/*.png
 
@@ -44,3 +43,11 @@ run.py
 
 # Personal scratch notes
 TODO.md
+
+# Local tooling config
+dev.yaml
+
+# Agent workspaces — scratch written by agents during demo runs. Input files a
+# demo needs are tracked; add a new one with git add -f.
+examples/*/workspace
+cli/workspace
