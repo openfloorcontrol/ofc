@@ -46,6 +46,23 @@ func RunOnce(cfg RunOnceConfig, agent Agent) (*RunOnceResult, error) {
 
 	sess := f.DefaultSession()
 
+	// Drain the room's event channel while the agent runs. Room.Post and
+	// PostStream send on a buffered channel; a streaming agent fills the
+	// buffer in a few dozen tokens and blocks. Without a frontend attached,
+	// nothing consumes those events, so we discard them here.
+	drain := make(chan struct{})
+	events := sess.MainRoom.Events()
+	go func() {
+		for {
+			select {
+			case <-events:
+			case <-drain:
+				return
+			}
+		}
+	}()
+	defer close(drain)
+
 	// Post user input
 	sess.MainRoom.Post(ChatMessage{From: "@user", Content: cfg.Input})
 
