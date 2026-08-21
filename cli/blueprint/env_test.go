@@ -195,6 +195,10 @@ agents:
 }
 
 func TestLoad_EnvDefaultKeepsLoadWorking(t *testing.T) {
+	// OFC_ENDPOINT is commonly set in dev shells — clear it so the ${VAR:-…}
+	// default is what gets tested, not whatever the developer exported.
+	t.Setenv("OFC_ENDPOINT", "")
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "blueprint.yaml")
 	yaml := `name: test
