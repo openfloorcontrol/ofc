@@ -88,6 +88,14 @@ func (a *Agent) RenderPrompt() (string, error) {
 
 // Agent configuration
 type Agent struct {
+	// Ref points to a standalone agent YAML file. When set, the blueprint
+	// entry is replaced by the contents of that file at load time; other
+	// fields on the entry are ignored. Path resolves relative to the
+	// blueprint directory. Referenced files are read as-is — ${VAR}
+	// expansion runs on the blueprint only, so env-coupled fields
+	// (api_key, endpoint) belong in defaults.
+	Ref string `yaml:"ref,omitempty"`
+
 	ID       string            `yaml:"id"`
 	Name     string            `yaml:"name"`
 	Type     string            `yaml:"type"` // "llm" (default) or "acp"
@@ -234,6 +242,31 @@ func Load(path string) (*Blueprint, error) {
 	} else {
 		bp.Dir = bpDir
 	}
+
+	// Resolve agent refs: an entry with ref: is replaced wholesale by the
+	// contents of the referenced file. Referenced files are not env-expanded.
+	for i := range bp.Agents {
+		if bp.Agents[i].Ref == "" {
+			continue
+		}
+		p := bp.Agents[i].Ref
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(bp.Dir, p)
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return nil, fmt.Errorf("agent[%d]: reading ref %q: %w", i, bp.Agents[i].Ref, err)
+		}
+		var a Agent
+		if err := yaml.Unmarshal(data, &a); err != nil {
+			return nil, fmt.Errorf("agent[%d]: parsing ref %q: %w", i, bp.Agents[i].Ref, err)
+		}
+		if a.Ref != "" {
+			return nil, fmt.Errorf("agent[%d]: ref %q contains its own ref; chains are not supported", i, bp.Agents[i].Ref)
+		}
+		bp.Agents[i] = a
+	}
+
 	for i := range bp.Agents {
 		if bp.Agents[i].PromptFile != "" {
 			if bp.Agents[i].Prompt != "" {

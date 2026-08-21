@@ -167,6 +167,128 @@ func TestLoad_DirIsAbsolute(t *testing.T) {
 	}
 }
 
+func TestLoad_AgentRef(t *testing.T) {
+	dir := t.TempDir()
+	agentPath := filepath.Join(dir, "datascientist.agent.yaml")
+	agentYAML := `id: "@datascientist"
+model: sonnet46
+furniture:
+  - filesystem
+prompt: |
+  You are a data scientist.
+`
+	if err := os.WriteFile(agentPath, []byte(agentYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	bpPath := filepath.Join(dir, "blueprint.yaml")
+	bpYAML := `name: test
+defaults:
+  endpoint: http://localhost:11434/v1
+agents:
+  - ref: ./datascientist.agent.yaml
+`
+	if err := os.WriteFile(bpPath, []byte(bpYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	bp, err := Load(bpPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(bp.Agents) != 1 {
+		t.Fatalf("Agents = %d, want 1", len(bp.Agents))
+	}
+	a := bp.Agents[0]
+	if a.ID != "@datascientist" {
+		t.Errorf("ID = %q, want @datascientist", a.ID)
+	}
+	if a.Model != "sonnet46" {
+		t.Errorf("Model = %q, want sonnet46", a.Model)
+	}
+	if a.Endpoint != "http://localhost:11434/v1" {
+		t.Errorf("Endpoint = %q, want defaults-inherited value", a.Endpoint)
+	}
+	if len(a.Furniture) != 1 || a.Furniture[0] != "filesystem" {
+		t.Errorf("Furniture = %v, want [filesystem]", a.Furniture)
+	}
+	if !strings.Contains(a.Prompt, "data scientist") {
+		t.Errorf("Prompt missing expected content: %q", a.Prompt)
+	}
+	if a.Ref != "" {
+		t.Errorf("Ref should be cleared after resolution, got %q", a.Ref)
+	}
+}
+
+// Ref'd files are read as-is: ${VAR} in them is not expanded, so env-coupled
+// values belong in the referring blueprint's defaults.
+func TestLoad_AgentRefNoEnvExpansion(t *testing.T) {
+	t.Setenv("OFC_REF_TEST_KEY", "secret-value")
+	dir := t.TempDir()
+	agentPath := filepath.Join(dir, "foo.agent.yaml")
+	if err := os.WriteFile(agentPath, []byte(`id: "@foo"
+api_key: ${OFC_REF_TEST_KEY}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bpPath := filepath.Join(dir, "blueprint.yaml")
+	if err := os.WriteFile(bpPath, []byte(`name: t
+agents:
+  - ref: ./foo.agent.yaml
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	bp, err := Load(bpPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if bp.Agents[0].APIKey != "${OFC_REF_TEST_KEY}" {
+		t.Errorf("APIKey = %q, want literal ${OFC_REF_TEST_KEY} — refs must not env-expand", bp.Agents[0].APIKey)
+	}
+}
+
+func TestLoad_AgentRefChainRejected(t *testing.T) {
+	dir := t.TempDir()
+	inner := filepath.Join(dir, "inner.agent.yaml")
+	if err := os.WriteFile(inner, []byte(`id: "@inner"`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	middle := filepath.Join(dir, "middle.agent.yaml")
+	if err := os.WriteFile(middle, []byte(`ref: ./inner.agent.yaml`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bpPath := filepath.Join(dir, "blueprint.yaml")
+	if err := os.WriteFile(bpPath, []byte(`name: t
+agents:
+  - ref: ./middle.agent.yaml
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(bpPath)
+	if err == nil {
+		t.Fatal("expected error for ref-of-ref, got nil")
+	}
+	if !strings.Contains(err.Error(), "chain") {
+		t.Errorf("error should explain the chain, got: %v", err)
+	}
+}
+
+func TestLoad_AgentRefMissingFile(t *testing.T) {
+	dir := t.TempDir()
+	bpPath := filepath.Join(dir, "blueprint.yaml")
+	if err := os.WriteFile(bpPath, []byte(`name: t
+agents:
+  - ref: ./missing.agent.yaml
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(bpPath); err == nil {
+		t.Fatal("expected error for missing ref file")
+	}
+}
+
 func TestLoad_ConfigSection(t *testing.T) {
 	dir := t.TempDir()
 	bpPath := filepath.Join(dir, "bp.yaml")
