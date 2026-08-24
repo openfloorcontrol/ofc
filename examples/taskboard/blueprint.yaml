@@ -46,7 +46,7 @@ agents:
   - id: "@coder"
     name: "Coder"
     activation: mention
-    can_use_sandbox: false
+    can_use_sandbox: true
     temperature: 0.3
     furniture: [tasks]
     prompt: |
