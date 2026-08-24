@@ -46,7 +46,8 @@ workstations:
 Any string value in a blueprint can reference an environment variable with
 `${VAR}` — not a select few fields, but every string, anywhere in the file.
 Endpoints, API keys, commands, args, MCP headers, the store DSN: if it's a
-string, it expands. The syntax follows bash:
+string, it expands. Braces are required — a bare `$VAR` stays as-is, so
+prices and shell snippets survive intact. The syntax follows bash:
 
 | Form | If the variable is unset | If it's set but empty |
 |------|--------------------------|-----------------------|
@@ -71,15 +72,6 @@ Error loading blueprint: unset environment variables:
 
 Since `${VAR-}` says "optional" explicitly, an unadorned reference means the
 value is genuinely required.
-
-Two things to know:
-
-- **Only `${VAR}` is a reference.** A bare `$VAR` or a lone `$` is left alone,
-  so prices, regexes and shell snippets survive intact.
-- **The boundary is the file, not the field.** Everything written in
-  `blueprint.yaml` expands, `prompt:` included. Text loaded by reference —
-  `prompt_file` contents — is not blueprint text and is left alone; use
-  [`<% env %>`](#prompt-templating) inside those.
 
 Expansion happens once, when the blueprint loads, and the results are baked
 into the running floor. Changing a variable afterwards doesn't affect a floor
