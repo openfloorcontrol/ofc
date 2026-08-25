@@ -134,6 +134,44 @@ func NewClient(endpoint, apiKey string) *Client {
 	}
 }
 
+// Model is one entry from the /models listing.
+type Model struct {
+	ID      string `json:"id"`
+	OwnedBy string `json:"owned_by"`
+}
+
+// ListModels calls GET /models and returns the ids the endpoint advertises.
+// A non-200 response is surfaced verbatim so callers can distinguish auth
+// failures from a wrong URL from a model that just isn't there.
+func (c *Client) ListModels() ([]Model, error) {
+	httpReq, err := http.NewRequest("GET", c.Endpoint+"/models", nil)
+	if err != nil {
+		return nil, err
+	}
+	if c.APIKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
+
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+	}
+
+	var out struct {
+		Data []Model `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("decode /models response: %w", err)
+	}
+	return out.Data, nil
+}
+
 // ChatStream sends a chat request and streams the response
 func (c *Client) ChatStream(model string, messages []Message, temperature float64, tools []Tool, h StreamHandler) (*ChatResult, error) {
 	req := ChatRequest{
