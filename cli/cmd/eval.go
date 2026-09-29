@@ -77,9 +77,10 @@ func resolveEvalConfig() (*blueprint.Blueprint, string, error) {
 					Type:        "llm",
 					Endpoint:    evalEndpoint,
 					Model:       evalModel,
+					APIKey:      evalAPIKey,
 					Temperature: 0.3,
 					Activation:  "mention",
-					ToolContext:  "full",
+					ToolContext: "full",
 				},
 			},
 		}
@@ -117,7 +118,7 @@ func init() {
 	evalCmd.Flags().StringVar(&evalAgent, "agent", "", "Agent ID to use for LLM config (default: first LLM agent)")
 	evalCmd.Flags().StringVar(&evalEndpoint, "endpoint", "", "LLM endpoint (standalone mode, skips blueprint)")
 	evalCmd.Flags().StringVar(&evalModel, "model", "", "LLM model (standalone mode, skips blueprint)")
-	evalCmd.Flags().StringVar(&evalAPIKey, "api-key", os.Getenv("OFC_API_KEY"), "API key (env: OFC_API_KEY)")
+	evalCmd.Flags().StringVar(&evalAPIKey, "api-key", "", "API key (standalone mode)")
 	// Reuse the -f flag from run for blueprint file path
 	evalCmd.Flags().StringVarP(&blueprintFile, "file", "f", "blueprint.yaml", "Blueprint file")
 }

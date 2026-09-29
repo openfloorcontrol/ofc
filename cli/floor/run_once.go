@@ -15,10 +15,14 @@ type RunOnceConfig struct {
 	APIServer APIServer            // optional; one is constructed via the caller's choice (typically api.New())
 }
 
-// RunOnceResult holds the agent's response from a single turn.
+// RunOnceResult holds the agent's response from a single turn, plus the
+// stream of events emitted during the run. Callers can walk Events to see
+// what the agent produced (thoughts, tool calls, tokens) even when Content
+// is empty.
 type RunOnceResult struct {
 	Content          string
 	ToolInteractions []ToolInteraction
+	Events           []ChatEvent
 }
 
 // RunOnce starts a floor, posts a single user message, runs the given
@@ -46,29 +50,49 @@ func RunOnce(cfg RunOnceConfig, agent Agent) (*RunOnceResult, error) {
 
 	sess := f.DefaultSession()
 
-	// Drain the room's event channel while the agent runs. Room.Post and
+	// Collect events from the room while the agent runs. Room.Post and
 	// PostStream send on a buffered channel; a streaming agent fills the
 	// buffer in a few dozen tokens and blocks. Without a frontend attached,
-	// nothing consumes those events, so we discard them here.
-	drain := make(chan struct{})
+	// nothing consumes those events, so we consume them here — and keep
+	// them, so diagnostic callers can see what happened.
 	events := sess.MainRoom.Events()
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	var collected []ChatEvent
 	go func() {
+		defer close(done)
 		for {
 			select {
-			case <-events:
-			case <-drain:
+			case ev := <-events:
+				collected = append(collected, ev)
+			case <-stop:
 				return
 			}
 		}
 	}()
-	defer close(drain)
 
 	// Post user input
 	sess.MainRoom.Post(ChatMessage{From: "@user", Content: cfg.Input})
 
 	turn := NewAgentTurn(sess, sess.MainRoom, sess.Floor, cfg.AgentID)
-	if err := agent.Run(context.Background(), turn); err != nil {
-		return nil, fmt.Errorf("agent %s: %w", cfg.AgentID, err)
+	runErr := agent.Run(context.Background(), turn)
+
+	// Stop the collector and pick up any events that landed after it exited.
+	// Ownership of `collected` transfers back to this goroutine here.
+	close(stop)
+	<-done
+drain:
+	for {
+		select {
+		case ev := <-events:
+			collected = append(collected, ev)
+		default:
+			break drain
+		}
+	}
+
+	if runErr != nil {
+		return nil, fmt.Errorf("agent %s: %w", cfg.AgentID, runErr)
 	}
 
 	// Find the agent's response in chat history
@@ -78,10 +102,11 @@ func RunOnce(cfg RunOnceConfig, agent Agent) (*RunOnceResult, error) {
 			return &RunOnceResult{
 				Content:          history[i].Content,
 				ToolInteractions: history[i].ToolInteractions,
+				Events:           collected,
 			}, nil
 		}
 	}
 
 	// Agent may have passed
-	return &RunOnceResult{Content: ""}, nil
+	return &RunOnceResult{Content: "", Events: collected}, nil
 }
