@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -17,7 +16,6 @@ import (
 	"github.com/openfloorcontrol/ofc/floor/agents"
 	"github.com/openfloorcontrol/ofc/api"
 	"github.com/openfloorcontrol/ofc/frontend"
-	"github.com/openfloorcontrol/ofc/floor/sessionstore"
 	"github.com/openfloorcontrol/ofc/webui"
 	"github.com/spf13/cobra"
 )
@@ -42,13 +40,12 @@ var (
 	webPort       int
 	webHostname   string
 	useJSON       bool
-	sessionLog    string
 	sessionID     string
 	dbDSN         string
 
 	// resolvedSessionID is the actual UUID used by this invocation —
 	// either passed via --session, or freshly generated. Captured here
-	// so all frontends and applySessionLog can read it without re-doing
+	// so all frontends and applySessionStore can read it without re-doing
 	// resolution.
 	resolvedSessionID string
 )
@@ -264,7 +261,6 @@ func init() {
 	runCmd.Flags().IntVar(&webPort, "port", 8080, "Port for web UI (used with --web)")
 	runCmd.Flags().StringVar(&webHostname, "hostname", "", "External URL for web UI (e.g. https://myhost.dev), overrides localhost in printed URL")
 	runCmd.Flags().BoolVar(&useJSON, "json", false, "Output events as JSONL to stdout")
-	runCmd.Flags().StringVar(&sessionLog, "session-log", "", "Persist session events to a JSONL file (explicit path, overrides --session)")
 	runCmd.Flags().StringVar(&sessionID, "session", "", "Session UUID to resume (default: generate a new one)")
 	runCmd.Flags().StringVar(&dbDSN, "db", "", "Postgres DSN for session storage (overrides JSONL; falls back to OFC_DATABASE_URL)")
 }
@@ -305,39 +301,15 @@ func newFloorWithStore(bp *blueprint.Blueprint) *floor.Floor {
 // checked on resume. The session UUID is f.DefaultSessionID() —
 // shared across both backends.
 func applySessionStore(f *floor.Floor, bp *blueprint.Blueprint, resuming bool) error {
-	dsn := dbDSN
-	if dsn == "" {
-		dsn = os.Getenv("OFC_DATABASE_URL")
-	}
-
-	var store floor.SessionStore
-	var label string
-	if dsn != "" {
-		pg, err := sessionstore.OpenPostgres(context.Background(), dsn)
-		if err != nil {
-			return fmt.Errorf("session store: %w", err)
-		}
-		store = pg
-		label = "postgres"
-	} else {
-		path, err := jsonlPathForSession(sessionID)
-		if err != nil {
-			return err
-		}
-		jl, err := sessionstore.NewJSONL(path)
-		if err != nil {
-			return fmt.Errorf("session store: %w", err)
-		}
-		store = jl
-		label = "jsonl"
+	store, label, err := openSessionStore()
+	if err != nil {
+		return err
 	}
 	f.Store = store
 	sid := f.DefaultSessionID()
 
 	if !useJSON {
-		if sessionLog != "" {
-			fmt.Fprintf(os.Stderr, "Session log: %s\n", sessionLog)
-		} else if resuming {
+		if resuming {
 			fmt.Fprintf(os.Stderr, "Resuming session %s (%s)\n", sid, label)
 		} else {
 			fmt.Fprintf(os.Stderr, "Session: %s (%s)\n", sid, label)
@@ -359,15 +331,6 @@ func applySessionStore(f *floor.Floor, bp *blueprint.Blueprint, resuming bool) e
 		}
 	}
 	return nil
-}
-
-// jsonlPathForSession returns the on-disk JSONL path for a session UUID.
-// Honors --session-log <path> as an explicit override.
-func jsonlPathForSession(sid string) (string, error) {
-	if sessionLog != "" {
-		return sessionLog, nil
-	}
-	return sessionPath(sid)
 }
 
 // makeSessionMeta builds a SessionMeta for the current invocation. The

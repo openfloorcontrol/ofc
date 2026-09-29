@@ -2,6 +2,7 @@ package floor
 
 import (
 	"errors"
+	"sort"
 	"time"
 )
 
@@ -64,6 +65,18 @@ type SessionMeta struct {
 // called.
 var ErrNoSessionMeta = errors.New("no session metadata recorded")
 
+// ErrSessionNotFound is returned by Delete when the store holds nothing
+// for the session.
+var ErrSessionNotFound = errors.New("session not found")
+
+// SessionInfo summarizes one stored session for listings.
+type SessionInfo struct {
+	ID           string
+	Meta         *SessionMeta // nil if none recorded
+	EventCount   int          // all events, including private ones
+	LastActivity time.Time    // time of the newest event; zero if there are none
+}
+
 // AppendOpts groups Append's parameters. RoomID and VisibleTo are
 // optional; Event is required.
 type AppendOpts struct {
@@ -107,6 +120,26 @@ type SessionStore interface {
 	// GetMeta returns the SessionMeta for the session, or
 	// ErrNoSessionMeta if none was recorded.
 	GetMeta(sessionID string) (SessionMeta, error)
+
+	// List returns every session in the store, most recent activity
+	// first; sessions without events come last, ordered by ID.
+	List() ([]SessionInfo, error)
+
+	// Delete removes the session: its events, visibility refs and meta.
+	// Returns ErrSessionNotFound if the store holds nothing for it.
+	Delete(sessionID string) error
+}
+
+// SortSessionInfos orders sessions as List documents: most recent
+// activity first, sessions without events last, ties by ID.
+func SortSessionInfos(infos []SessionInfo) {
+	sort.Slice(infos, func(i, j int) bool {
+		a, b := infos[i].LastActivity, infos[j].LastActivity
+		if !a.Equal(b) {
+			return a.After(b)
+		}
+		return infos[i].ID < infos[j].ID
+	})
 }
 
 // extractMessages picks ChatMessages out of a stored-event list.

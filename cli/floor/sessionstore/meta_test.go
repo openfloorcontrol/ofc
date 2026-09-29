@@ -2,7 +2,6 @@ package sessionstore
 
 import (
 	"errors"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -22,9 +21,8 @@ func sampleMeta() floor.SessionMeta {
 
 func TestJSONLStoreMetaPersistsAcrossReload(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "session.jsonl")
 
-	s, err := NewJSONL(path)
+	s, err := NewJSONL(dir)
 	if err != nil {
 		t.Fatalf("NewJSONL: %v", err)
 	}
@@ -42,7 +40,7 @@ func TestJSONLStoreMetaPersistsAcrossReload(t *testing.T) {
 	s.Close()
 
 	// Reload and verify meta survives.
-	s2, err := NewJSONL(path)
+	s2, err := NewJSONL(dir)
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -74,9 +72,8 @@ func TestJSONLStoreSetMetaTwice(t *testing.T) {
 	// have two meta records on disk, but reload should resolve to the
 	// last one.
 	dir := t.TempDir()
-	path := filepath.Join(dir, "session.jsonl")
 
-	s, _ := NewJSONL(path)
+	s, _ := NewJSONL(dir)
 	first := sampleMeta()
 	first.BlueprintName = "first"
 	s.SetMeta("default", first)
@@ -86,7 +83,7 @@ func TestJSONLStoreSetMetaTwice(t *testing.T) {
 	s.SetMeta("default", second)
 	s.Close()
 
-	s2, _ := NewJSONL(path)
+	s2, _ := NewJSONL(dir)
 	defer s2.Close()
 	got, err := s2.GetMeta("default")
 	if err != nil {
@@ -101,9 +98,8 @@ func TestJSONLStoreOldFileWithoutMeta(t *testing.T) {
 	// Forward-compat: a file with only event/ref records (no meta) should
 	// still load, and GetMeta returns ErrNoSessionMeta.
 	dir := t.TempDir()
-	path := filepath.Join(dir, "session.jsonl")
 
-	s, _ := NewJSONL(path)
+	s, _ := NewJSONL(dir)
 	s.Append(floor.AppendOpts{
 		SessionID: "default",
 		Event:     newMemMsg("hello"),
@@ -111,7 +107,7 @@ func TestJSONLStoreOldFileWithoutMeta(t *testing.T) {
 	})
 	s.Close()
 
-	s2, _ := NewJSONL(path)
+	s2, _ := NewJSONL(dir)
 	defer s2.Close()
 
 	_, err := s2.GetMeta("default")

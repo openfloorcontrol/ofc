@@ -26,17 +26,12 @@ func extractMessages(events []floor.StoredEvent) []floor.ChatMessage {
 	return out
 }
 
-func jsonlTempPath(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	return filepath.Join(dir, "session.jsonl")
-}
 
 func TestJSONLStoreAppendAndReload(t *testing.T) {
-	path := jsonlTempPath(t)
+	dir := t.TempDir()
 
 	// Write some events with one store instance, close it.
-	s, err := NewJSONL(path)
+	s, err := NewJSONL(dir)
 	if err != nil {
 		t.Fatalf("NewJSONL: %v", err)
 	}
@@ -58,7 +53,7 @@ func TestJSONLStoreAppendAndReload(t *testing.T) {
 	}
 
 	// Reopen — events and refs should be preserved.
-	s2, err := NewJSONL(path)
+	s2, err := NewJSONL(dir)
 	if err != nil {
 		t.Fatalf("NewJSONL reload: %v", err)
 	}
@@ -86,15 +81,15 @@ func TestJSONLStoreAppendAndReload(t *testing.T) {
 }
 
 func TestJSONLStoreClearReapplied(t *testing.T) {
-	path := jsonlTempPath(t)
+	dir := t.TempDir()
 
-	s, _ := NewJSONL(path)
+	s, _ := NewJSONL(dir)
 	s.Append(floor.AppendOpts{SessionID: "sid", RoomID: "#main", Event: newMemMsg("a"), VisibleTo: []string{"@x"}})
 	s.Append(floor.AppendOpts{SessionID: "sid", RoomID: "#sub", Event: newMemMsg("b"), VisibleTo: []string{"@x"}})
 	s.Clear("sid", floor.EventFilter{RoomID: "#main"})
 	s.Close()
 
-	s2, _ := NewJSONL(path)
+	s2, _ := NewJSONL(dir)
 	defer s2.Close()
 
 	all, _ := s2.Read("sid", floor.EventFilter{})
@@ -113,14 +108,14 @@ func TestJSONLStoreClearReapplied(t *testing.T) {
 }
 
 func TestJSONLStoreMultipleSessions(t *testing.T) {
-	path := jsonlTempPath(t)
+	dir := t.TempDir()
 
-	s, _ := NewJSONL(path)
+	s, _ := NewJSONL(dir)
 	s.Append(floor.AppendOpts{SessionID: "s1", Event: newMemMsg("from s1"), VisibleTo: []string{"@x"}})
 	s.Append(floor.AppendOpts{SessionID: "s2", Event: newMemMsg("from s2"), VisibleTo: []string{"@x"}})
 	s.Close()
 
-	s2, _ := NewJSONL(path)
+	s2, _ := NewJSONL(dir)
 	defer s2.Close()
 
 	e1, _ := s2.Read("s1", floor.EventFilter{})
@@ -134,15 +129,15 @@ func TestJSONLStoreMultipleSessions(t *testing.T) {
 }
 
 func TestJSONLStoreTruncatedLineRecovery(t *testing.T) {
-	path := jsonlTempPath(t)
+	dir := t.TempDir()
 
 	// Write a valid event, then corrupt the file by appending a
 	// truncated line (simulating a crash mid-write).
-	s, _ := NewJSONL(path)
+	s, _ := NewJSONL(dir)
 	s.Append(floor.AppendOpts{SessionID: "sid", Event: newMemMsg("good"), VisibleTo: []string{"@a"}})
 	s.Close()
 
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(filepath.Join(dir, "sid.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -151,7 +146,7 @@ func TestJSONLStoreTruncatedLineRecovery(t *testing.T) {
 	f.Close()
 
 	// Reload should tolerate the truncated line and recover the good event.
-	s2, err := NewJSONL(path)
+	s2, err := NewJSONL(dir)
 	if err != nil {
 		t.Fatalf("reload after truncation: %v", err)
 	}
@@ -166,8 +161,8 @@ func TestJSONLStoreTruncatedLineRecovery(t *testing.T) {
 func TestJSONLStoreFileFormatIsLineDelimitedJSON(t *testing.T) {
 	// Sanity check: opening the file in any JSONL parser should work.
 	// Verify each line is a valid JSON object with a "kind" field.
-	path := jsonlTempPath(t)
-	s, _ := NewJSONL(path)
+	dir := t.TempDir()
+	s, _ := NewJSONL(dir)
 	s.Append(floor.AppendOpts{
 		SessionID: "sid",
 		RoomID:    "#main",
@@ -176,7 +171,7 @@ func TestJSONLStoreFileFormatIsLineDelimitedJSON(t *testing.T) {
 	})
 	s.Close()
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Join(dir, "sid.jsonl"))
 	if err != nil {
 		t.Fatalf("read file: %v", err)
 	}
@@ -193,9 +188,9 @@ func TestJSONLStoreFileFormatIsLineDelimitedJSON(t *testing.T) {
 }
 
 func TestJSONLStoreSeqMonotonicAcrossReload(t *testing.T) {
-	path := jsonlTempPath(t)
+	dir := t.TempDir()
 
-	s, _ := NewJSONL(path)
+	s, _ := NewJSONL(dir)
 	a, _ := s.Append(floor.AppendOpts{SessionID: "sid", Event: newMemMsg("1")})
 	b, _ := s.Append(floor.AppendOpts{SessionID: "sid", Event: newMemMsg("2")})
 	s.Close()
@@ -204,7 +199,7 @@ func TestJSONLStoreSeqMonotonicAcrossReload(t *testing.T) {
 	}
 
 	// Reload; next Append should get Seq 3, not 1.
-	s2, _ := NewJSONL(path)
+	s2, _ := NewJSONL(dir)
 	defer s2.Close()
 	c, _ := s2.Append(floor.AppendOpts{SessionID: "sid", Event: newMemMsg("3")})
 	if c.Seq != 3 {

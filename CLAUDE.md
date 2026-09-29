@@ -38,7 +38,8 @@ cli/                          # Go module (github.com/openfloorcontrol/ofc)
     furniture_observable.go   # Furniture wrapper that emits FurnitureUpdated events
     run_once.go               # RunOnce helper (used by eval/)
   floor/sessionstore/         # File/DB-backed SessionStore implementations
-    jsonl.go                  # JSONLStore: append-only file + in-memory mirror, crash-recovery
+    jsonl.go                  # JSONLStore: directory of <sessionID>.jsonl files + in-memory mirror, crash-recovery
+    postgres.go               # PostgresStore (+ postgres_migrations/)
   floor/agents/               # LLMAgent + ACPAgent — implement floor.Agent through floor.AgentTurn
   frontend/                   # CLI / TUI / JSON frontends (composition layer)
     cli.go                    # CLIFrontend: stdin/stdout, unified event loop

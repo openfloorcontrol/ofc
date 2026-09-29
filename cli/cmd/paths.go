@@ -1,9 +1,13 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/openfloorcontrol/ofc/floor"
+	"github.com/openfloorcontrol/ofc/floor/sessionstore"
 )
 
 // defaultSessionsDir returns the directory where session JSONL files live
@@ -24,24 +28,35 @@ func defaultSessionsDir() (string, error) {
 	return filepath.Join(home, ".ofc", "sessions"), nil
 }
 
-// ensureSessionsDir resolves defaultSessionsDir and creates it if missing.
-func ensureSessionsDir() (string, error) {
-	dir, err := defaultSessionsDir()
-	if err != nil {
-		return "", err
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", fmt.Errorf("create sessions dir %s: %w", dir, err)
-	}
-	return dir, nil
+// sessionStore is a floor.SessionStore that holds resources (files, a
+// DB pool) the caller must release.
+type sessionStore interface {
+	floor.SessionStore
+	Close() error
 }
 
-// sessionPath returns the file path for a session with the given UUID
-// in the default sessions directory.
-func sessionPath(sessionID string) (string, error) {
-	dir, err := ensureSessionsDir()
-	if err != nil {
-		return "", err
+// openSessionStore opens the configured backend: Postgres if --db or
+// $OFC_DATABASE_URL is set, otherwise the JSONL sessions directory.
+// Returns a short label for the backend, for display.
+func openSessionStore() (sessionStore, string, error) {
+	dsn := dbDSN
+	if dsn == "" {
+		dsn = os.Getenv("OFC_DATABASE_URL")
 	}
-	return filepath.Join(dir, sessionID+".jsonl"), nil
+	if dsn != "" {
+		pg, err := sessionstore.OpenPostgres(context.Background(), dsn)
+		if err != nil {
+			return nil, "", fmt.Errorf("session store: %w", err)
+		}
+		return pg, "postgres", nil
+	}
+	dir, err := defaultSessionsDir()
+	if err != nil {
+		return nil, "", err
+	}
+	jl, err := sessionstore.NewJSONL(dir)
+	if err != nil {
+		return nil, "", fmt.Errorf("session store: %w", err)
+	}
+	return jl, "jsonl", nil
 }

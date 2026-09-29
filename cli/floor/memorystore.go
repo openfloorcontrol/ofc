@@ -204,6 +204,53 @@ func (m *MemoryStore) GetMeta(sessionID string) (SessionMeta, error) {
 	return *s.meta, nil
 }
 
+// List implements SessionStore.
+func (m *MemoryStore) List() ([]SessionInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	infos := make([]SessionInfo, 0, len(m.sessions))
+	for id, s := range m.sessions {
+		infos = append(infos, s.info(id))
+	}
+	SortSessionInfos(infos)
+	return infos, nil
+}
+
+// Info summarizes one session; ok is false if the store holds nothing
+// for it. Used by JSONLStore to list sessions one file at a time.
+func (m *MemoryStore) Info(sessionID string) (info SessionInfo, ok bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.sessions[sessionID]
+	if !ok {
+		return SessionInfo{}, false
+	}
+	return s.info(sessionID), true
+}
+
+func (s *memSession) info(id string) SessionInfo {
+	info := SessionInfo{ID: id, EventCount: len(s.events)}
+	if s.meta != nil {
+		meta := *s.meta
+		info.Meta = &meta
+	}
+	if n := len(s.events); n > 0 {
+		info.LastActivity = s.events[n-1].Time
+	}
+	return info
+}
+
+// Delete implements SessionStore.
+func (m *MemoryStore) Delete(sessionID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.sessions[sessionID]; !ok {
+		return ErrSessionNotFound
+	}
+	delete(m.sessions, sessionID)
+	return nil
+}
+
 // matches checks whether an event satisfies the filter.
 func matches(ev StoredEvent, f EventFilter) bool {
 	if f.RoomID != "" && ev.RoomID != f.RoomID {

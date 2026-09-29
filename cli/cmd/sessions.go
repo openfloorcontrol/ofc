@@ -2,14 +2,13 @@ package cmd
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/openfloorcontrol/ofc/floor"
-	"github.com/openfloorcontrol/ofc/floor/sessionstore"
 	"github.com/spf13/cobra"
 )
 
@@ -20,112 +19,57 @@ var (
 var sessionsCmd = &cobra.Command{
 	Use:   "sessions",
 	Short: "Manage persisted sessions",
-	Long:  `List, show, and remove sessions stored under ~/.ofc/sessions (or $OFC_SESSIONS_DIR).`,
+	Long: `List, show, and remove sessions in the session store: Postgres if --db or
+$OFC_DATABASE_URL is set, otherwise ~/.ofc/sessions (or $OFC_SESSIONS_DIR).`,
 }
 
 var sessionsLsCmd = &cobra.Command{
 	Use:   "ls",
-	Short: "List sessions in the default sessions directory",
+	Short: "List sessions, most recently active first",
 	Run: func(cmd *cobra.Command, args []string) {
-		dir, err := defaultSessionsDir()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			if os.IsNotExist(err) {
-				fmt.Println("No sessions yet.")
-				return
-			}
-			fmt.Fprintf(os.Stderr, "Error reading %s: %v\n", dir, err)
-			os.Exit(1)
-		}
+		store := mustOpenSessionStore()
+		defer store.Close()
 
-		type sessionRow struct {
-			id        string
-			path      string
-			info      os.FileInfo
-			mtime     int64
-			blueprint string // from meta if present, "" if unknown
-			cwdShort  string // last path segment for compactness
+		infos, err := store.List()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error listing sessions: %v\n", err)
+			os.Exit(1)
 		}
-		var rows []sessionRow
-		for _, e := range entries {
-			if e.IsDir() {
-				continue
-			}
-			name := e.Name()
-			if !strings.HasSuffix(name, ".jsonl") {
-				continue
-			}
-			id := strings.TrimSuffix(name, ".jsonl")
-			info, err := e.Info()
-			if err != nil {
-				continue
-			}
-			row := sessionRow{
-				id:    id,
-				path:  filepath.Join(dir, name),
-				info:  info,
-				mtime: info.ModTime().Unix(),
-			}
-			// Best-effort: read meta to enrich the listing. Skip on error.
-			if meta, err := readSessionMeta(row.path); err == nil {
-				row.blueprint = meta.BlueprintName
-				row.cwdShort = shortCWD(meta.CWD)
-			}
-			rows = append(rows, row)
-		}
-		if len(rows) == 0 {
+		if len(infos) == 0 {
 			fmt.Println("No sessions yet.")
 			return
 		}
 
-		// Sort newest first
-		sort.Slice(rows, func(i, j int) bool { return rows[i].mtime > rows[j].mtime })
-
-		// Tab-style columns. Header + rows.
 		// Truncate UUID to 8 chars for readability — full UUID still works as input.
-		fmt.Printf("%-8s  %-19s  %-8s  %-20s  %s\n", "UUID", "LAST MODIFIED", "SIZE", "BLUEPRINT", "CWD")
-		for _, r := range rows {
-			bp := r.blueprint
-			if bp == "" {
-				bp = "-"
+		fmt.Printf("%-8s  %-19s  %6s  %-20s  %s\n", "UUID", "LAST ACTIVITY", "EVENTS", "BLUEPRINT", "CWD")
+		for _, info := range infos {
+			last := "-"
+			if !info.LastActivity.IsZero() {
+				last = info.LastActivity.Local().Format("2006-01-02 15:04:05")
 			}
-			cwd := r.cwdShort
-			if cwd == "" {
-				cwd = "-"
+			bp, cwd := "-", "-"
+			if info.Meta != nil {
+				if info.Meta.BlueprintName != "" {
+					bp = info.Meta.BlueprintName
+				}
+				if info.Meta.CWD != "" {
+					cwd = shortCWD(info.Meta.CWD)
+				}
 			}
-			fmt.Printf("%-8s  %-19s  %-8s  %-20s  %s\n",
-				r.id[:8],
-				r.info.ModTime().Format("2006-01-02 15:04:05"),
-				humanSize(r.info.Size()),
-				truncate(bp, 20),
-				cwd)
+			fmt.Printf("%-8s  %-19s  %6d  %-20s  %s\n",
+				info.ID[:min(8, len(info.ID))], last, info.EventCount, truncate(bp, 20), cwd)
 		}
 	},
 }
 
 var sessionsRmCmd = &cobra.Command{
 	Use:   "rm <uuid>",
-	Short: "Remove a session file",
+	Short: "Remove a session",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		id := args[0]
-		path, err := sessionPath(id)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-		if _, err := os.Stat(path); err != nil {
-			if os.IsNotExist(err) {
-				fmt.Fprintf(os.Stderr, "Session %s not found\n", id)
-				os.Exit(1)
-			}
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
+		store := mustOpenSessionStore()
+		defer store.Close()
 
 		if !rmForce {
 			fmt.Printf("Delete session %s? [y/N] ", id)
@@ -138,8 +82,12 @@ var sessionsRmCmd = &cobra.Command{
 			}
 		}
 
-		if err := os.Remove(path); err != nil {
-			fmt.Fprintf(os.Stderr, "Error deleting %s: %v\n", path, err)
+		if err := store.Delete(id); err != nil {
+			if errors.Is(err, floor.ErrSessionNotFound) {
+				fmt.Fprintf(os.Stderr, "Session %s not found\n", id)
+			} else {
+				fmt.Fprintf(os.Stderr, "Error deleting session %s: %v\n", id, err)
+			}
 			os.Exit(1)
 		}
 		fmt.Printf("Deleted %s\n", id)
@@ -152,32 +100,27 @@ var sessionsShowCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		id := args[0]
-		path, err := sessionPath(id)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-		if _, err := os.Stat(path); err != nil {
-			if os.IsNotExist(err) {
-				fmt.Fprintf(os.Stderr, "Session %s not found\n", id)
-				os.Exit(1)
-			}
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-
-		store, err := sessionstore.NewJSONL(path)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error opening store: %v\n", err)
-			os.Exit(1)
-		}
+		store := mustOpenSessionStore()
 		defer store.Close()
+
+		meta, metaErr := store.GetMeta(id)
+		if metaErr != nil && !errors.Is(metaErr, floor.ErrNoSessionMeta) {
+			fmt.Fprintf(os.Stderr, "Error reading session meta: %v\n", metaErr)
+			os.Exit(1)
+		}
+		events, err := store.Read(id, floor.EventFilter{})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading session: %v\n", err)
+			os.Exit(1)
+		}
+		if metaErr != nil && len(events) == 0 {
+			fmt.Fprintf(os.Stderr, "Session %s not found\n", id)
+			os.Exit(1)
+		}
 
 		fmt.Printf("# Session %s\n\n", id)
 
-		// Print meta header if recorded. The on-disk UUID *is* the
-		// session id — both the filename and the records inside use it.
-		if meta, err := store.GetMeta(id); err == nil {
+		if metaErr == nil {
 			fmt.Printf("- **Blueprint**: %s\n", meta.BlueprintName)
 			if meta.BlueprintPath != "" {
 				fmt.Printf("- **Blueprint path**: %s\n", meta.BlueprintPath)
@@ -192,12 +135,6 @@ var sessionsShowCmd = &cobra.Command{
 				fmt.Printf("- **ofc version**: %s\n", meta.OfcVersion)
 			}
 			fmt.Println()
-		}
-
-		events, err := store.Read(id, floor.EventFilter{})
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error reading session: %v\n", err)
-			os.Exit(1)
 		}
 
 		if len(events) == 0 {
@@ -215,19 +152,14 @@ var sessionsShowCmd = &cobra.Command{
 	},
 }
 
-// readSessionMeta opens a JSONL store at the given path, fetches the
-// stored meta (if any), and closes. Used by `ofc sessions ls` to enrich
-// the listing without loading the full session into memory long-term.
-// The session UUID is taken from the file's basename (path/<uuid>.jsonl).
-func readSessionMeta(path string) (floor.SessionMeta, error) {
-	store, err := sessionstore.NewJSONL(path)
+// mustOpenSessionStore opens the configured store or exits.
+func mustOpenSessionStore() sessionStore {
+	store, _, err := openSessionStore()
 	if err != nil {
-		return floor.SessionMeta{}, err
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
 	}
-	defer store.Close()
-	base := filepath.Base(path)
-	sid := strings.TrimSuffix(base, filepath.Ext(base))
-	return store.GetMeta(sid)
+	return store
 }
 
 // shortCWD returns the last 2 path segments of a directory, prefixed
@@ -252,19 +184,4 @@ func truncate(s string, n int) string {
 		return "…"
 	}
 	return s[:n-1] + "…"
-}
-
-// humanSize formats a byte count as a short human-readable string.
-func humanSize(n int64) string {
-	const unit = 1024
-	if n < unit {
-		return fmt.Sprintf("%d B", n)
-	}
-	div, exp := int64(unit), 0
-	for x := n / unit; x >= unit; x /= unit {
-		div *= unit
-		exp++
-	}
-	suffix := "KMGTPE"[exp]
-	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), suffix)
 }

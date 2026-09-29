@@ -45,6 +45,7 @@ ofc ` + Version + ` (commit ` + Commit + `)
 	sessionsCmd.AddCommand(sessionsRmCmd)
 	sessionsCmd.AddCommand(sessionsShowCmd)
 	sessionsRmCmd.Flags().BoolVarP(&rmForce, "force", "f", false, "Skip confirmation prompt")
+	sessionsCmd.PersistentFlags().StringVar(&dbDSN, "db", "", "Postgres DSN for session storage (falls back to OFC_DATABASE_URL)")
 	rootCmd.AddCommand(sessionsCmd)
 }
 

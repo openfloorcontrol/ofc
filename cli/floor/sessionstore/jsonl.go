@@ -7,23 +7,30 @@ package sessionstore
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/openfloorcontrol/ofc/floor"
 )
 
-// JSONLStore persists session events to a JSON Lines file. Each Append
-// writes one event line plus one ref line per agent in VisibleTo (all
-// flushed to disk before returning). Clear writes a clear-record so
-// reload reapplies the deletion.
+// JSONLStore persists sessions as JSON Lines files in a directory, one
+// file per session: <dir>/<sessionID>.jsonl. The filename is the session
+// ID; the session_id field inside records is written for readability but
+// ignored on load.
 //
-// Reads go to an in-memory mirror (a floor.MemoryStore) so they're fast;
-// the file is write-only at runtime. On startup, the file is replayed
-// into the mirror.
+// Each Append writes one event line plus one ref line per agent in
+// VisibleTo (all flushed to disk before returning). Clear writes a
+// clear-record so reload reapplies the deletion.
+//
+// Reads go to an in-memory mirror (a floor.MemoryStore). A session's
+// file is replayed into the mirror the first time the session is
+// touched; files are only created on the first write.
 //
 // File format: one JSON object per line. Four record kinds:
 //
@@ -33,40 +40,36 @@ import (
 //	{"kind":"clear","session_id":"...","filter":{"room_id":"#main"}}
 //	{"kind":"meta","session_id":"...","meta":{...}}
 type JSONLStore struct {
-	mu   sync.Mutex
-	path string
-	file *os.File
-	mem  *floor.MemoryStore
+	mu     sync.Mutex
+	dir    string
+	mem    *floor.MemoryStore
+	loaded map[string]bool     // sessions replayed into mem
+	files  map[string]*os.File // append handles, opened on first write
 }
 
-// NewJSONL opens (or creates) the given path, replays existing records
-// into an in-memory mirror, then opens the file for appending.
-func NewJSONL(path string) (*JSONLStore, error) {
-	s := &JSONLStore{
-		path: path,
-		mem:  floor.NewMemoryStore(),
+// NewJSONL opens a store over dir, creating the directory if needed.
+func NewJSONL(dir string) (*JSONLStore, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, fmt.Errorf("create sessions dir %s: %w", dir, err)
 	}
-	if err := s.load(); err != nil {
-		return nil, fmt.Errorf("load %s: %w", path, err)
-	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return nil, fmt.Errorf("open %s for append: %w", path, err)
-	}
-	s.file = f
-	return s, nil
+	return &JSONLStore{
+		dir:    dir,
+		mem:    floor.NewMemoryStore(),
+		loaded: make(map[string]bool),
+		files:  make(map[string]*os.File),
+	}, nil
 }
 
-// Close closes the underlying file. Safe to call multiple times.
+// Close closes all open session files. Safe to call multiple times.
 func (s *JSONLStore) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.file == nil {
-		return nil
+	var errs []error
+	for sid, f := range s.files {
+		errs = append(errs, f.Close())
+		delete(s.files, sid)
 	}
-	err := s.file.Close()
-	s.file = nil
-	return err
+	return errors.Join(errs...)
 }
 
 // --- SessionStore implementation ---
@@ -76,6 +79,10 @@ func (s *JSONLStore) Close() error {
 func (s *JSONLStore) Append(opts floor.AppendOpts) (floor.StoredEvent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if err := s.ensureLoaded(opts.SessionID); err != nil {
+		return floor.StoredEvent{}, err
+	}
 
 	// Append to the in-memory mirror first to get Seq + Time assigned.
 	stored, err := s.mem.Append(opts)
@@ -122,7 +129,7 @@ func (s *JSONLStore) Append(opts floor.AppendOpts) (floor.StoredEvent, error) {
 		records = append(records, rrLine)
 	}
 
-	if err := s.writeAndSync(records); err != nil {
+	if err := s.writeAndSync(opts.SessionID, records); err != nil {
 		return stored, err
 	}
 	return stored, nil
@@ -132,6 +139,9 @@ func (s *JSONLStore) Append(opts floor.AppendOpts) (floor.StoredEvent, error) {
 func (s *JSONLStore) Read(sessionID string, filter floor.EventFilter) ([]floor.StoredEvent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.ensureLoaded(sessionID); err != nil {
+		return nil, err
+	}
 	return s.mem.Read(sessionID, filter)
 }
 
@@ -139,6 +149,9 @@ func (s *JSONLStore) Read(sessionID string, filter floor.EventFilter) ([]floor.S
 func (s *JSONLStore) ReadForAgent(sessionID, agentID string, filter floor.EventFilter) ([]floor.StoredEvent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.ensureLoaded(sessionID); err != nil {
+		return nil, err
+	}
 	return s.mem.ReadForAgent(sessionID, agentID, filter)
 }
 
@@ -149,6 +162,9 @@ func (s *JSONLStore) SetMeta(sessionID string, meta floor.SessionMeta) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if err := s.ensureLoaded(sessionID); err != nil {
+		return err
+	}
 	rec := metaRecord{
 		Kind:      "meta",
 		SessionID: sessionID,
@@ -158,7 +174,7 @@ func (s *JSONLStore) SetMeta(sessionID string, meta floor.SessionMeta) error {
 	if err != nil {
 		return fmt.Errorf("marshal meta record: %w", err)
 	}
-	if err := s.writeAndSync([][]byte{line}); err != nil {
+	if err := s.writeAndSync(sessionID, [][]byte{line}); err != nil {
 		return err
 	}
 	return s.mem.SetMeta(sessionID, meta)
@@ -168,6 +184,9 @@ func (s *JSONLStore) SetMeta(sessionID string, meta floor.SessionMeta) error {
 func (s *JSONLStore) GetMeta(sessionID string) (floor.SessionMeta, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.ensureLoaded(sessionID); err != nil {
+		return floor.SessionMeta{}, err
+	}
 	return s.mem.GetMeta(sessionID)
 }
 
@@ -176,6 +195,9 @@ func (s *JSONLStore) Clear(sessionID string, filter floor.EventFilter) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if err := s.ensureLoaded(sessionID); err != nil {
+		return err
+	}
 	cr := clearRecord{
 		Kind:      "clear",
 		SessionID: sessionID,
@@ -185,10 +207,126 @@ func (s *JSONLStore) Clear(sessionID string, filter floor.EventFilter) error {
 	if err != nil {
 		return fmt.Errorf("marshal clear record: %w", err)
 	}
-	if err := s.writeAndSync([][]byte{line}); err != nil {
+	if err := s.writeAndSync(sessionID, [][]byte{line}); err != nil {
 		return err
 	}
 	return s.mem.Clear(sessionID, filter)
+}
+
+// List summarizes every *.jsonl file in the directory. Sessions not yet
+// loaded are replayed into a scratch store and not kept in memory.
+func (s *JSONLStore) List() ([]floor.SessionInfo, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return nil, fmt.Errorf("read sessions dir %s: %w", s.dir, err)
+	}
+	var infos []floor.SessionInfo
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".jsonl") {
+			continue
+		}
+		sid := strings.TrimSuffix(name, ".jsonl")
+		src := s.mem
+		if !s.loaded[sid] {
+			src = floor.NewMemoryStore()
+			if err := replay(filepath.Join(s.dir, name), sid, src); err != nil {
+				return nil, fmt.Errorf("load session %s: %w", sid, err)
+			}
+		}
+		info, ok := src.Info(sid)
+		if !ok {
+			info = floor.SessionInfo{ID: sid} // file without any records
+		}
+		infos = append(infos, info)
+	}
+	floor.SortSessionInfos(infos)
+	return infos, nil
+}
+
+// Delete closes and removes the session's file and drops it from the
+// mirror.
+func (s *JSONLStore) Delete(sessionID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	path, err := s.path(sessionID)
+	if err != nil {
+		return err
+	}
+	if f, ok := s.files[sessionID]; ok {
+		f.Close()
+		delete(s.files, sessionID)
+	}
+	if s.loaded[sessionID] {
+		delete(s.loaded, sessionID)
+		_ = s.mem.Delete(sessionID) // absent if the file held no records
+	}
+	if err := os.Remove(path); err != nil {
+		if os.IsNotExist(err) {
+			return floor.ErrSessionNotFound
+		}
+		return fmt.Errorf("delete session %s: %w", sessionID, err)
+	}
+	return nil
+}
+
+// --- File handling ---
+
+// path returns the file for a session. Session IDs become filenames, so
+// anything that could escape the directory is rejected.
+func (s *JSONLStore) path(sessionID string) (string, error) {
+	if sessionID == "" || strings.ContainsAny(sessionID, `/\`) || strings.HasPrefix(sessionID, ".") {
+		return "", fmt.Errorf("invalid session ID %q", sessionID)
+	}
+	return filepath.Join(s.dir, sessionID+".jsonl"), nil
+}
+
+// ensureLoaded replays the session's file into the mirror on first use.
+// Must be called with s.mu held.
+func (s *JSONLStore) ensureLoaded(sessionID string) error {
+	if s.loaded[sessionID] {
+		return nil
+	}
+	path, err := s.path(sessionID)
+	if err != nil {
+		return err
+	}
+	if err := replay(path, sessionID, s.mem); err != nil {
+		return fmt.Errorf("load %s: %w", path, err)
+	}
+	s.loaded[sessionID] = true
+	return nil
+}
+
+// writeAndSync appends each record followed by '\n' to the session's
+// file, opening (and creating) it on first write, then fsyncs.
+// Must be called with s.mu held.
+func (s *JSONLStore) writeAndSync(sessionID string, records [][]byte) error {
+	f, ok := s.files[sessionID]
+	if !ok {
+		path, err := s.path(sessionID)
+		if err != nil {
+			return err
+		}
+		f, err = os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			return fmt.Errorf("open %s for append: %w", path, err)
+		}
+		s.files[sessionID] = f
+	}
+	for _, r := range records {
+		if _, err := f.Write(r); err != nil {
+			return fmt.Errorf("write record: %w", err)
+		}
+		if _, err := f.Write([]byte{'\n'}); err != nil {
+			return fmt.Errorf("write newline: %w", err)
+		}
+	}
+	return f.Sync()
 }
 
 // --- Disk format ---
@@ -229,28 +367,14 @@ type metaRecord struct {
 	Meta      floor.SessionMeta `json:"meta"`
 }
 
-// writeAndSync writes each record followed by '\n', then fsyncs.
-// Must be called with s.mu held.
-func (s *JSONLStore) writeAndSync(records [][]byte) error {
-	for _, r := range records {
-		if _, err := s.file.Write(r); err != nil {
-			return fmt.Errorf("write record: %w", err)
-		}
-		if _, err := s.file.Write([]byte{'\n'}); err != nil {
-			return fmt.Errorf("write newline: %w", err)
-		}
-	}
-	return s.file.Sync()
-}
-
-// load replays the file into the in-memory mirror. Tolerates a
-// truncated final line (treats it as if the crashed Append never
-// happened).
-func (s *JSONLStore) load() error {
-	f, err := os.Open(s.path)
+// replay loads the file at path into mem under sessionID. A missing
+// file loads nothing. Tolerates a truncated final line (treats it as if
+// the crashed Append never happened).
+func replay(path, sessionID string, mem *floor.MemoryStore) error {
+	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil // no file yet, mirror stays empty
+			return nil
 		}
 		return err
 	}
@@ -282,7 +406,7 @@ func (s *JSONLStore) load() error {
 				return fmt.Errorf("decode event payload (seq %d): %w", er.Seq, err)
 			}
 			// Append directly into the mirror, preserving Seq + Time.
-			s.mem.AppendRaw(er.SessionID, floor.StoredEvent{
+			mem.AppendRaw(sessionID, floor.StoredEvent{
 				Seq:     er.Seq,
 				Time:    er.Time,
 				RoomID:  er.RoomID,
@@ -294,19 +418,19 @@ func (s *JSONLStore) load() error {
 			if err := json.Unmarshal(line, &rr); err != nil {
 				break
 			}
-			s.mem.AddRef(rr.SessionID, rr.AgentID, rr.EventSeq)
+			mem.AddRef(sessionID, rr.AgentID, rr.EventSeq)
 		case "clear":
 			var cr clearRecord
 			if err := json.Unmarshal(line, &cr); err != nil {
 				break
 			}
-			_ = s.mem.Clear(cr.SessionID, cr.Filter)
+			_ = mem.Clear(sessionID, cr.Filter)
 		case "meta":
 			var mr metaRecord
 			if err := json.Unmarshal(line, &mr); err != nil {
 				break
 			}
-			_ = s.mem.SetMeta(mr.SessionID, mr.Meta)
+			_ = mem.SetMeta(sessionID, mr.Meta)
 		default:
 			// Unknown record kind — skip (forward compat)
 		}

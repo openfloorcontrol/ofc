@@ -268,6 +268,69 @@ func (s *PostgresStore) GetMeta(sessionID string) (floor.SessionMeta, error) {
 	return meta, nil
 }
 
+// List returns one entry per session row, with event count and newest
+// event time aggregated from events.
+func (s *PostgresStore) List() ([]floor.SessionInfo, error) {
+	rows, err := s.db.QueryContext(context.Background(),
+		`SELECT s.id, s.meta, count(e.id), max(e.time)
+		 FROM sessions s LEFT JOIN events e ON e.session_id = s.id
+		 GROUP BY s.id
+		 ORDER BY max(e.time) DESC NULLS LAST, s.id`)
+	if err != nil {
+		return nil, fmt.Errorf("list sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var infos []floor.SessionInfo
+	for rows.Next() {
+		var (
+			info floor.SessionInfo
+			raw  []byte
+			last sql.NullTime
+		)
+		if err := rows.Scan(&info.ID, &raw, &info.EventCount, &last); err != nil {
+			return nil, fmt.Errorf("scan session: %w", err)
+		}
+		if len(raw) > 0 {
+			var meta floor.SessionMeta
+			if err := json.Unmarshal(raw, &meta); err != nil {
+				return nil, fmt.Errorf("unmarshal meta of %s: %w", info.ID, err)
+			}
+			info.Meta = &meta
+		}
+		if last.Valid {
+			info.LastActivity = last.Time
+		}
+		infos = append(infos, info)
+	}
+	return infos, rows.Err()
+}
+
+// Delete removes the session row and its events; event_refs cascade.
+func (s *PostgresStore) Delete(sessionID string) error {
+	ctx := context.Background()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	evRes, err := tx.ExecContext(ctx, `DELETE FROM events WHERE session_id = $1`, sessionID)
+	if err != nil {
+		return fmt.Errorf("delete events: %w", err)
+	}
+	sesRes, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE id = $1`, sessionID)
+	if err != nil {
+		return fmt.Errorf("delete session: %w", err)
+	}
+	evN, _ := evRes.RowsAffected()
+	sesN, _ := sesRes.RowsAffected()
+	if evN == 0 && sesN == 0 {
+		return floor.ErrSessionNotFound
+	}
+	return tx.Commit()
+}
+
 // --- helpers ---
 
 // buildEventWhere assembles WHERE conditions and matching $N args for

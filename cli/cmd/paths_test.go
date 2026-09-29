@@ -3,7 +3,6 @@ package cmd
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -31,40 +30,20 @@ func TestDefaultSessionsDirFallback(t *testing.T) {
 	}
 }
 
-func TestSessionPathConstruction(t *testing.T) {
-	dir := t.TempDir()
+func TestOpenSessionStoreDefaultsToJSONLDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "sessions")
 	t.Setenv("OFC_SESSIONS_DIR", dir)
+	t.Setenv("OFC_DATABASE_URL", "")
 
-	path, err := sessionPath("abc-123")
+	store, label, err := openSessionStore()
 	if err != nil {
-		t.Fatalf("sessionPath: %v", err)
+		t.Fatalf("openSessionStore: %v", err)
 	}
-	want := filepath.Join(dir, "abc-123.jsonl")
-	if path != want {
-		t.Errorf("expected %q, got %q", want, path)
+	defer store.Close()
+	if label != "jsonl" {
+		t.Errorf("expected jsonl backend, got %q", label)
 	}
-
-	// ensureSessionsDir should have created the directory.
 	if _, err := os.Stat(dir); err != nil {
 		t.Errorf("sessions dir not created: %v", err)
-	}
-}
-
-func TestHumanSize(t *testing.T) {
-	cases := []struct {
-		n    int64
-		want string
-	}{
-		{0, "0 B"},
-		{512, "512 B"},
-		{1024, "1.0 KiB"},
-		{1536, "1.5 KiB"},
-		{1024 * 1024, "1.0 MiB"},
-	}
-	for _, c := range cases {
-		got := humanSize(c.n)
-		if !strings.Contains(got, strings.Split(c.want, " ")[1]) {
-			t.Errorf("humanSize(%d): expected %q, got %q", c.n, c.want, got)
-		}
 	}
 }
