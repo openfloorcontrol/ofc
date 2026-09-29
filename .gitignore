@@ -37,6 +37,10 @@ dist/
 !site/*.html
 !history/**/*.html
 
+# Web UI bundle, embedded into the binary by cli/webui (built by `make web`)
+cli/webui/dist/*
+!cli/webui/dist/.gitkeep
+
 # Old runner (superseded by ofc CLI)
 run.py
 .env

@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 
@@ -71,7 +69,8 @@ type Floor struct {
 	defaultSessionUUID string
 
 	ListenAddr   string // API server listen address (default ":0" for auto)
-	ServeWebDist bool   // serve web/dist/ as static files
+	WebMode      bool   // bind to localhost, print the tokenized web UI URL, serve WebUI
+	WebUI        fs.FS  // static web UI files; nil if the binary was built without them
 	ExternalURL  string // override base URL in printed web UI link (for reverse proxies)
 	DebugFunc    func(string)
 	LogWriter    io.Writer
@@ -176,7 +175,7 @@ func joinAgentIDs(ids []string, exclude string) string {
 //
 // The caller must assign f.APIServer (e.g. via api.New() from the
 // top-level api/ package) before calling Start. If running in web mode
-// (ServeWebDist), the caller is also responsible for setting an auth
+// (WebMode), the caller is also responsible for setting an auth
 // token on the server beforehand — floor itself doesn't import api/
 // and so can't construct one.
 func (f *Floor) Start(renderInfo func(string)) error {
@@ -212,14 +211,13 @@ func (f *Floor) Start(renderInfo func(string)) error {
 		renderInfo(fmt.Sprintf("Sandbox ready (%s)", f.Sandbox.ContainerID[:12]))
 	}
 
-	// 3. Serve web dist if enabled
-	if f.ServeWebDist {
-		webDir := findWebDist()
-		if webDir != nil {
-			f.APIServer.ServeStaticWeb(webDir)
+	// 3. Serve the web UI if enabled
+	if f.WebMode {
+		if f.WebUI != nil {
+			f.APIServer.ServeStaticWeb(f.WebUI)
 			renderInfo("Web UI static files registered")
 		} else {
-			renderInfo("Warning: web/dist/ not found, web UI will not be served")
+			renderInfo("Warning: web UI not built into this binary (run `make web` before building); only the API is served")
 		}
 	}
 
@@ -232,7 +230,7 @@ func (f *Floor) Start(renderInfo func(string)) error {
 		listenAddr = ":0"
 	}
 	// Bind to localhost by default for security (token-authenticated API)
-	if f.ServeWebDist && !strings.Contains(listenAddr, "127.0.0.1") && !strings.Contains(listenAddr, "localhost") {
+	if f.WebMode && !strings.Contains(listenAddr, "127.0.0.1") && !strings.Contains(listenAddr, "localhost") {
 		if strings.HasPrefix(listenAddr, ":") {
 			listenAddr = "127.0.0.1" + listenAddr
 		}
@@ -241,7 +239,7 @@ func (f *Floor) Start(renderInfo func(string)) error {
 		return fmt.Errorf("failed to start API server: %w", err)
 	}
 	renderInfo(fmt.Sprintf("API server at %s", f.APIServer.BaseURL()))
-	if f.ServeWebDist {
+	if f.WebMode {
 		baseURL := f.APIServer.BaseURL()
 		if f.ExternalURL != "" {
 			baseURL = strings.TrimSuffix(f.ExternalURL, "/")
@@ -495,25 +493,5 @@ func createFurniture(ctx context.Context, fd blueprint.FurnitureDef, bpDir strin
 	default:
 		return nil, fmt.Errorf("unknown furniture type %q", fd.Type)
 	}
-}
-
-// findWebDist locates the web/dist/ directory relative to the executable.
-// Tries: ./web/dist, then relative to the executable binary.
-func findWebDist() fs.FS {
-	// Try relative to cwd first
-	if info, err := os.Stat("web/dist"); err == nil && info.IsDir() {
-		return os.DirFS("web/dist")
-	}
-
-	// Try relative to executable
-	exe, err := os.Executable()
-	if err == nil {
-		dir := filepath.Join(filepath.Dir(exe), "..", "web", "dist")
-		if info, err := os.Stat(dir); err == nil && info.IsDir() {
-			return os.DirFS(dir)
-		}
-	}
-
-	return nil
 }
 

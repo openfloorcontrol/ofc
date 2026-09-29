@@ -125,7 +125,7 @@ func (s *Server) RegisterFurniture(floorID, name string, mcpSrv *mcp.Server) {
 	s.echo.Any(ssePath+"/", echo.WrapHandler(sseHandler))
 }
 
-// ServeStaticWeb serves the web/dist/ directory as static files with SPA fallback.
+// ServeStaticWeb serves the web UI as static files with SPA fallback.
 func (s *Server) ServeStaticWeb(webFS fs.FS) {
 	indexHTML, err := fs.ReadFile(webFS, "index.html")
 	if err != nil {

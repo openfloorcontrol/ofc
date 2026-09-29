@@ -18,6 +18,7 @@ import (
 	"github.com/openfloorcontrol/ofc/api"
 	"github.com/openfloorcontrol/ofc/frontend"
 	"github.com/openfloorcontrol/ofc/floor/sessionstore"
+	"github.com/openfloorcontrol/ofc/webui"
 	"github.com/spf13/cobra"
 )
 
@@ -143,7 +144,8 @@ func runCLI(bp *blueprint.Blueprint, initialPrompt string) {
 
 	if useWeb {
 		f.ListenAddr = fmt.Sprintf(":%d", webPort)
-		f.ServeWebDist = true
+		f.WebMode = true
+		f.WebUI = webui.FS()
 		f.ExternalURL = webHostname
 		fe.Headless = true
 	}
@@ -258,7 +260,7 @@ func init() {
 	runCmd.Flags().BoolVar(&debug, "debug", false, "Enable debug output")
 	runCmd.Flags().StringVar(&logFile, "log", "", "Log output to file (plain text, no colors)")
 	runCmd.Flags().BoolVar(&useTUI, "tui", false, "Use terminal UI with split layout")
-	runCmd.Flags().BoolVar(&useWeb, "web", false, "Enable web UI (serves web/dist/ on --port)")
+	runCmd.Flags().BoolVar(&useWeb, "web", false, "Enable web UI (served on --port)")
 	runCmd.Flags().IntVar(&webPort, "port", 8080, "Port for web UI (used with --web)")
 	runCmd.Flags().StringVar(&webHostname, "hostname", "", "External URL for web UI (e.g. https://myhost.dev), overrides localhost in printed URL")
 	runCmd.Flags().BoolVar(&useJSON, "json", false, "Output events as JSONL to stdout")

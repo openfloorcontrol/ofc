@@ -4,6 +4,10 @@ import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
   plugins: [vue(), tailwindcss()],
+  build: {
+    outDir: '../cli/webui/dist',
+    emptyOutDir: true,
+  },
   server: {
     proxy: {
       '/api': {

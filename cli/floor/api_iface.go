@@ -34,7 +34,7 @@ type APIServer interface {
 	// SSE) for one furniture instance.
 	RegisterFurniture(floorID, name string, mcpSrv *mcp.Server)
 
-	// ServeStaticWeb serves web/dist as static files with SPA fallback.
+	// ServeStaticWeb serves the web UI as static files with SPA fallback.
 	ServeStaticWeb(webFS fs.FS)
 
 	// Start binds the listener and begins serving in a background
