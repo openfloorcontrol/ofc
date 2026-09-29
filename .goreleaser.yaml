@@ -6,7 +6,8 @@ version: 2
 
 before:
   hooks:
-    - cd cli && go mod tidy
+    - sh -c "cd cli && go mod tidy"
+    - sh -c "cd web && npm ci && npm run build"
 
 builds:
   - id: ofc
