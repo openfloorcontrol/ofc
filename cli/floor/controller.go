@@ -155,6 +155,9 @@ func (c *Controller) nextRecipient(lastMsg ChatMessage, excluded map[string]bool
 		if excluded[agent.ID] || c.RoomBound[agent.ID] {
 			continue
 		}
+		if agent.Activation == "never" {
+			continue
+		}
 		for _, m := range mentions {
 			if m == agent.ID && m != lastMsg.From {
 				c.CallStack = append(c.CallStack, Frame{
