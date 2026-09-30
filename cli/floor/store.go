@@ -69,6 +69,18 @@ var ErrNoSessionMeta = errors.New("no session metadata recorded")
 // for the session.
 var ErrSessionNotFound = errors.New("session not found")
 
+// ErrNoAgentState is returned by GetAgentState when nothing was recorded
+// for the agent in the session.
+var ErrNoAgentState = errors.New("no agent state recorded")
+
+// AgentState is what an external agent needs to pick up a session where
+// it left off. It lives beside the conversation, not in it: Read and
+// ReadForAgent never return it.
+type AgentState struct {
+	ACPSessionID string `json:"acp_session_id"` // the agent's own session, for session/resume
+	SentSeq      uint64 `json:"sent_seq"`       // events up to this Seq have been sent to the agent
+}
+
 // SessionInfo summarizes one stored session for listings.
 type SessionInfo struct {
 	ID           string
@@ -125,9 +137,17 @@ type SessionStore interface {
 	// first; sessions without events come last, ordered by ID.
 	List() ([]SessionInfo, error)
 
-	// Delete removes the session: its events, visibility refs and meta.
-	// Returns ErrSessionNotFound if the store holds nothing for it.
+	// Delete removes the session: its events, visibility refs, meta and
+	// agent states. Returns ErrSessionNotFound if the store holds nothing
+	// for it.
 	Delete(sessionID string) error
+
+	// SetAgentState records (or replaces) an agent's state in a session.
+	SetAgentState(sessionID, agentID string, st AgentState) error
+
+	// GetAgentState returns the agent's state in the session, or
+	// ErrNoAgentState if none was recorded.
+	GetAgentState(sessionID, agentID string) (AgentState, error)
 }
 
 // SortSessionInfos orders sessions as List documents: most recent

@@ -2,6 +2,7 @@ package floor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,7 +36,7 @@ func (f *Floor) acpSubprocess(sessionID, agentID string) (*acpclient.Subprocess,
 	if sub, ok := f.acpSubprocesses[key]; ok {
 		return sub, nil
 	}
-	sub, err := f.spawnACPSubprocess(spec)
+	sub, err := f.spawnACPSubprocess(sessionID, spec)
 	if err != nil {
 		return nil, err
 	}
@@ -69,8 +70,10 @@ func (f *Floor) agentSpec(agentID string) (blueprint.Agent, bool) {
 }
 
 // spawnACPSubprocess launches an ACP agent process, performs the ACP
-// handshake, and opens an ACP session in it.
-func (f *Floor) spawnACPSubprocess(agent blueprint.Agent) (*acpclient.Subprocess, error) {
+// handshake, and opens the agent's ACP session for sessionID: it resumes
+// the ACP session recorded in the store, or creates one and records it.
+// Agents must support session/resume.
+func (f *Floor) spawnACPSubprocess(sessionID string, agent blueprint.Agent) (*acpclient.Subprocess, error) {
 	if agent.Command == "" {
 		return nil, fmt.Errorf("ACP agent %s has no command configured", agent.ID)
 	}
@@ -97,10 +100,33 @@ func (f *Floor) spawnACPSubprocess(agent blueprint.Agent) (*acpclient.Subprocess
 		sub.Close()
 		return nil, fmt.Errorf("failed to initialize ACP agent %s: %w", agent.ID, err)
 	}
-	mcpServers := f.buildACPMCPServers(agent, sub)
-	if err := sub.StartSession(ctx, workDir, mcpServers); err != nil {
+	if !sub.CanResume {
 		sub.Close()
-		return nil, fmt.Errorf("failed to create session for ACP agent %s: %w", agent.ID, err)
+		return nil, fmt.Errorf("ACP agent %s does not support session/resume, which ofc needs to continue its sessions", agent.ID)
+	}
+
+	st, err := f.Store.GetAgentState(sessionID, agent.ID)
+	if err != nil && !errors.Is(err, ErrNoAgentState) {
+		sub.Close()
+		return nil, fmt.Errorf("read state of ACP agent %s: %w", agent.ID, err)
+	}
+
+	mcpServers := f.buildACPMCPServers(agent, sub)
+	if st.ACPSessionID != "" {
+		if err := sub.ResumeSession(ctx, st.ACPSessionID, workDir, mcpServers); err != nil {
+			sub.Close()
+			return nil, fmt.Errorf("ACP agent %s: %w", agent.ID, err)
+		}
+	} else {
+		if err := sub.StartSession(ctx, workDir, mcpServers); err != nil {
+			sub.Close()
+			return nil, fmt.Errorf("failed to create session for ACP agent %s: %w", agent.ID, err)
+		}
+		st.ACPSessionID = string(sub.SessionID)
+		if err := f.Store.SetAgentState(sessionID, agent.ID, st); err != nil {
+			sub.Close()
+			return nil, fmt.Errorf("record ACP session of agent %s: %w", agent.ID, err)
+		}
 	}
 
 	f.debug("ACP agent %s ready", agent.ID)

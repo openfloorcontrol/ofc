@@ -13,6 +13,7 @@ import (
 	"github.com/openfloorcontrol/ofc/blueprint"
 	"github.com/openfloorcontrol/ofc/floor"
 	"github.com/openfloorcontrol/ofc/floor/agents"
+	"github.com/openfloorcontrol/ofc/floor/sessionstore"
 )
 
 var (
@@ -44,24 +45,82 @@ func fakeAgent(t *testing.T) string {
 }
 
 // startACPFloor starts a floor with one fake ACP agent, @fake, that
-// answers every message.
+// answers every message. The floor stops at test cleanup.
 func startACPFloor(t *testing.T) *floor.Floor {
+	t.Helper()
+	f := newACPFloor(t, floor.NewMemoryStore(), "")
+	t.Cleanup(f.Stop)
+	return f
+}
+
+// newACPFloor starts a floor with @fake on the given store. stateDir is
+// where @fake keeps its sessions for resume ("" for none). The caller
+// stops the floor.
+func newACPFloor(t *testing.T, store floor.SessionStore, stateDir string) *floor.Floor {
 	t.Helper()
 	bp := &blueprint.Blueprint{
 		Name: "acp-test",
-		Agents: []blueprint.Agent{
-			{ID: "@fake", Type: "acp", Command: fakeAgent(t), Activation: "always"},
-		},
+		Agents: []blueprint.Agent{{
+			ID: "@fake", Type: "acp", Command: fakeAgent(t), Activation: "always",
+			Env:    map[string]string{"FAKE_ACP_STATE_DIR": stateDir},
+			Prompt: "You are @fake.",
+		}},
 	}
 	f := floor.NewFloor(bp)
+	f.Store = store
 	f.AgentFactory = agents.New
 	f.APIServer = api.New()
 	f.StderrWriter = os.Stderr
 	if err := f.Start(func(string) {}); err != nil {
 		t.Fatalf("start floor: %v", err)
 	}
-	t.Cleanup(f.Stop)
 	return f
+}
+
+// A session reopened after a restart resumes the agent's ACP session in
+// a new process, which is sent only what it hasn't seen.
+func TestACPSessionResumesAfterRestart(t *testing.T) {
+	storeDir, stateDir := t.TempDir(), t.TempDir()
+
+	store1, err := sessionstore.NewJSONL(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f1 := newACPFloor(t, store1, stateDir)
+	sess, err := f1.CreateSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := sess.Subscribe()
+	first := ask(t, sess, events, "one")
+	if !strings.Contains(first, "prompts=1 ") || !strings.Contains(first, "You are @fake.") {
+		t.Fatalf("first reply = %q, want prompt 1 with the system prompt", first)
+	}
+	ask(t, sess, events, "two")
+	f1.Stop()
+
+	store2, err := sessionstore.NewJSONL(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f2 := newACPFloor(t, store2, stateDir)
+	defer f2.Stop()
+	resumed, err := f2.Session(sess.ID())
+	if err != nil {
+		t.Fatalf("resume session: %v", err)
+	}
+	reply := ask(t, resumed, resumed.Subscribe(), "three")
+
+	if !strings.Contains(reply, "prompts=3 ") {
+		t.Errorf("reply = %q, want the agent's third prompt in the same ACP session", reply)
+	}
+	if pid(t, reply) == pid(t, first) {
+		t.Errorf("resumed session reused process %s", pid(t, reply))
+	}
+	_, text, _ := strings.Cut(reply, " | ")
+	if !strings.Contains(text, "three") || strings.Contains(text, "one") || strings.Contains(text, "two") || strings.Contains(text, "You are @fake.") {
+		t.Errorf("resumed agent received %q, want only the new message", text)
+	}
 }
 
 // ask posts a user message to the session and returns @fake's reply.

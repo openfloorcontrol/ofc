@@ -306,7 +306,41 @@ func (s *PostgresStore) List() ([]floor.SessionInfo, error) {
 	return infos, rows.Err()
 }
 
-// Delete removes the session row and its events; event_refs cascade.
+// SetAgentState upserts the agent's row in agent_states.
+func (s *PostgresStore) SetAgentState(sessionID, agentID string, st floor.AgentState) error {
+	_, err := s.db.ExecContext(context.Background(),
+		`INSERT INTO agent_states (session_id, agent_id, acp_session_id, sent_seq)
+		 VALUES ($1, $2, $3, $4)
+		 ON CONFLICT (session_id, agent_id)
+		 DO UPDATE SET acp_session_id = EXCLUDED.acp_session_id, sent_seq = EXCLUDED.sent_seq`,
+		sessionID, agentID, st.ACPSessionID, int64(st.SentSeq))
+	if err != nil {
+		return fmt.Errorf("set agent state: %w", err)
+	}
+	return nil
+}
+
+// GetAgentState returns the agent's row, or ErrNoAgentState.
+func (s *PostgresStore) GetAgentState(sessionID, agentID string) (floor.AgentState, error) {
+	var (
+		st  floor.AgentState
+		seq int64
+	)
+	err := s.db.QueryRowContext(context.Background(),
+		`SELECT acp_session_id, sent_seq FROM agent_states WHERE session_id = $1 AND agent_id = $2`,
+		sessionID, agentID).Scan(&st.ACPSessionID, &seq)
+	if err == sql.ErrNoRows {
+		return floor.AgentState{}, floor.ErrNoAgentState
+	}
+	if err != nil {
+		return floor.AgentState{}, fmt.Errorf("get agent state: %w", err)
+	}
+	st.SentSeq = uint64(seq)
+	return st, nil
+}
+
+// Delete removes the session row, its events and agent states;
+// event_refs cascade.
 func (s *PostgresStore) Delete(sessionID string) error {
 	ctx := context.Background()
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -323,9 +357,14 @@ func (s *PostgresStore) Delete(sessionID string) error {
 	if err != nil {
 		return fmt.Errorf("delete session: %w", err)
 	}
+	stRes, err := tx.ExecContext(ctx, `DELETE FROM agent_states WHERE session_id = $1`, sessionID)
+	if err != nil {
+		return fmt.Errorf("delete agent states: %w", err)
+	}
 	evN, _ := evRes.RowsAffected()
 	sesN, _ := sesRes.RowsAffected()
-	if evN == 0 && sesN == 0 {
+	stN, _ := stRes.RowsAffected()
+	if evN == 0 && sesN == 0 && stN == 0 {
 		return floor.ErrSessionNotFound
 	}
 	return tx.Commit()

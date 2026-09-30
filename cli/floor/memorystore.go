@@ -18,10 +18,11 @@ type MemoryStore struct {
 }
 
 type memSession struct {
-	events    []StoredEvent       // ordered by Seq
-	nextSeq   uint64              // assigned on Append (starts at 1)
-	agentRefs map[string][]uint64 // agentID → seq numbers in arrival order
-	meta      *SessionMeta        // nil if SetMeta was never called
+	events      []StoredEvent         // ordered by Seq
+	nextSeq     uint64                // assigned on Append (starts at 1)
+	agentRefs   map[string][]uint64   // agentID → seq numbers in arrival order
+	meta        *SessionMeta          // nil if SetMeta was never called
+	agentStates map[string]AgentState // agentID → state
 }
 
 // NewMemoryStore creates an empty in-memory store.
@@ -35,7 +36,8 @@ func (m *MemoryStore) getSession(sessionID string) *memSession {
 	s, ok := m.sessions[sessionID]
 	if !ok {
 		s = &memSession{
-			agentRefs: make(map[string][]uint64),
+			agentRefs:   make(map[string][]uint64),
+			agentStates: make(map[string]AgentState),
 		}
 		m.sessions[sessionID] = s
 	}
@@ -249,6 +251,29 @@ func (m *MemoryStore) Delete(sessionID string) error {
 	}
 	delete(m.sessions, sessionID)
 	return nil
+}
+
+// SetAgentState implements SessionStore.
+func (m *MemoryStore) SetAgentState(sessionID, agentID string, st AgentState) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.getSession(sessionID).agentStates[agentID] = st
+	return nil
+}
+
+// GetAgentState implements SessionStore.
+func (m *MemoryStore) GetAgentState(sessionID, agentID string) (AgentState, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.sessions[sessionID]
+	if !ok {
+		return AgentState{}, ErrNoAgentState
+	}
+	st, ok := s.agentStates[agentID]
+	if !ok {
+		return AgentState{}, ErrNoAgentState
+	}
+	return st, nil
 }
 
 // matches checks whether an event satisfies the filter.

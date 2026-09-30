@@ -13,10 +13,12 @@ package floor
 // MemoryStore this is essentially free; for backed stores (JSONL, SQL)
 // it's a query per read. If that becomes a hot path we can add a cache
 // layer above — the interface won't change.
+//
+// The Delta cursor lives in the store too (AgentState.SentSeq), so a
+// resumed session continues where its agent left off.
 type AgentContext struct {
 	agentID string
 	session SessionView
-	sentSeq uint64 // for Delta — events with Seq > sentSeq are "new"
 }
 
 // NewAgentContext creates a context for the given agent in the given session.
@@ -41,7 +43,7 @@ func (ac *AgentContext) Entries() []*ChatMessage {
 // Delta returns messages this agent has seen since the last MarkSent.
 // Used by ACPAgent to send only incremental updates to the subprocess.
 func (ac *AgentContext) Delta() []*ChatMessage {
-	events, _ := ac.session.Store().ReadForAgent(ac.session.ID(), ac.agentID, EventFilter{FromSeq: ac.sentSeq})
+	events, _ := ac.session.Store().ReadForAgent(ac.session.ID(), ac.agentID, EventFilter{FromSeq: ac.state().SentSeq})
 	return extractMessages(events)
 }
 
@@ -50,8 +52,20 @@ func (ac *AgentContext) Delta() []*ChatMessage {
 func (ac *AgentContext) MarkSent() {
 	events, _ := ac.session.Store().ReadForAgent(ac.session.ID(), ac.agentID, EventFilter{})
 	if len(events) > 0 {
-		ac.sentSeq = events[len(events)-1].Seq
+		ac.setSentSeq(events[len(events)-1].Seq)
 	}
+}
+
+// state returns the agent's stored state; zero if none was recorded.
+func (ac *AgentContext) state() AgentState {
+	st, _ := ac.session.Store().GetAgentState(ac.session.ID(), ac.agentID)
+	return st
+}
+
+func (ac *AgentContext) setSentSeq(seq uint64) {
+	st := ac.state()
+	st.SentSeq = seq
+	ac.session.Store().SetAgentState(ac.session.ID(), ac.agentID, st)
 }
 
 // AppendSystem inserts a system-level message visible only to this agent.
@@ -82,5 +96,5 @@ func (ac *AgentContext) Len() int {
 // Used after /clear to make Delta() return everything from the start
 // of the (now-empty) log.
 func (ac *AgentContext) Clear() {
-	ac.sentSeq = 0
+	ac.setSentSeq(0)
 }

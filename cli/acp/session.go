@@ -19,6 +19,7 @@ type Subprocess struct {
 	Cmd             *exec.Cmd
 	Client          *FloorClient
 	McpCapabilities acpsdk.McpCapabilities // from agent init response
+	CanResume       bool                   // agent advertises session/resume
 }
 
 // NewSubprocess launches an ACP agent process and establishes a connection.
@@ -85,7 +86,28 @@ func (s *Subprocess) Initialize(ctx context.Context) error {
 	}
 
 	s.McpCapabilities = resp.AgentCapabilities.McpCapabilities
-	s.Client.debug(fmt.Sprintf("initialized: protocol v%d, mcp={http:%v, sse:%v}", resp.ProtocolVersion, s.McpCapabilities.Http, s.McpCapabilities.Sse))
+	s.CanResume = resp.AgentCapabilities.SessionCapabilities.Resume != nil
+	s.Client.debug(fmt.Sprintf("initialized: protocol v%d, mcp={http:%v, sse:%v}, resume=%v",
+		resp.ProtocolVersion, s.McpCapabilities.Http, s.McpCapabilities.Sse, s.CanResume))
+	return nil
+}
+
+// ResumeSession reopens an existing ACP session, which the agent restores
+// from its own storage, without replaying its history to the client.
+func (s *Subprocess) ResumeSession(ctx context.Context, sessionID, cwd string, mcpServers []acpsdk.McpServer) error {
+	if mcpServers == nil {
+		mcpServers = []acpsdk.McpServer{}
+	}
+	_, err := s.Conn.ResumeSession(ctx, acpsdk.ResumeSessionRequest{
+		SessionId:  acpsdk.SessionId(sessionID),
+		Cwd:        cwd,
+		McpServers: mcpServers,
+	})
+	if err != nil {
+		return fmt.Errorf("resume session %s: %w", sessionID, err)
+	}
+	s.SessionID = acpsdk.SessionId(sessionID)
+	s.Client.debug(fmt.Sprintf("session resumed: %s", s.SessionID))
 	return nil
 }
 

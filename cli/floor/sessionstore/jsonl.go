@@ -32,13 +32,16 @@ import (
 // file is replayed into the mirror the first time the session is
 // touched; files are only created on the first write.
 //
-// File format: one JSON object per line. Four record kinds:
+// File format: one JSON object per line. Five record kinds:
 //
 //	{"kind":"event","session_id":"...","seq":1,"time":"...","room_id":"...",
 //	 "private":false,"payload_type":"message_posted","payload":{...}}
 //	{"kind":"ref","session_id":"...","agent_id":"@hiro","event_seq":1}
 //	{"kind":"clear","session_id":"...","filter":{"room_id":"#main"}}
 //	{"kind":"meta","session_id":"...","meta":{...}}
+//	{"kind":"agent_state","session_id":"...","agent_id":"@coder","state":{...}}
+//
+// For meta and agent_state, the last record wins.
 type JSONLStore struct {
 	mu     sync.Mutex
 	dir    string
@@ -213,6 +216,39 @@ func (s *JSONLStore) Clear(sessionID string, filter floor.EventFilter) error {
 	return s.mem.Clear(sessionID, filter)
 }
 
+// SetAgentState writes an agent_state record and applies it to the mirror.
+func (s *JSONLStore) SetAgentState(sessionID, agentID string, st floor.AgentState) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.ensureLoaded(sessionID); err != nil {
+		return err
+	}
+	line, err := json.Marshal(agentStateRecord{
+		Kind:      "agent_state",
+		SessionID: sessionID,
+		AgentID:   agentID,
+		State:     st,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal agent_state record: %w", err)
+	}
+	if err := s.writeAndSync(sessionID, [][]byte{line}); err != nil {
+		return err
+	}
+	return s.mem.SetAgentState(sessionID, agentID, st)
+}
+
+// GetAgentState delegates to the in-memory mirror.
+func (s *JSONLStore) GetAgentState(sessionID, agentID string) (floor.AgentState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.ensureLoaded(sessionID); err != nil {
+		return floor.AgentState{}, err
+	}
+	return s.mem.GetAgentState(sessionID, agentID)
+}
+
 // List summarizes every *.jsonl file in the directory. Sessions not yet
 // loaded are replayed into a scratch store and not kept in memory.
 func (s *JSONLStore) List() ([]floor.SessionInfo, error) {
@@ -367,6 +403,13 @@ type metaRecord struct {
 	Meta      floor.SessionMeta `json:"meta"`
 }
 
+type agentStateRecord struct {
+	Kind      string           `json:"kind"`
+	SessionID string           `json:"session_id"`
+	AgentID   string           `json:"agent_id"`
+	State     floor.AgentState `json:"state"`
+}
+
 // replay loads the file at path into mem under sessionID. A missing
 // file loads nothing. Tolerates a truncated final line (treats it as if
 // the crashed Append never happened).
@@ -431,6 +474,12 @@ func replay(path, sessionID string, mem *floor.MemoryStore) error {
 				break
 			}
 			_ = mem.SetMeta(sessionID, mr.Meta)
+		case "agent_state":
+			var ar agentStateRecord
+			if err := json.Unmarshal(line, &ar); err != nil {
+				break
+			}
+			_ = mem.SetAgentState(sessionID, ar.AgentID, ar.State)
 		default:
 			// Unknown record kind — skip (forward compat)
 		}
