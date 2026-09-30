@@ -147,11 +147,11 @@ export function useChat() {
   }
 
   /**
-   * Load initial messages from the REST API.
+   * Load initial messages from the session's messages endpoint.
    */
-  async function loadHistory() {
+  async function loadHistory(url) {
     try {
-      const resp = await apiFetch('/api/v1/messages')
+      const resp = await apiFetch(url)
       const data = await resp.json()
       messages.value = (data.messages || []).map((m, i) => ({
         id: i,

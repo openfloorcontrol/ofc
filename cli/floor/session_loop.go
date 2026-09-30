@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 )
 
 // sessionSubscriber receives every event the session loop handles or emits.
@@ -15,6 +16,8 @@ type sessionSubscriber struct {
 
 // sessionLoop is the turn-taking state owned by a started Session.
 type sessionLoop struct {
+	startOnce   sync.Once
+	started     atomic.Bool
 	subMu       sync.Mutex
 	subscribers []*sessionSubscriber
 	stopped     bool // after /quit: keep forwarding events, dispatch nothing
@@ -55,8 +58,17 @@ func (s *Session) Unsubscribe(ch <-chan TaggedEvent) {
 // the only consumer of the session's room events: for each one it
 // forwards the event to subscribers, asks the Controller who speaks next,
 // and runs that agent. It ends when the session's main room is closed
-// (Floor.Stop), closing all subscriber channels. Call Start once.
+// (Floor.Stop), closing all subscriber channels. Calling Start on a
+// running session does nothing.
 func (s *Session) Start() {
+	s.loop.startOnce.Do(s.startLoop)
+}
+
+// Running reports whether Start has been called.
+func (s *Session) Running() bool { return s.loop.started.Load() }
+
+func (s *Session) startLoop() {
+	s.loop.started.Store(true)
 	unified := s.StartUnified()
 	go func() {
 		for tagged := range unified {

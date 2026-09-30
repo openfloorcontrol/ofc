@@ -18,7 +18,27 @@ const authError = ref('')
 
 const { messages, streamingMessage, isStreaming, handleEvent, loadHistory } = useChat()
 const { furniture, fetchFurniture, callTool } = useFurniture()
-const sse = useSSE('/api/v1/events', getToken)
+const sse = useSSE(getToken)
+
+// API base of this tab's session, e.g. /api/v1/sessions/<id>
+let sessionBase = ''
+
+// resolveSession returns the session named by ?session=, or creates one
+// and records it in the URL so a reload returns to the same session.
+async function resolveSession() {
+  const params = new URLSearchParams(window.location.search)
+  let id = params.get('session')
+  if (!id) {
+    const resp = await apiFetch('/api/v1/sessions', { method: 'POST' })
+    if (resp.status === 401) {
+      throw new Error('unauthorized')
+    }
+    id = (await resp.json()).id
+    params.set('session', id)
+    history.replaceState(null, '', `${window.location.pathname}?${params}`)
+  }
+  return id
+}
 
 async function fetchMetadata() {
   const resp = await apiFetch('/api/v1/agents')
@@ -32,7 +52,7 @@ async function fetchMetadata() {
 }
 
 async function sendMessage(content) {
-  await apiFetch('/api/v1/messages', {
+  await apiFetch(`${sessionBase}/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ content }),
@@ -40,6 +60,10 @@ async function sendMessage(content) {
 }
 
 function handleEventWithRefresh(event) {
+  // Sub-room events aren't shown yet.
+  if (event.room_id) {
+    return
+  }
   handleEvent(event)
 
   // Server emits furniture_updated when any furniture state changes
@@ -51,9 +75,10 @@ function handleEventWithRefresh(event) {
 onMounted(async () => {
   try {
     await fetchMetadata()
-    await Promise.all([loadHistory(), fetchFurniture()])
+    sessionBase = `/api/v1/sessions/${encodeURIComponent(await resolveSession())}`
+    await Promise.all([loadHistory(`${sessionBase}/messages`), fetchFurniture()])
     sse.onEvent(handleEventWithRefresh)
-    sse.connect()
+    sse.connect(`${sessionBase}/events`)
   } catch (err) {
     if (err.message === 'unauthorized') {
       authError.value = 'Authentication required. Open the URL with token from the ofc console output.'

@@ -63,10 +63,14 @@ type Floor struct {
 	// Start() for backed implementations (JSONL, SQL, etc.).
 	Store SessionStore
 
-	// Sessions on this Floor. In v1 there is always one default session,
-	// keyed by its UUID, created by NewFloor / NewFloorWithSession. The
-	// UUID is stored in defaultSessionUUID.
+	// Sessions on this Floor, keyed by UUID. NewFloor / NewFloorWithSession
+	// create the default session (defaultSessionUUID); CreateSession and
+	// Session add more. Guarded by mu.
 	Sessions map[string]*Session
+
+	// SessionMetaTemplate, if set, is recorded for every session
+	// CreateSession makes, with CreatedAt stamped at creation.
+	SessionMetaTemplate *SessionMeta
 
 	// defaultSessionUUID is the key under which the floor's default
 	// session lives in Sessions. Set at construction time; immutable.
@@ -131,9 +135,14 @@ func NewFloorWithSession(bp *blueprint.Blueprint, sessionID string) *Floor {
 	return f
 }
 
-// DefaultSession returns the floor's default session.
-// In v1 every floor has exactly one session, created at construction time
-// and keyed by its UUID.
+// ID identifies the floor: its blueprint's name. It appears in API URLs
+// and scopes which stored sessions belong to this floor.
+func (f *Floor) ID() string {
+	return f.Blueprint.Name
+}
+
+// DefaultSession returns the session created with the floor — the one
+// the CLI, TUI and JSON frontends attach to.
 func (f *Floor) DefaultSession() *Session {
 	return f.Sessions[f.defaultSessionUUID]
 }
@@ -188,9 +197,7 @@ func (f *Floor) Start(renderInfo func(string)) error {
 		return fmt.Errorf("Floor.Start: APIServer is nil — assign one (e.g. api.New()) before calling Start")
 	}
 
-	// Register floor API against the default session's chat.
-	// (In v1 the API is session-scoped to default; multi-session URL paths come later.)
-	f.APIServer.RegisterFloorAPI(f.DefaultSession().MainRoom, f.Blueprint, f.Furniture, f.WorkspacePath)
+	f.APIServer.RegisterFloorAPI(f)
 
 	// 2. Sandbox
 	var sandboxWS *blueprint.Workstation
@@ -337,13 +344,13 @@ func (f *Floor) AddFurniture(fd blueprint.FurnitureDef) error {
 		return err
 	}
 
-	// Wrap so all Call() invocations emit FurnitureUpdated events on the
-	// default session's chat. (v1: one session; later, per-session.)
-	wrapped := &observableFurniture{inner: fur, chat: f.DefaultSession().MainRoom}
+	// Wrap so all Call() invocations emit FurnitureUpdated events in every
+	// running session — furniture belongs to the floor, not one session.
+	wrapped := &observableFurniture{inner: fur, notify: f.notifySessions}
 	f.Furniture[fd.Name] = wrapped
 
 	// Register MCP endpoints on the running API server.
-	f.APIServer.RegisterFurniture("default", fd.Name, furniture.WrapAsMCP(wrapped))
+	f.APIServer.RegisterFurniture(f.ID(), fd.Name, furniture.WrapAsMCP(wrapped))
 
 	return nil
 }
@@ -499,4 +506,3 @@ func createFurniture(ctx context.Context, fd blueprint.FurnitureDef, bpDir strin
 		return nil, fmt.Errorf("unknown furniture type %q", fd.Type)
 	}
 }
-

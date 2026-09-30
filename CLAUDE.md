@@ -23,6 +23,7 @@ cli/                          # Go module (github.com/openfloorcontrol/ofc)
     floor.go                  # Floor: live DOM (agents, furniture, sandbox, ACP pool, sessions, store, APIServer)
     session.go                # Session: one conversation thread (rooms + AgentContexts + Controller); implements SessionView
     session_loop.go           # Session.Start: turn-taking loop (Decide → dispatch); Subscribe for frontends
+    floor_sessions.go         # CreateSession / Session(id) (resumes from store) / ListSessions; floor ID = blueprint name
     room.go                   # Room: messages + event channel + subscribers; #main + sub-rooms
     controller.go             # Controller: pure-logic turn-taking (Decide → Decision, no I/O)
     agent.go                  # Agent interface (Run(ctx, AgentTurn) error)
@@ -49,7 +50,7 @@ cli/                          # Go module (github.com/openfloorcontrol/ofc)
     output.go                 # Terminal + log file multiplexer
     colors.go                 # ANSI palette, BuildColorMap
   api/                        # HTTP API server (composition layer)
-    api.go                    # api.Server: /api/v1/messages, /events, /agents, /furniture, /mcp/{name}, /sse/{name}, /file/*
+    api.go                    # api.Server: /api/v1/sessions[/{id}/messages|events], /agents, /furniture, /floors/{floor}/mcp|sse/{name}, /file/*
   acp/                        # Agent Client Protocol integration (low-level)
     session.go                # ACP agent subprocess lifecycle + handshake
     client.go                 # FloorClient: implements acpsdk.Client callbacks

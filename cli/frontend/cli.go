@@ -16,7 +16,6 @@ type CLIFrontend struct {
 	out      *Output
 	colorMap map[string]string
 	reader   *bufio.Reader
-	Headless bool // skip stdin reader (web-only mode)
 
 	// Reasoning is collapsed into a single line that is rewritten in place
 	// and cleared once the answer starts, so it never fills the transcript.
@@ -96,18 +95,15 @@ func (f *CLIFrontend) RunLoop(fl *floor.Floor, initialPrompt string) error {
 		}
 	}
 
-	if !f.Headless {
-		// Spawn stdin reader goroutine (waits for readyForInput before each prompt)
-		go f.readStdinLoop(sess, readyForInput)
-	}
+	// Stdin reader waits for readyForInput before each prompt.
+	go f.readStdinLoop(sess, readyForInput)
 
 	// If initial prompt, post it as @user (or handle as command)
 	if initialPrompt != "" {
 		f.renderStream(floor.AgentLabel{AgentID: "@user"}, "")
 		f.renderStream(floor.TokenStreamed{AgentID: "@user", Token: initialPrompt + "\n"}, "")
 		sess.MainRoom.PostUserInput(initialPrompt)
-	} else if !f.Headless {
-		// No initial prompt — ready for user input immediately
+	} else {
 		signalReady()
 	}
 
@@ -115,9 +111,6 @@ func (f *CLIFrontend) RunLoop(fl *floor.Floor, initialPrompt string) error {
 
 	for tagged := range events {
 		switch e := tagged.Event.(type) {
-		case floor.MessagePosted:
-			f.renderMessagePosted(e)
-
 		case floor.StreamEvent:
 			f.renderStream(e.Event, tagged.RoomID)
 
@@ -191,16 +184,6 @@ func (f *CLIFrontend) readStdinLoop(sess *floor.Session, readyForInput chan stru
 		}
 
 		sess.MainRoom.PostUserInput(text)
-	}
-}
-
-// renderMessagePosted handles display of a completed message.
-// In headless mode, user messages aren't echoed by stdin, so we render them here.
-func (f *CLIFrontend) renderMessagePosted(e floor.MessagePosted) {
-	if f.Headless && e.Message.From == "@user" {
-		f.out.Print("\n")
-		f.out.AgentLabel("@user", f.agentColor("@user"))
-		f.out.Print("%s\n", e.Message.Content)
 	}
 }
 

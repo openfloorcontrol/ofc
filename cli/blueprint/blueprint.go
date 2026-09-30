@@ -6,11 +6,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"text/template"
 
 	"gopkg.in/yaml.v3"
 )
+
+// validName matches blueprint names, which are used unescaped in URLs.
+var validName = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // parsePromptTemplate parses a prompt as a Go template using <% %> delimiters.
 // Paths given to readfile resolve against dir.
@@ -233,6 +237,12 @@ func Load(path string) (*Blueprint, error) {
 	// prompt_file contents are loaded below and are not subject to it.
 	if err := expandBlueprintEnv(&bp); err != nil {
 		return nil, err
+	}
+
+	// The name is the floor's ID: it appears in API URLs and scopes which
+	// stored sessions belong to this floor.
+	if !validName.MatchString(bp.Name) {
+		return nil, fmt.Errorf("blueprint name %q must be non-empty and use only letters, digits, '.', '_' or '-': it identifies the floor in URLs", bp.Name)
 	}
 
 	// Resolve prompt files relative to blueprint directory, then expand templates

@@ -1,12 +1,16 @@
 package cmd
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -79,7 +83,13 @@ var runCmd = &cobra.Command{
 			initialPrompt = args[0]
 		}
 
-		if useJSON {
+		if useWeb {
+			if initialPrompt != "" {
+				fmt.Fprintln(os.Stderr, "Error: --web takes no prompt; each browser tab starts its own session")
+				os.Exit(1)
+			}
+			runWeb(bp)
+		} else if useJSON {
 			runJSON(bp, initialPrompt)
 		} else if useTUI {
 			runTUI(bp, initialPrompt)
@@ -133,19 +143,11 @@ func runCLI(bp *blueprint.Blueprint, initialPrompt string) {
 	cm := frontend.BuildColorMap(bp)
 	fe := frontend.NewCLI(logFile, debug, cm)
 
-	f := newFloorWithStore(bp)
+	f, _ := newFloorWithStore(bp)
 	if debug {
 		f.DebugFunc = fe.Debug
 	}
 	f.LogWriter = fe.LogWriter()
-
-	if useWeb {
-		f.ListenAddr = fmt.Sprintf(":%d", webPort)
-		f.WebMode = true
-		f.WebUI = webui.FS()
-		f.ExternalURL = webHostname
-		fe.Headless = true
-	}
 	attachAPIServer(f)
 	if debug {
 		f.DefaultSession().Controller.DebugFunc = fe.Debug
@@ -157,11 +159,47 @@ func runCLI(bp *blueprint.Blueprint, initialPrompt string) {
 	}
 }
 
+// runWeb serves the web UI and API until interrupted. Each browser tab
+// works in its own session; with --session, that session is resumed and
+// its URL printed.
+func runWeb(bp *blueprint.Blueprint) {
+	f, resuming := newFloorWithStore(bp)
+	if debug {
+		f.DebugFunc = func(msg string) { fmt.Fprintf(os.Stderr, "[debug] %s\n", msg) }
+	}
+	f.ListenAddr = fmt.Sprintf(":%d", webPort)
+	f.WebMode = true
+	f.WebUI = webui.FS()
+	f.ExternalURL = webHostname
+	attachAPIServer(f)
+
+	if err := f.Start(func(msg string) { fmt.Println(msg) }); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	defer f.Stop()
+
+	if resuming {
+		sess := f.DefaultSession()
+		sess.Start()
+		base := f.APIServer.BaseURL()
+		if webHostname != "" {
+			base = strings.TrimSuffix(webHostname, "/")
+		}
+		fmt.Printf("Resumed session at %s?token=%s&session=%s\n", base, f.APIServer.AuthToken(), sess.ID())
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	<-ctx.Done()
+	fmt.Println("\nShutting down.")
+}
+
 func runTUI(bp *blueprint.Blueprint, initialPrompt string) {
 	cm := frontend.BuildColorMap(bp)
 	fe, model := frontend.NewTUI(logFile, debug, cm)
 
-	f := newFloorWithStore(bp)
+	f, _ := newFloorWithStore(bp)
 	if debug {
 		f.DebugFunc = func(msg string) {
 			fe.Render(floor.SystemInfo{Text: "[debug] " + msg})
@@ -205,7 +243,7 @@ func runTUI(bp *blueprint.Blueprint, initialPrompt string) {
 func runJSON(bp *blueprint.Blueprint, initialPrompt string) {
 	fe := frontend.NewJSON(logFile, debug)
 
-	f := newFloorWithStore(bp)
+	f, _ := newFloorWithStore(bp)
 	if debug {
 		f.DebugFunc = fe.Debug
 	}
@@ -220,7 +258,6 @@ func runJSON(bp *blueprint.Blueprint, initialPrompt string) {
 		os.Exit(1)
 	}
 }
-
 
 func init() {
 	runCmd.Flags().StringVarP(&blueprintFile, "file", "f", "blueprint.yaml", "Blueprint file")
@@ -255,15 +292,15 @@ func resolveSessionID() (sid string, resuming bool) {
 // session store (Postgres if --db / OFC_DATABASE_URL, else JSONL). On
 // error it prints to stderr and exits — every caller (runCLI, runTUI,
 // runJSON) handles failure the same way.
-func newFloorWithStore(bp *blueprint.Blueprint) *floor.Floor {
+func newFloorWithStore(bp *blueprint.Blueprint) (f *floor.Floor, resuming bool) {
 	sid, resuming := resolveSessionID()
-	f := floor.NewFloorWithSession(bp, sid)
+	f = floor.NewFloorWithSession(bp, sid)
 	f.AgentFactory = agents.New
 	if err := applySessionStore(f, bp, resuming); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	return f
+	return f, resuming
 }
 
 // applySessionStore picks the session-store backend for this
@@ -279,7 +316,19 @@ func applySessionStore(f *floor.Floor, bp *blueprint.Blueprint, resuming bool) e
 	f.Store = store
 	sid := f.DefaultSessionID()
 
-	if !useJSON {
+	// Meta is for hygiene, not correctness: failing to build it is a warning.
+	meta, metaErr := makeSessionMeta(bp, blueprintFile)
+	if metaErr != nil {
+		fmt.Fprintf(os.Stderr, "[warning] could not record session meta: %v\n", metaErr)
+	} else {
+		f.SessionMetaTemplate = &meta
+	}
+
+	// In web mode without --session the default session goes unused —
+	// browsers create their own — so nothing is recorded for it.
+	unused := useWeb && !resuming
+
+	if !useJSON && !unused {
 		if resuming {
 			fmt.Fprintf(os.Stderr, "Resuming session %s (%s)\n", sid, label)
 		} else {
@@ -292,12 +341,8 @@ func applySessionStore(f *floor.Floor, bp *blueprint.Blueprint, resuming bool) e
 			warnOnMetaMismatch(existing, bp, blueprintFile)
 		}
 		// If no meta recorded (older file/row), stay silent.
-	} else {
-		meta, err := makeSessionMeta(bp, blueprintFile)
-		if err != nil {
-			// Non-fatal — meta is for hygiene, not correctness.
-			fmt.Fprintf(os.Stderr, "[warning] could not record session meta: %v\n", err)
-		} else if err := store.SetMeta(sid, meta); err != nil {
+	} else if !unused && metaErr == nil {
+		if err := store.SetMeta(sid, meta); err != nil {
 			fmt.Fprintf(os.Stderr, "[warning] could not write session meta: %v\n", err)
 		}
 	}

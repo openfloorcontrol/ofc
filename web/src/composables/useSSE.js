@@ -2,16 +2,16 @@ import { ref, onUnmounted } from 'vue'
 
 /**
  * EventSource wrapper composable.
- * Connects to an SSE endpoint and emits parsed JSON events.
- * Accepts an optional token for authentication (passed as query param,
- * since EventSource cannot send custom headers).
+ * Connects to an SSE endpoint (given to connect) and emits parsed JSON
+ * events. Accepts an optional token for authentication (passed as query
+ * param, since EventSource cannot send custom headers).
  */
-export function useSSE(url, tokenFn) {
+export function useSSE(tokenFn) {
   const connected = ref(false)
   let eventSource = null
   let onEventCallback = null
 
-  async function connect() {
+  async function connect(url) {
     if (eventSource) return
 
     let sseUrl = url

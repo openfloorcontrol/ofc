@@ -9,8 +9,8 @@ import (
 // observableFurniture wraps a Furniture and emits FurnitureUpdated events
 // on mutating Call()s. This covers all paths: LLM agents, ACP/MCP, and web UI.
 type observableFurniture struct {
-	inner furniture.Furniture
-	chat  *Room
+	inner  furniture.Furniture
+	notify func(Event) // delivers to every running session on the floor
 }
 
 // readOnlyTools are tool names that don't mutate state (no need to notify).
@@ -48,7 +48,7 @@ func (o *observableFurniture) ReadFileRaw(path string) ([]byte, string, error) {
 func (o *observableFurniture) Call(toolName string, args map[string]interface{}) (interface{}, error) {
 	result, err := o.inner.Call(toolName, args)
 	if err == nil && !readOnlyTools[toolName] {
-		o.chat.PostStream(FurnitureUpdated{Name: o.inner.Name()})
+		o.notify(FurnitureUpdated{Name: o.inner.Name()})
 	}
 	return result, err
 }

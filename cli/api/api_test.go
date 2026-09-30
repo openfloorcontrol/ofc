@@ -103,18 +103,39 @@ func TestAPIServerMCPEndToEnd(t *testing.T) {
 	t.Logf("get_task result: %s", contentText(result))
 }
 
-func TestPostMessage(t *testing.T) {
-	chat := floor.NewFloor(&blueprint.Blueprint{Name: "test"}).DefaultSession().MainRoom
-	api := api.New()
-	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil, func() string { return "" })
-	if err := api.Start(":0"); err != nil {
+// newTestFloor builds a floor for API tests with the given furniture.
+func newTestFloor(bp *blueprint.Blueprint, fur map[string]furniture.Furniture) *floor.Floor {
+	f := floor.NewFloor(bp)
+	for name, fu := range fur {
+		f.Furniture[name] = fu
+	}
+	return f
+}
+
+// startTestAPI serves the floor's API on a free port until the test ends.
+func startTestAPI(t *testing.T, f *floor.Floor) string {
+	t.Helper()
+	srv := api.New()
+	srv.RegisterFloorAPI(f)
+	if err := srv.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
-	defer api.Stop()
+	t.Cleanup(func() { srv.Stop() })
+	return srv.BaseURL()
+}
+
+// sessionURL is the API base for the floor's default session.
+func sessionURL(base string, f *floor.Floor) string {
+	return base + "/api/v1/sessions/" + f.DefaultSessionID()
+}
+
+func TestPostMessage(t *testing.T) {
+	f := newTestFloor(&blueprint.Blueprint{Name: "test"}, nil)
+	base := startTestAPI(t, f)
 
 	// POST a message
 	resp, err := http.Post(
-		api.BaseURL()+"/api/v1/messages",
+		sessionURL(base, f)+"/messages",
 		"application/json",
 		strings.NewReader(`{"from": "@test", "content": "hello from API"}`),
 	)
@@ -127,11 +148,8 @@ func TestPostMessage(t *testing.T) {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 
-	// Drain the event channel (Post emits MessagePosted)
-	<-chat.Events()
-
 	// Verify message in history
-	history := chat.History()
+	history := f.DefaultSession().MainRoom.History()
 	if len(history) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(history))
 	}
@@ -141,16 +159,11 @@ func TestPostMessage(t *testing.T) {
 }
 
 func TestPostMessageDefaultsFrom(t *testing.T) {
-	chat := floor.NewFloor(&blueprint.Blueprint{Name: "test"}).DefaultSession().MainRoom
-	api := api.New()
-	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil, func() string { return "" })
-	if err := api.Start(":0"); err != nil {
-		t.Fatalf("failed to start: %v", err)
-	}
-	defer api.Stop()
+	f := newTestFloor(&blueprint.Blueprint{Name: "test"}, nil)
+	base := startTestAPI(t, f)
 
 	resp, err := http.Post(
-		api.BaseURL()+"/api/v1/messages",
+		sessionURL(base, f)+"/messages",
 		"application/json",
 		strings.NewReader(`{"content": "no from field"}`),
 	)
@@ -158,25 +171,19 @@ func TestPostMessageDefaultsFrom(t *testing.T) {
 		t.Fatalf("POST failed: %v", err)
 	}
 	resp.Body.Close()
-	<-chat.Events()
 
-	history := chat.History()
+	history := f.DefaultSession().MainRoom.History()
 	if history[0].From != "@user" {
 		t.Fatalf("expected @user default, got %q", history[0].From)
 	}
 }
 
 func TestPostMessageRejectsEmpty(t *testing.T) {
-	chat := floor.NewFloor(&blueprint.Blueprint{Name: "test"}).DefaultSession().MainRoom
-	api := api.New()
-	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil, func() string { return "" })
-	if err := api.Start(":0"); err != nil {
-		t.Fatalf("failed to start: %v", err)
-	}
-	defer api.Stop()
+	f := newTestFloor(&blueprint.Blueprint{Name: "test"}, nil)
+	base := startTestAPI(t, f)
 
 	resp, err := http.Post(
-		api.BaseURL()+"/api/v1/messages",
+		sessionURL(base, f)+"/messages",
 		"application/json",
 		strings.NewReader(`{"from": "@user"}`),
 	)
@@ -191,22 +198,17 @@ func TestPostMessageRejectsEmpty(t *testing.T) {
 }
 
 func TestGetMessages(t *testing.T) {
-	chat := floor.NewFloor(&blueprint.Blueprint{Name: "test"}).DefaultSession().MainRoom
-	api := api.New()
-	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil, func() string { return "" })
-	if err := api.Start(":0"); err != nil {
-		t.Fatalf("failed to start: %v", err)
-	}
-	defer api.Stop()
+	f := newTestFloor(&blueprint.Blueprint{Name: "test"}, nil)
+	base := startTestAPI(t, f)
 
 	// Add messages directly
-	chat.Post(floor.ChatMessage{From: "@user", Content: "hello"})
-	<-chat.Events()
-	chat.Post(floor.ChatMessage{From: "@data", Content: "hi back"})
-	<-chat.Events()
+	sess := f.DefaultSession()
+	sess.Start()
+	sess.MainRoom.Post(floor.ChatMessage{From: "@user", Content: "hello"})
+	sess.MainRoom.Post(floor.ChatMessage{From: "@data", Content: "hi back"})
 
 	// GET messages
-	resp, err := http.Get(api.BaseURL() + "/api/v1/messages")
+	resp, err := http.Get(sessionURL(base, f) + "/messages")
 	if err != nil {
 		t.Fatalf("GET failed: %v", err)
 	}
@@ -230,19 +232,15 @@ func TestGetMessages(t *testing.T) {
 }
 
 func TestSSEEvents(t *testing.T) {
-	chat := floor.NewFloor(&blueprint.Blueprint{Name: "test"}).DefaultSession().MainRoom
-	api := api.New()
-	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil, func() string { return "" })
-	if err := api.Start(":0"); err != nil {
-		t.Fatalf("failed to start: %v", err)
-	}
-	defer api.Stop()
+	f := newTestFloor(&blueprint.Blueprint{Name: "test"}, nil)
+	base := startTestAPI(t, f)
+	chat := f.DefaultSession().MainRoom
 
 	// Subscribe via SSE
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	req, _ := http.NewRequestWithContext(ctx, "GET", api.BaseURL()+"/api/v1/events", nil)
+	req, _ := http.NewRequestWithContext(ctx, "GET", sessionURL(base, f)+"/events", nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("SSE connect failed: %v", err)
@@ -256,16 +254,8 @@ func TestSSEEvents(t *testing.T) {
 	// Give the SSE handler time to subscribe before posting
 	time.Sleep(50 * time.Millisecond)
 
-	// Post a message (this goes to main channel + subscriber)
-	go func() {
-		chat.Post(floor.ChatMessage{From: "@user", Content: "sse test"})
-	}()
-
-	// Drain the main event channel so Post doesn't block
-	go func() {
-		for range chat.Events() {
-		}
-	}()
+	// The session loop (started by the SSE request) forwards it to the stream.
+	chat.Post(floor.ChatMessage{From: "@user", Content: "sse test"})
 
 	// Read SSE event
 	buf := make([]byte, 4096)
@@ -292,9 +282,9 @@ func TestGetAgents(t *testing.T) {
 		},
 	}
 
-	chat := floor.NewFloor(&blueprint.Blueprint{Name: "test"}).DefaultSession().MainRoom
+	f := newTestFloor(bp, nil)
 	api := api.New()
-	api.RegisterFloorAPI(chat, bp, nil, func() string { return "" })
+	api.RegisterFloorAPI(f)
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
@@ -339,10 +329,10 @@ func TestGetAgents(t *testing.T) {
 }
 
 func TestAuthMiddlewareBlocksWithoutToken(t *testing.T) {
-	chat := floor.NewFloor(&blueprint.Blueprint{Name: "test"}).DefaultSession().MainRoom
+	f := newTestFloor(&blueprint.Blueprint{Name: "test"}, nil)
 	api := api.New()
 	api.SetAuthToken("test-secret-token")
-	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil, func() string { return "" })
+	api.RegisterFloorAPI(f)
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
@@ -385,9 +375,9 @@ func TestFurnitureCallProxy(t *testing.T) {
 	tb := furniture.NewTaskBoard()
 	furMap := map[string]furniture.Furniture{"tasks": tb}
 
-	chat := floor.NewFloor(&blueprint.Blueprint{Name: "test"}).DefaultSession().MainRoom
+	f := newTestFloor(&blueprint.Blueprint{Name: "test"}, furMap)
 	api := api.New()
-	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, furMap, func() string { return "" })
+	api.RegisterFloorAPI(f)
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
@@ -442,10 +432,10 @@ func TestFurnitureCallProxy(t *testing.T) {
 }
 
 func TestAuthMiddleware(t *testing.T) {
-	chat := floor.NewFloor(&blueprint.Blueprint{Name: "test"}).DefaultSession().MainRoom
+	f := newTestFloor(&blueprint.Blueprint{Name: "test"}, nil)
 	api := api.New()
 	api.SetAuthToken("test-token-123")
-	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil, func() string { return "" })
+	api.RegisterFloorAPI(f)
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
@@ -488,9 +478,9 @@ func TestGetFurniture(t *testing.T) {
 	tb := furniture.NewTaskBoard()
 	furMap := map[string]furniture.Furniture{"tasks": tb}
 
-	chat := floor.NewFloor(&blueprint.Blueprint{Name: "test"}).DefaultSession().MainRoom
+	f := newTestFloor(&blueprint.Blueprint{Name: "test"}, furMap)
 	api := api.New()
-	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, furMap, func() string { return "" })
+	api.RegisterFloorAPI(f)
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
@@ -531,9 +521,9 @@ func TestGetFurniture(t *testing.T) {
 }
 
 func TestGetFurnitureEmpty(t *testing.T) {
-	chat := floor.NewFloor(&blueprint.Blueprint{Name: "test"}).DefaultSession().MainRoom
+	f := newTestFloor(&blueprint.Blueprint{Name: "test"}, nil)
 	api := api.New()
-	api.RegisterFloorAPI(chat, &blueprint.Blueprint{}, nil, func() string { return "" })
+	api.RegisterFloorAPI(f)
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}

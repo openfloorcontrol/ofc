@@ -4,8 +4,6 @@ import (
 	"io/fs"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/openfloorcontrol/ofc/blueprint"
-	"github.com/openfloorcontrol/ofc/furniture"
 )
 
 // APIServer is the small surface Floor needs from the HTTP API layer.
@@ -24,11 +22,10 @@ type APIServer interface {
 	// auth is disabled).
 	AuthToken() string
 
-	// RegisterFloorAPI mounts /api/v1/messages, /api/v1/events,
-	// /api/v1/agents, /api/v1/furniture, and /api/v1/file/* against the
-	// given Room. workspacePath is a closure so the sandbox can be
-	// resolved lazily.
-	RegisterFloorAPI(chat *Room, bp *blueprint.Blueprint, furnitureMap map[string]furniture.Furniture, workspacePath func() string)
+	// RegisterFloorAPI mounts /api/v1/sessions (list, create, and per
+	// session messages and events), /api/v1/agents, /api/v1/furniture,
+	// and /api/v1/file/* for the floor.
+	RegisterFloorAPI(f *Floor)
 
 	// RegisterFurniture mounts the MCP transports (Streamable HTTP +
 	// SSE) for one furniture instance.

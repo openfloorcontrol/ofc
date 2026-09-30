@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"mime"
@@ -18,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -216,69 +218,117 @@ func (s *Server) BaseURL() string {
 	return fmt.Sprintf("http://%s", s.listener.Addr().String())
 }
 
-// RegisterFloorAPI adds message and furniture endpoints for the floor.
-// workspacePath is a func so it can be resolved lazily (sandbox may start after registration).
-func (s *Server) RegisterFloorAPI(chat *floor.Room, bp *blueprint.Blueprint, furnitureMap map[string]furniture.Furniture, workspacePath func() string) {
-	s.echo.POST("/api/v1/messages", handlePostMessage(chat))
-	s.echo.GET("/api/v1/messages", handleGetMessages(chat))
-	s.echo.GET("/api/v1/events", handleSSEEvents(chat))
-	s.echo.GET("/api/v1/agents", handleGetAgents(bp))
-	s.echo.GET("/api/v1/furniture", handleGetFurniture(furnitureMap))
-	s.echo.POST("/api/v1/furniture/:name/call", handleFurnitureCall(furnitureMap))
-	s.echo.GET("/api/v1/file/*", handleServeFile(furnitureMap, workspacePath))
+// RegisterFloorAPI adds the session, agent and furniture endpoints for
+// the floor. Session routes look the session up per request.
+func (s *Server) RegisterFloorAPI(f *floor.Floor) {
+	s.echo.GET("/api/v1/sessions", handleListSessions(f))
+	s.echo.POST("/api/v1/sessions", handleCreateSession(f))
+	s.echo.POST("/api/v1/sessions/:id/messages", withSession(f, handlePostMessage))
+	s.echo.GET("/api/v1/sessions/:id/messages", withSession(f, handleGetMessages))
+	s.echo.GET("/api/v1/sessions/:id/events", withSession(f, handleSSEEvents))
+	s.echo.GET("/api/v1/agents", handleGetAgents(f.Blueprint))
+	s.echo.GET("/api/v1/furniture", handleGetFurniture(f.Furniture))
+	s.echo.POST("/api/v1/furniture/:name/call", handleFurnitureCall(f.Furniture))
+	s.echo.GET("/api/v1/file/*", handleServeFile(f.Furniture, f.WorkspacePath))
 }
 
-// POST /api/v1/messages — inject a message into the floor chat.
+// withSession resolves the :id path parameter to a running session
+// (resuming it from the store if needed) and passes it to the handler.
+func withSession(f *floor.Floor, h func(echo.Context, *floor.Session) error) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		sess, err := f.Session(c.Param("id"))
+		if errors.Is(err, floor.ErrSessionNotFound) {
+			return c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+		}
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		}
+		return h(c, sess)
+	}
+}
+
+// GET /api/v1/sessions — this floor's stored sessions, most recent first.
+func handleListSessions(f *floor.Floor) echo.HandlerFunc {
+	type jsonSession struct {
+		ID           string     `json:"id"`
+		CreatedAt    time.Time  `json:"created_at"`
+		LastActivity *time.Time `json:"last_activity,omitempty"`
+		EventCount   int        `json:"event_count"`
+	}
+	return func(c echo.Context) error {
+		infos, err := f.ListSessions()
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		}
+		out := make([]jsonSession, len(infos))
+		for i, info := range infos {
+			out[i] = jsonSession{ID: info.ID, CreatedAt: info.Meta.CreatedAt, EventCount: info.EventCount}
+			if !info.LastActivity.IsZero() {
+				last := info.LastActivity
+				out[i].LastActivity = &last
+			}
+		}
+		return c.JSON(http.StatusOK, map[string]interface{}{"sessions": out})
+	}
+}
+
+// POST /api/v1/sessions — start a new session.
+func handleCreateSession(f *floor.Floor) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		sess, err := f.CreateSession()
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		}
+		return c.JSON(http.StatusCreated, map[string]string{"id": sess.ID()})
+	}
+}
+
+// POST /api/v1/sessions/:id/messages — inject a message into the session.
 // If from is empty or "@user", routes through PostUserInput (handles slash commands).
 // Otherwise posts as the specified sender (for external agents/webhooks).
-func handlePostMessage(chat *floor.Room) echo.HandlerFunc {
-	type request struct {
+func handlePostMessage(c echo.Context, sess *floor.Session) error {
+	var req struct {
 		From    string `json:"from"`
 		Content string `json:"content"`
 	}
-	return func(c echo.Context) error {
-		var req request
-		if err := c.Bind(&req); err != nil {
-			return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
-		}
-		if req.Content == "" {
-			return c.JSON(http.StatusBadRequest, map[string]string{"error": "content is required"})
-		}
-
-		from := req.From
-		if from == "" || from == "@user" {
-			from = "@user"
-			chat.PostUserInput(req.Content)
-		} else {
-			chat.Post(floor.ChatMessage{From: from, Content: req.Content})
-		}
-
-		return c.JSON(http.StatusOK, map[string]interface{}{
-			"ok":      true,
-			"message": map[string]string{"from": from, "content": req.Content},
-		})
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
 	}
+	if req.Content == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "content is required"})
+	}
+
+	from := req.From
+	if from == "" || from == "@user" {
+		from = "@user"
+		sess.MainRoom.PostUserInput(req.Content)
+	} else {
+		sess.MainRoom.Post(floor.ChatMessage{From: from, Content: req.Content})
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"ok":      true,
+		"message": map[string]string{"from": from, "content": req.Content},
+	})
 }
 
-// GET /api/v1/messages — return chat history as JSON.
-func handleGetMessages(chat *floor.Room) echo.HandlerFunc {
+// GET /api/v1/sessions/:id/messages — the session's #main history as JSON.
+func handleGetMessages(c echo.Context, sess *floor.Session) error {
 	type jsonMessage struct {
 		From             string                  `json:"from"`
 		Content          string                  `json:"content"`
 		ToolInteractions []floor.ToolInteraction `json:"tool_interactions,omitempty"`
 	}
-	return func(c echo.Context) error {
-		history := chat.History()
-		msgs := make([]jsonMessage, len(history))
-		for i, m := range history {
-			msgs[i] = jsonMessage{
-				From:             m.From,
-				Content:          m.Content,
-				ToolInteractions: m.ToolInteractions,
-			}
+	history := sess.MainRoom.History()
+	msgs := make([]jsonMessage, len(history))
+	for i, m := range history {
+		msgs[i] = jsonMessage{
+			From:             m.From,
+			Content:          m.Content,
+			ToolInteractions: m.ToolInteractions,
 		}
-		return c.JSON(http.StatusOK, map[string]interface{}{"messages": msgs})
 	}
+	return c.JSON(http.StatusOK, map[string]interface{}{"messages": msgs})
 }
 
 // GET /api/v1/agents — return floor metadata and agent list.
@@ -489,35 +539,38 @@ func handleServeFile(furnitureMap map[string]furniture.Furniture, workspacePath 
 	}
 }
 
-// GET /api/v1/events — SSE stream of chat events.
-func handleSSEEvents(chat *floor.Room) echo.HandlerFunc {
-	return func(c echo.Context) error {
-		c.Response().Header().Set("Content-Type", "text/event-stream")
-		c.Response().Header().Set("Cache-Control", "no-cache")
-		c.Response().Header().Set("Connection", "keep-alive")
-		c.Response().WriteHeader(http.StatusOK)
-		c.Response().Flush()
+// GET /api/v1/sessions/:id/events — SSE stream of the session's events
+// (all rooms, plus the loop's lifecycle events). Sub-room events carry
+// a room_id.
+func handleSSEEvents(c echo.Context, sess *floor.Session) error {
+	c.Response().Header().Set("Content-Type", "text/event-stream")
+	c.Response().Header().Set("Cache-Control", "no-cache")
+	c.Response().Header().Set("Connection", "keep-alive")
+	c.Response().WriteHeader(http.StatusOK)
+	c.Response().Flush()
 
-		sub := chat.Subscribe()
-		defer chat.Unsubscribe(sub)
+	sub := sess.Subscribe()
+	defer sess.Unsubscribe(sub)
 
-		ctx := c.Request().Context()
-		for {
-			select {
-			case <-ctx.Done():
+	ctx := c.Request().Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case tagged, ok := <-sub:
+			if !ok {
 				return nil
-			case ev, ok := <-sub:
-				if !ok {
-					return nil
-				}
-				payload := floor.EventJSON(ev)
-				if payload == nil {
-					continue
-				}
-				data, _ := json.Marshal(payload)
-				fmt.Fprintf(c.Response(), "data: %s\n\n", data)
-				c.Response().Flush()
 			}
+			payload := floor.EventJSON(tagged.Event)
+			if payload == nil {
+				continue
+			}
+			if tagged.RoomID != "" {
+				payload["room_id"] = tagged.RoomID
+			}
+			data, _ := json.Marshal(payload)
+			fmt.Fprintf(c.Response(), "data: %s\n\n", data)
+			c.Response().Flush()
 		}
 	}
 }

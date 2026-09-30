@@ -40,7 +40,8 @@ func testFactory(agents map[string]floor.Agent) func(*blueprint.Agent) floor.Age
 }
 
 // setupTestFloor creates a Floor with API server and session loop running.
-// Returns the API base URL and a cleanup function.
+// Returns the default session's API base URL (…/api/v1/sessions/<id>)
+// and a cleanup function.
 func setupTestFloor(t *testing.T, bp *blueprint.Blueprint, agents map[string]floor.Agent) (string, func()) {
 	t.Helper()
 
@@ -50,7 +51,7 @@ func setupTestFloor(t *testing.T, bp *blueprint.Blueprint, agents map[string]flo
 
 	srv := api.New()
 	f.APIServer = srv
-	srv.RegisterFloorAPI(sess.MainRoom, bp, nil, func() string { return "" })
+	srv.RegisterFloorAPI(f)
 	if err := srv.Start(":0"); err != nil {
 		t.Fatalf("failed to start API server: %v", err)
 	}
@@ -62,10 +63,10 @@ func setupTestFloor(t *testing.T, bp *blueprint.Blueprint, agents map[string]flo
 		sess.Close()
 	}
 
-	return srv.BaseURL(), cleanup
+	return srv.BaseURL() + "/api/v1/sessions/" + sess.ID(), cleanup
 }
 
-// pollMessages polls GET /api/v1/messages until the expected message count
+// pollMessages polls GET <session>/messages until the expected message count
 // is reached or the timeout expires.
 func pollMessages(t *testing.T, baseURL string, expectedCount int, timeout time.Duration) []struct {
 	From    string `json:"from"`
@@ -75,7 +76,7 @@ func pollMessages(t *testing.T, baseURL string, expectedCount int, timeout time.
 	deadline := time.Now().Add(timeout)
 
 	for time.Now().Before(deadline) {
-		resp, err := http.Get(baseURL + "/api/v1/messages")
+		resp, err := http.Get(baseURL + "/messages")
 		if err != nil {
 			t.Fatalf("GET failed: %v", err)
 		}
@@ -103,7 +104,7 @@ func postMessage(t *testing.T, baseURL string, from, content string) {
 	t.Helper()
 	body := fmt.Sprintf(`{"from": %q, "content": %q}`, from, content)
 	resp, err := http.Post(
-		baseURL+"/api/v1/messages",
+		baseURL+"/messages",
 		"application/json",
 		strings.NewReader(body),
 	)
@@ -255,7 +256,7 @@ func TestIntegrationSSEStream(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	req, _ := http.NewRequestWithContext(ctx, "GET", baseURL+"/api/v1/events", nil)
+	req, _ := http.NewRequestWithContext(ctx, "GET", baseURL+"/events", nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("SSE connect failed: %v", err)
@@ -328,7 +329,7 @@ func TestIntegrationHistoryEmpty(t *testing.T) {
 	baseURL, cleanup := setupTestFloor(t, bp, nil)
 	defer cleanup()
 
-	resp, err := http.Get(baseURL + "/api/v1/messages")
+	resp, err := http.Get(baseURL + "/messages")
 	if err != nil {
 		t.Fatalf("GET failed: %v", err)
 	}
@@ -373,14 +374,14 @@ func TestIntegrationSSEMultipleSubscribers(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	req1, _ := http.NewRequestWithContext(ctx, "GET", baseURL+"/api/v1/events", nil)
+	req1, _ := http.NewRequestWithContext(ctx, "GET", baseURL+"/events", nil)
 	resp1, err := http.DefaultClient.Do(req1)
 	if err != nil {
 		t.Fatalf("SSE 1 connect failed: %v", err)
 	}
 	defer resp1.Body.Close()
 
-	req2, _ := http.NewRequestWithContext(ctx, "GET", baseURL+"/api/v1/events", nil)
+	req2, _ := http.NewRequestWithContext(ctx, "GET", baseURL+"/events", nil)
 	resp2, err := http.DefaultClient.Do(req2)
 	if err != nil {
 		t.Fatalf("SSE 2 connect failed: %v", err)
@@ -413,7 +414,7 @@ func TestIntegrationWebhookBadRequest(t *testing.T) {
 	defer cleanup()
 
 	// Empty content
-	resp, _ := http.Post(baseURL+"/api/v1/messages", "application/json",
+	resp, _ := http.Post(baseURL+"/messages", "application/json",
 		strings.NewReader(`{"from": "@user", "content": ""}`))
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
@@ -421,7 +422,7 @@ func TestIntegrationWebhookBadRequest(t *testing.T) {
 	}
 
 	// Invalid JSON
-	resp, _ = http.Post(baseURL+"/api/v1/messages", "application/json",
+	resp, _ = http.Post(baseURL+"/messages", "application/json",
 		strings.NewReader(`not json`))
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
@@ -429,7 +430,7 @@ func TestIntegrationWebhookBadRequest(t *testing.T) {
 	}
 
 	// Missing content field
-	resp, _ = http.Post(baseURL+"/api/v1/messages", "application/json",
+	resp, _ = http.Post(baseURL+"/messages", "application/json",
 		strings.NewReader(`{"from": "@user"}`))
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {

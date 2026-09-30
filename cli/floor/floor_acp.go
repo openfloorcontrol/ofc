@@ -67,6 +67,7 @@ func (f *Floor) buildACPMCPServers(agent blueprint.Agent, session *acpclient.Sub
 
 	caps := session.McpCapabilities
 	base := f.APIServer.BaseURL()
+	floorID := f.ID()
 
 	// Include auth header if token is set. Init as empty slice (not nil)
 	// so it serializes to JSON `[]` instead of `null` — claude-code-acp's
@@ -84,7 +85,7 @@ func (f *Floor) buildACPMCPServers(agent blueprint.Agent, session *acpclient.Sub
 
 		switch {
 		case caps.Sse:
-			url := base + "/api/v1/floors/default/sse/" + fname
+			url := base + "/api/v1/floors/" + floorID + "/sse/" + fname
 			servers = append(servers, acpsdk.McpServer{
 				Sse: &acpsdk.McpServerSse{
 					Type:    "sse",
@@ -94,7 +95,7 @@ func (f *Floor) buildACPMCPServers(agent blueprint.Agent, session *acpclient.Sub
 				},
 			})
 		case caps.Http:
-			url := base + "/api/v1/floors/default/mcp/" + fname + "/"
+			url := base + "/api/v1/floors/" + floorID + "/mcp/" + fname + "/"
 			servers = append(servers, acpsdk.McpServer{
 				Http: &acpsdk.McpServerHttp{
 					Type:    "http",
