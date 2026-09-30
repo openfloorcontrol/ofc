@@ -21,7 +21,8 @@ cli/                          # Go module (github.com/openfloorcontrol/ofc)
   blueprint/                  # YAML blueprint schema + loader
   floor/                      # Core engine — types, interfaces, runtime
     floor.go                  # Floor: live DOM (agents, furniture, sandbox, ACP pool, sessions, store, APIServer)
-    session.go                # Session: one conversation thread (rooms + AgentContexts); implements SessionView
+    session.go                # Session: one conversation thread (rooms + AgentContexts + Controller); implements SessionView
+    session_loop.go           # Session.Start: turn-taking loop (Decide → dispatch); Subscribe for frontends
     room.go                   # Room: messages + event channel + subscribers; #main + sub-rooms
     controller.go             # Controller: pure-logic turn-taking (Decide → Decision, no I/O)
     agent.go                  # Agent interface (Run(ctx, AgentTurn) error)
@@ -40,12 +41,11 @@ cli/                          # Go module (github.com/openfloorcontrol/ofc)
   floor/sessionstore/         # File/DB-backed SessionStore implementations
     jsonl.go                  # JSONLStore: directory of <sessionID>.jsonl files + in-memory mirror, crash-recovery
     postgres.go               # PostgresStore (+ postgres_migrations/)
-  floor/agents/               # LLMAgent + ACPAgent — implement floor.Agent through floor.AgentTurn
+  floor/agents/               # LLMAgent + ACPAgent — implement floor.Agent through floor.AgentTurn; agents.New = Floor.AgentFactory
   frontend/                   # CLI / TUI / JSON frontends (composition layer)
-    cli.go                    # CLIFrontend: stdin/stdout, unified event loop
+    cli.go                    # CLIFrontend: stdin/stdout, renders Session.Subscribe events
     tui.go                    # TUIFrontend: Bubble Tea
     json.go                   # JSONFrontend: JSONL to stdout
-    eventloop.go              # ResolveEventContext, DecideAndAutoClose — shared dispatch helpers
     output.go                 # Terminal + log file multiplexer
     colors.go                 # ANSI palette, BuildColorMap
   api/                        # HTTP API server (composition layer)
@@ -89,18 +89,20 @@ Sandbox, ACPSubprocess, Debug).
 **Event-driven** with clean separation:
 
 ```
-User Input → Room.PostUserInput() → ChatEvent → Frontend event loop
+User Input → Room.PostUserInput() → ChatEvent → Session loop (Session.Start)
                                                       ↓
                                               Controller.Decide(room, event) → Decision
                                                       ↓
                                               Agent.Run(ctx, AgentTurn) — goroutine
                                                       ↓
                                               turn.Reply() → Room.Post → next event
+
+Session loop → Session.Subscribe() → frontends (CLI/TUI/JSON) render
 ```
 
 **Floor** (`floor/floor.go`) is the live DOM: agents, furniture, sandbox, ACP subprocess pool, sessions, store, APIServer. Mutated only through `AddAgent`/`RemoveAgent`/`UpdateAgent`/`AddFurniture`/`RemoveFurniture` (all serialized by a mutex).
 
-**Session** (`floor/session.go`) is one conversation thread on a Floor — owns `Rooms`, `AgentContexts`. Implements `SessionView` so Room and AgentContext consume it through an interface, not a back-pointer.
+**Session** (`floor/session.go`) is one conversation thread on a Floor — owns `Rooms`, `AgentContexts`, and its `Controller`. `Session.Start` runs the turn-taking loop; frontends only subscribe and post input. Implements `SessionView` so Room and AgentContext consume it through an interface, not a back-pointer.
 
 **Controller** (`floor/controller.go`) is the turn-taking heart — a pure function: event in, Decision out. No I/O, no goroutines. Consumes an `AgentRegistry` (one-method interface, Floor satisfies it) so it's testable without a Floor.
 

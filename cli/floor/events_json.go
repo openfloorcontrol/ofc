@@ -80,6 +80,22 @@ func EventJSON(ev ChatEvent) map[string]interface{} {
 			"agent_id": e.AgentID,
 			"error":    e.Err.Error(),
 		}
+	case AgentStarted:
+		return map[string]interface{}{
+			"type":     "agent_started",
+			"agent_id": e.AgentID,
+		}
+	case AwaitingInput:
+		return map[string]interface{}{"type": "awaiting_input"}
+	case InfoEvent:
+		return map[string]interface{}{
+			"type": "system_info",
+			"text": e.Text,
+		}
+	case SessionCleared:
+		return map[string]interface{}{"type": "session_cleared"}
+	case SessionStopped:
+		return map[string]interface{}{"type": "session_stopped"}
 	default:
 		return nil
 	}

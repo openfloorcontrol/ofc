@@ -34,47 +34,18 @@ func (a *testAgent) Run(ctx context.Context, turn floor.AgentTurn) error {
 	return nil
 }
 
-// testLoop is a minimal event loop — the core of CLIFrontend.RunLoop
-// without terminal I/O. Runs until ctx is cancelled.
-func testLoop(ctx context.Context, sess *floor.Session, ctrl *floor.Controller, agents map[string]floor.Agent) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case ev, ok := <-sess.MainRoom.Events():
-			if !ok {
-				return
-			}
-			var decision floor.Decision
-			switch e := ev.(type) {
-			case floor.MessagePosted:
-				decision = ctrl.Decide(sess.MainRoom, e)
-			case floor.AgentPassedEvent:
-				decision = ctrl.Decide(sess.MainRoom, e)
-			case floor.AgentErrorEvent:
-				decision = ctrl.Decide(sess.MainRoom, e)
-			default:
-				continue
-			}
-			if decision.Action == "trigger" {
-				agent, ok := agents[decision.AgentID]
-				if ok {
-					turn := floor.NewAgentTurn(sess, sess.MainRoom, sess.Floor, decision.AgentID)
-					go func() {
-						_ = agent.Run(ctx, turn)
-					}()
-				}
-			}
-		}
-	}
+// testFactory serves the given fake agents to the session loop.
+func testFactory(agents map[string]floor.Agent) func(*blueprint.Agent) floor.Agent {
+	return func(spec *blueprint.Agent) floor.Agent { return agents[spec.ID] }
 }
 
-// setupTestFloor creates a Floor with API server and event loop running.
+// setupTestFloor creates a Floor with API server and session loop running.
 // Returns the API base URL and a cleanup function.
 func setupTestFloor(t *testing.T, bp *blueprint.Blueprint, agents map[string]floor.Agent) (string, func()) {
 	t.Helper()
 
 	f := floor.NewFloor(bp)
+	f.AgentFactory = testFactory(agents)
 	sess := f.DefaultSession()
 
 	srv := api.New()
@@ -84,12 +55,9 @@ func setupTestFloor(t *testing.T, bp *blueprint.Blueprint, agents map[string]flo
 		t.Fatalf("failed to start API server: %v", err)
 	}
 
-	ctrl := floor.NewController(f)
-	ctx, cancel := context.WithCancel(context.Background())
-	go testLoop(ctx, sess, ctrl, agents)
+	sess.Start()
 
 	cleanup := func() {
-		cancel()
 		srv.Stop()
 		sess.Close()
 	}
@@ -377,7 +345,7 @@ func TestIntegrationHistoryEmpty(t *testing.T) {
 }
 
 func TestIntegrationHistoryPreservesOrder(t *testing.T) {
-	// No agents — testLoop drains events, messages just accumulate in history
+	// No agents — the session loop drains events, messages just accumulate in history
 	bp := &blueprint.Blueprint{Name: "test"}
 	baseURL, cleanup := setupTestFloor(t, bp, nil)
 	defer cleanup()

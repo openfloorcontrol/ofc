@@ -1,9 +1,7 @@
 package frontend
 
 import (
-	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"os"
 
@@ -50,7 +48,7 @@ func (j *JSONFrontend) Debug(msg string) {
 }
 
 // RunLoop is the event-driven main loop for JSON output.
-func (j *JSONFrontend) RunLoop(fl *floor.Floor, ctrl *floor.Controller, agents map[string]floor.Agent, initialPrompt string) error {
+func (j *JSONFrontend) RunLoop(fl *floor.Floor, initialPrompt string) error {
 	// Set up log file (stdout is reserved for JSON)
 	if j.logFile != "" || j.debug {
 		j.out = NewOutput(j.logFile, j.debug)
@@ -85,6 +83,9 @@ func (j *JSONFrontend) RunLoop(fl *floor.Floor, ctrl *floor.Controller, agents m
 	})
 
 	sess := fl.DefaultSession()
+	events := sess.Subscribe()
+	defer sess.Unsubscribe(events)
+	sess.Start()
 
 	// Post initial prompt
 	if initialPrompt != "" {
@@ -93,86 +94,26 @@ func (j *JSONFrontend) RunLoop(fl *floor.Floor, ctrl *floor.Controller, agents m
 
 	oneShot := initialPrompt != "" && !floor.IsCommand(initialPrompt)
 
-	var cancelAgent context.CancelFunc
-
-	unified := sess.StartUnified()
-
-	onCloseInfo := func(info string) {
-		j.emit(map[string]interface{}{"type": "system_info", "text": info})
-	}
-
-	for tagged := range unified {
-		ec, ok := ResolveEventContext(sess, ctrl, tagged)
-		if !ok {
-			continue
-		}
-		ev := tagged.Event
-
-		// Serialize and emit the event
-		payload := floor.EventJSON(ev)
-		if payload != nil {
-			if ec.RoomID != "" {
-				payload["room_id"] = ec.RoomID
+	for tagged := range events {
+		if payload := floor.EventJSON(tagged.Event); payload != nil {
+			if tagged.RoomID != "" {
+				payload["room_id"] = tagged.RoomID
 			}
 			j.emit(payload)
 		}
 
-		// Handle controller decisions (same logic as CLI)
-		switch ev.(type) {
-		case floor.MessagePosted, floor.AgentPassedEvent, floor.AgentErrorEvent:
-			decision := DecideAndAutoClose(ec, ev, sess, ctrl, onCloseInfo)
-
-			switch decision.Action {
-			case "trigger":
-				agent, ok := agents[decision.AgentID]
-				if !ok {
-					j.emit(map[string]interface{}{
-						"type": "system_info",
-						"text": fmt.Sprintf("unknown agent %s", decision.AgentID),
-					})
-					continue
-				}
-				ctx, cancel := context.WithCancel(context.Background())
-				cancelAgent = cancel
-				turn := floor.NewAgentTurn(ec.Sess, ec.Sess.MainRoom, ec.Sess.Floor, decision.AgentID)
-				go func() {
-					defer cancel()
-					agent.Run(ctx, turn)
-				}()
-
-			case "wait":
-				if oneShot && ec.RoomID == "" {
-					j.emit(map[string]interface{}{"type": "floor_stopped"})
-					return nil
-				}
-
-			case "stop":
+		switch tagged.Event.(type) {
+		case floor.SessionStopped:
+			j.emit(map[string]interface{}{"type": "floor_stopped"})
+			return nil
+		case floor.AwaitingInput:
+			if oneShot {
 				j.emit(map[string]interface{}{"type": "floor_stopped"})
 				return nil
-			}
-
-		case floor.UserCommandEvent:
-			cmd := ev.(floor.UserCommandEvent)
-			decision := floor.HandleCommand(cmd.Command, sess, ctrl)
-			switch decision.Action {
-			case "stop":
-				j.emit(map[string]interface{}{"type": "floor_stopped"})
-				return nil
-			case "room_created", "room_closed":
-				j.emit(map[string]interface{}{
-					"type": "system_info",
-					"text": decision.Info,
-				})
-			case "error":
-				j.emit(map[string]interface{}{
-					"type": "system_info",
-					"text": decision.Info,
-				})
 			}
 		}
 	}
 
-	_ = cancelAgent // suppress unused warning
 	j.emit(map[string]interface{}{"type": "floor_stopped"})
 	return nil
 }

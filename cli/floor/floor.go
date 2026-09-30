@@ -53,6 +53,11 @@ type Floor struct {
 	Sandbox   *sandbox.Sandbox
 	APIServer APIServer // interface; concrete impl in the top-level api/ package. Caller assigns before Start.
 
+	// AgentFactory builds the Agent that runs one turn for an agent spec.
+	// Sessions call it on every dispatch with the floor's live spec.
+	// Assigned by the caller (implementations live in floor/agents).
+	AgentFactory func(spec *blueprint.Agent) Agent
+
 	// Store persists session events (messages with per-agent visibility refs).
 	// Defaults to NewMemoryStore() in NewFloor; can be overridden before
 	// Start() for backed implementations (JSONL, SQL, etc.).

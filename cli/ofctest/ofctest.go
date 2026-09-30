@@ -2,7 +2,6 @@
 package ofctest
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -11,7 +10,6 @@ import (
 	"github.com/openfloorcontrol/ofc/eval"
 	"github.com/openfloorcontrol/ofc/floor"
 	floor_agents "github.com/openfloorcontrol/ofc/floor/agents"
-	"github.com/openfloorcontrol/ofc/frontend"
 )
 
 // FloorResult holds the collected events and messages from a floor run.
@@ -38,82 +36,33 @@ func runFloor(t *testing.T, bp *blueprint.Blueprint, prompt string) *FloorResult
 	t.Helper()
 
 	f := floor.NewFloor(bp)
+	f.AgentFactory = floor_agents.New
 	if err := f.Start(func(string) {}); err != nil {
 		t.Fatalf("ofctest: start floor: %v", err)
 	}
 	defer f.Stop()
 
-	ctrl := floor.NewController(f)
-
-	agentMap := make(map[string]floor.Agent)
-	for i := range bp.Agents {
-		a := &bp.Agents[i]
-		switch a.Type {
-		case "acp":
-			agentMap[a.ID] = floor_agents.NewACP(a)
-		default:
-			agentMap[a.ID] = floor_agents.NewLLM(a)
-		}
-	}
-
 	sess := f.DefaultSession()
+	events := sess.Subscribe()
+	defer sess.Unsubscribe(events)
+	sess.Start()
 
-	// Post initial prompt
 	sess.MainRoom.PostUserInput(prompt)
 
 	result := &FloorResult{bp: bp}
-	unified := sess.StartUnified()
-
-	onCloseInfo := func(info string) {
-		result.Events = append(result.Events, map[string]interface{}{
-			"type": "system_info",
-			"text": info,
-		})
-	}
-
-	for tagged := range unified {
-		ec, ok := frontend.ResolveEventContext(sess, ctrl, tagged)
-		if !ok {
-			continue
-		}
-		ev := tagged.Event
-
-		// Collect event
-		if payload := floor.EventJSON(ev); payload != nil {
-			if ec.RoomID != "" {
-				payload["room_id"] = ec.RoomID
+	for tagged := range events {
+		if payload := floor.EventJSON(tagged.Event); payload != nil {
+			if tagged.RoomID != "" {
+				payload["room_id"] = tagged.RoomID
 			}
 			result.Events = append(result.Events, payload)
 		}
 
-		// Drive the controller
-		switch ev.(type) {
-		case floor.MessagePosted, floor.AgentPassedEvent, floor.AgentErrorEvent:
-			decision := frontend.DecideAndAutoClose(ec, ev, sess, ctrl, onCloseInfo)
-
-			switch decision.Action {
-			case "trigger":
-				agent, ok := agentMap[decision.AgentID]
-				if !ok {
-					continue
-				}
-				ctx := context.Background()
-				turn := floor.NewAgentTurn(ec.Sess, ec.Sess.MainRoom, ec.Sess.Floor, decision.AgentID)
-				go func() {
-					agent.Run(ctx, turn)
-				}()
-
-			case "wait":
-				if ec.RoomID == "" {
-					// One-shot: agents are done
-					result.Messages = sess.MainRoom.History()
-					return result
-				}
-
-			case "stop":
-				result.Messages = sess.MainRoom.History()
-				return result
-			}
+		// One-shot: done once the session waits for the user again.
+		switch tagged.Event.(type) {
+		case floor.AwaitingInput, floor.SessionStopped:
+			result.Messages = sess.MainRoom.History()
+			return result
 		}
 	}
 

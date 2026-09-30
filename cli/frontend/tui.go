@@ -1,7 +1,6 @@
 package frontend
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"strings"
@@ -103,11 +102,9 @@ func NewTUI(logPath string, debug bool, colorMap map[string]string) (*TUIFronten
 
 // --- RunLoop ---
 
-// RunLoop is the event-driven main loop for TUI.
-// It runs a background goroutine that reads from the unified event channel
-// (main floor + rooms), calls Controller.Decide(), dispatches agents,
-// and sends display events to Bubble Tea via p.Send().
-func (t *TUIFrontend) RunLoop(fl *floor.Floor, ctrl *floor.Controller, agents map[string]floor.Agent, initialPrompt string) error {
+// RunLoop starts the floor and its default session, then renders the
+// session's events to Bubble Tea via p.Send() from a background goroutine.
+func (t *TUIFrontend) RunLoop(fl *floor.Floor, initialPrompt string) error {
 	// Start floor infrastructure
 	if err := fl.Start(func(msg string) {
 		if t.program != nil {
@@ -117,9 +114,14 @@ func (t *TUIFrontend) RunLoop(fl *floor.Floor, ctrl *floor.Controller, agents ma
 		return err
 	}
 
-	// Background goroutine: read Chat events, dispatch agents
+	sess := fl.DefaultSession()
+	events := sess.Subscribe()
+	sess.Start()
+
+	// Background goroutine: render the session's events
 	go func() {
 		defer fl.Stop()
+		defer sess.Unsubscribe(events)
 
 		// Render header
 		if t.program != nil {
@@ -140,8 +142,6 @@ func (t *TUIFrontend) RunLoop(fl *floor.Floor, ctrl *floor.Controller, agents ma
 			t.program.Send(tuiSystemMsg{Text: fmt.Sprintf("%s%s%s", Bold, strings.Repeat("=", 50), Reset)})
 		}
 
-		sess := fl.DefaultSession()
-
 		// Post initial prompt if provided (or handle as command)
 		if initialPrompt != "" {
 			if t.program != nil {
@@ -151,29 +151,10 @@ func (t *TUIFrontend) RunLoop(fl *floor.Floor, ctrl *floor.Controller, agents ma
 			sess.MainRoom.PostUserInput(initialPrompt)
 		}
 
-		var cancelAgent context.CancelFunc
-
-		// Use unified event channel — merges main session chat + all room events
-		unified := sess.StartUnified()
-
-		onCloseInfo := func(info string) {
-			if t.program != nil {
-				t.program.Send(tuiSystemMsg{Text: info})
-			}
-		}
-
-		for tagged := range unified {
-			ec, ok := ResolveEventContext(sess, ctrl, tagged)
-			if !ok {
-				continue
-			}
-			ev := tagged.Event
-
-			switch e := ev.(type) {
+		for tagged := range events {
+			switch e := tagged.Event.(type) {
 			case floor.MessagePosted:
-				t.logChatEvent(ev)
-				decision := DecideAndAutoClose(ec, e, sess, ctrl, onCloseInfo)
-				t.dispatchDecision(ec.Sess, agents, decision, &cancelAgent)
+				t.logChatEvent(e)
 
 			case floor.StreamEvent:
 				if t.program != nil {
@@ -191,70 +172,38 @@ func (t *TUIFrontend) RunLoop(fl *floor.Floor, ctrl *floor.Controller, agents ma
 					t.program.Send(tuiPassedMsg{AgentID: e.AgentID})
 				}
 				t.out.Log("[%s]: [PASS]\n", e.AgentID)
-				decision := DecideAndAutoClose(ec, e, sess, ctrl, onCloseInfo)
-				t.dispatchDecision(ec.Sess, agents, decision, &cancelAgent)
 
 			case floor.AgentErrorEvent:
 				if t.program != nil {
 					t.program.Send(tuiErrorMsg{AgentID: e.AgentID, Err: e.Err})
 				}
 				t.out.Log("[ERROR from %s: %v]\n", e.AgentID, e.Err)
-				decision := DecideAndAutoClose(ec, e, sess, ctrl, onCloseInfo)
-				t.dispatchDecision(ec.Sess, agents, decision, &cancelAgent)
 
-			case floor.UserCommandEvent:
-				decision := floor.HandleCommand(e.Command, sess, ctrl)
-				switch decision.Action {
-				case "stop":
-					if t.program != nil {
-						t.program.Send(tuiStoppedMsg{})
-					}
-					return
-				case "clear":
-					if t.program != nil {
-						t.program.Send(tuiClearedMsg{})
-					}
-				case "room_created", "room_closed":
-					if t.program != nil {
-						t.program.Send(tuiSystemMsg{Text: decision.Info})
-					}
-				case "error":
-					if t.program != nil {
-						t.program.Send(tuiSystemMsg{Text: decision.Info})
-					}
+			case floor.AgentStarted:
+				if t.program != nil {
+					t.program.Send(tuiThinkingMsg{AgentID: e.AgentID})
 				}
+
+			case floor.InfoEvent:
+				if t.program != nil {
+					t.program.Send(tuiSystemMsg{Text: e.Text})
+				}
+
+			case floor.SessionCleared:
+				if t.program != nil {
+					t.program.Send(tuiClearedMsg{})
+				}
+
+			case floor.SessionStopped:
+				if t.program != nil {
+					t.program.Send(tuiStoppedMsg{})
+				}
+				return
 			}
 		}
 	}()
 
 	return nil
-}
-
-func (t *TUIFrontend) dispatchDecision(sess *floor.Session, agents map[string]floor.Agent, d floor.Decision, cancelAgent *context.CancelFunc) {
-	switch d.Action {
-	case "trigger":
-		agent, ok := agents[d.AgentID]
-		if !ok {
-			if t.program != nil {
-				t.program.Send(tuiSystemMsg{Text: fmt.Sprintf("[ERROR: unknown agent %s]", d.AgentID)})
-			}
-			return
-		}
-
-		// Show thinking
-		if t.program != nil {
-			t.program.Send(tuiThinkingMsg{AgentID: d.AgentID})
-		}
-
-		ctx, cancel := context.WithCancel(context.Background())
-		*cancelAgent = cancel
-
-		turn := floor.NewAgentTurn(sess, sess.MainRoom, sess.Floor, d.AgentID)
-		go func() {
-			defer cancel()
-			agent.Run(ctx, turn)
-		}()
-	}
 }
 
 func (t *TUIFrontend) logChatEvent(ev floor.ChatEvent) {

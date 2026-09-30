@@ -147,19 +147,13 @@ func runCLI(bp *blueprint.Blueprint, initialPrompt string) {
 		fe.Headless = true
 	}
 	attachAPIServer(f)
-
-	ctrl := floor.NewController(f)
 	if debug {
-		ctrl.DebugFunc = fe.Debug
+		f.DefaultSession().Controller.DebugFunc = fe.Debug
 	}
 
-	agents := buildAgents(bp)
-
-	if err := fe.RunLoop(f, ctrl, agents, initialPrompt); err != nil {
-		if err.Error() != "stop" {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
+	if err := fe.RunLoop(f, initialPrompt); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
 	}
 }
 
@@ -181,15 +175,11 @@ func runTUI(bp *blueprint.Blueprint, initialPrompt string) {
 	}
 	f.StderrWriter = stderrWriter
 	attachAPIServer(f)
-
-	ctrl := floor.NewController(f)
 	if debug {
-		ctrl.DebugFunc = func(msg string) {
+		f.DefaultSession().Controller.DebugFunc = func(msg string) {
 			fe.Render(floor.SystemInfo{Text: "[debug] " + msg})
 		}
 	}
-
-	agents := buildAgents(bp)
 
 	// Set up Bubble Tea
 	model.SetChat(f.DefaultSession().MainRoom)
@@ -200,7 +190,7 @@ func runTUI(bp *blueprint.Blueprint, initialPrompt string) {
 	fe.SetProgram(p)
 
 	// Start the event loop (background goroutine)
-	if err := fe.RunLoop(f, ctrl, agents, initialPrompt); err != nil {
+	if err := fe.RunLoop(f, initialPrompt); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -221,36 +211,16 @@ func runJSON(bp *blueprint.Blueprint, initialPrompt string) {
 	}
 	f.LogWriter = fe.LogWriter()
 	attachAPIServer(f)
-
-	ctrl := floor.NewController(f)
 	if debug {
-		ctrl.DebugFunc = fe.Debug
+		f.DefaultSession().Controller.DebugFunc = fe.Debug
 	}
 
-	agents := buildAgents(bp)
-
-	if err := fe.RunLoop(f, ctrl, agents, initialPrompt); err != nil {
-		if err.Error() != "stop" {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
+	if err := fe.RunLoop(f, initialPrompt); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
 	}
 }
 
-// buildAgents creates Agent instances from the blueprint.
-func buildAgents(bp *blueprint.Blueprint) map[string]floor.Agent {
-	out := make(map[string]floor.Agent)
-	for i := range bp.Agents {
-		a := &bp.Agents[i]
-		switch a.Type {
-		case "acp":
-			out[a.ID] = agents.NewACP(a)
-		default:
-			out[a.ID] = agents.NewLLM(a)
-		}
-	}
-	return out
-}
 
 func init() {
 	runCmd.Flags().StringVarP(&blueprintFile, "file", "f", "blueprint.yaml", "Blueprint file")
@@ -288,6 +258,7 @@ func resolveSessionID() (sid string, resuming bool) {
 func newFloorWithStore(bp *blueprint.Blueprint) *floor.Floor {
 	sid, resuming := resolveSessionID()
 	f := floor.NewFloorWithSession(bp, sid)
+	f.AgentFactory = agents.New
 	if err := applySessionStore(f, bp, resuming); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)

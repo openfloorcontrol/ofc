@@ -48,12 +48,39 @@ type UserCommandEvent struct {
 	Command string
 }
 
+// --- Emitted by the session loop to subscribers (never posted to a room) ---
+
+// AgentStarted is emitted when the session loop dispatches an agent.
+type AgentStarted struct {
+	AgentID string
+}
+
+// AwaitingInput is emitted when the main room is waiting for the user.
+type AwaitingInput struct{}
+
+// InfoEvent is a status line from the session loop (room closed,
+// command result, unknown agent).
+type InfoEvent struct {
+	Text string
+}
+
+// SessionCleared is emitted after /clear.
+type SessionCleared struct{}
+
+// SessionStopped is emitted after /quit; the loop dispatches no more agents.
+type SessionStopped struct{}
+
 func (MessagePosted) chatEventMarker()    {}
 func (StreamEvent) chatEventMarker()      {}
 func (AgentFinished) chatEventMarker()    {}
 func (AgentPassedEvent) chatEventMarker() {}
 func (AgentErrorEvent) chatEventMarker()  {}
 func (UserCommandEvent) chatEventMarker() {}
+func (AgentStarted) chatEventMarker()     {}
+func (AwaitingInput) chatEventMarker()    {}
+func (InfoEvent) chatEventMarker()        {}
+func (SessionCleared) chatEventMarker()   {}
+func (SessionStopped) chatEventMarker()   {}
 
 // IsCommand returns whether the text is a slash command.
 func IsCommand(text string) bool {

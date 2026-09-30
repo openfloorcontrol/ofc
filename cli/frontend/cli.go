@@ -2,7 +2,6 @@ package frontend
 
 import (
 	"bufio"
-	"context"
 	"fmt"
 	"io"
 	"os"
@@ -62,10 +61,10 @@ func (f *CLIFrontend) Debug(msg string) {
 	f.out.Debug("%s", msg)
 }
 
-// RunLoop is the event-driven main loop for CLI.
-// It reads from the unified event channel (main floor + rooms), renders events,
-// and dispatches agents to the correct context.
-func (f *CLIFrontend) RunLoop(fl *floor.Floor, ctrl *floor.Controller, agents map[string]floor.Agent, initialPrompt string) error {
+// RunLoop starts the floor and its default session, then renders the
+// session's events and feeds stdin to it until the session stops (or,
+// with an initial prompt, until the session waits for the user).
+func (f *CLIFrontend) RunLoop(fl *floor.Floor, initialPrompt string) error {
 	// Start floor infrastructure
 	if err := fl.Start(func(msg string) {
 		f.renderSystemInfo(msg)
@@ -83,13 +82,23 @@ func (f *CLIFrontend) RunLoop(fl *floor.Floor, ctrl *floor.Controller, agents ma
 	// last turn so the user sees the context they're picking up.
 	f.renderLastTurnIfAny(sess)
 
+	events := sess.Subscribe()
+	defer sess.Unsubscribe(events)
+	sess.Start()
+
 	// readyForInput signals the stdin goroutine to show the prompt.
 	// It gates input so we don't show "@user:" while agents are streaming.
 	readyForInput := make(chan struct{}, 1)
+	signalReady := func() {
+		select {
+		case readyForInput <- struct{}{}:
+		default:
+		}
+	}
 
 	if !f.Headless {
 		// Spawn stdin reader goroutine (waits for readyForInput before each prompt)
-		go f.readStdinLoop(fl, readyForInput)
+		go f.readStdinLoop(sess, readyForInput)
 	}
 
 	// If initial prompt, post it as @user (or handle as command)
@@ -99,49 +108,18 @@ func (f *CLIFrontend) RunLoop(fl *floor.Floor, ctrl *floor.Controller, agents ma
 		sess.MainRoom.PostUserInput(initialPrompt)
 	} else if !f.Headless {
 		// No initial prompt — ready for user input immediately
-		readyForInput <- struct{}{}
+		signalReady()
 	}
 
-	var cancelAgent context.CancelFunc
 	oneShot := initialPrompt != "" && !floor.IsCommand(initialPrompt)
 
-	// signalReady sends readyForInput if the decision means "back to user"
-	// Only signal for main floor events (rooms are autonomous)
-	signalReady := func(roomID string, d floor.Decision) {
-		if roomID == "" && d.Action == "wait" {
-			select {
-			case readyForInput <- struct{}{}:
-			default:
-			}
-		}
-	}
-
-	// Use unified event channel — merges main session chat + all room events
-	unified := sess.StartUnified()
-
-	// Main event loop — flat, no recursion
-	for tagged := range unified {
-		ec, ok := ResolveEventContext(sess, ctrl, tagged)
-		if !ok {
-			continue // stale event for a closed room
-		}
-		ev := tagged.Event
-
-		switch e := ev.(type) {
+	for tagged := range events {
+		switch e := tagged.Event.(type) {
 		case floor.MessagePosted:
 			f.renderMessagePosted(e)
 
-			decision := DecideAndAutoClose(ec, e, sess, ctrl, f.renderSystemInfo)
-			if err := f.handleDecision(ec.Sess, ec.Ctrl, agents, decision, &cancelAgent); err != nil {
-				return err
-			}
-			if oneShot && ec.RoomID == "" && decision.Action == "wait" {
-				return nil
-			}
-			signalReady(ec.RoomID, decision)
-
 		case floor.StreamEvent:
-			f.renderStream(e.Event, ec.RoomID)
+			f.renderStream(e.Event, tagged.RoomID)
 
 		case floor.AgentFinished:
 			f.clearThinking()
@@ -150,84 +128,36 @@ func (f *CLIFrontend) RunLoop(fl *floor.Floor, ctrl *floor.Controller, agents ma
 		case floor.AgentPassedEvent:
 			f.out.Terminal("\r\033[K")
 			label := e.AgentID
-			if ec.RoomID != "" {
-				label = ec.RoomID + "/" + e.AgentID
+			if tagged.RoomID != "" {
+				label = tagged.RoomID + "/" + e.AgentID
 			}
 			f.out.Terminal("%s%s[%s]:%s [PASS]\n", Bold, f.agentColor(e.AgentID), label, Reset)
-
-			decision := DecideAndAutoClose(ec, e, sess, ctrl, f.renderSystemInfo)
-			if err := f.handleDecision(ec.Sess, ec.Ctrl, agents, decision, &cancelAgent); err != nil {
-				return err
-			}
-			if oneShot && ec.RoomID == "" && decision.Action == "wait" {
-				return nil
-			}
-			signalReady(ec.RoomID, decision)
 
 		case floor.AgentErrorEvent:
 			f.out.Terminal("\r\033[K")
 			f.out.AgentLabel(e.AgentID, f.agentColor(e.AgentID))
 			f.out.Print("[ERROR: %v]\n", e.Err)
 
-			decision := DecideAndAutoClose(ec, e, sess, ctrl, f.renderSystemInfo)
-			if err := f.handleDecision(ec.Sess, ec.Ctrl, agents, decision, &cancelAgent); err != nil {
-				return err
-			}
-			signalReady(ec.RoomID, decision)
+		case floor.AgentStarted:
+			f.out.Print("\n")
+			f.out.Terminal("%s%s[%s]:%s %sthinking...%s", Bold, f.agentColor(e.AgentID), e.AgentID, Reset, Dim, Reset)
 
-		case floor.UserCommandEvent:
-			decision := floor.HandleCommand(e.Command, sess, ctrl)
-			switch decision.Action {
-			case "stop":
-				f.out.Print("\n%sGoodbye! ofc. 🎤%s\n", Dim, Reset)
-				return nil
-			case "clear":
-				f.out.Print("%s[Conversation cleared]%s\n", Dim, Reset)
-			case "room_created", "room_closed":
-				f.renderSystemInfo(decision.Info)
-			case "error":
-				f.renderSystemInfo(decision.Info)
-			}
-			signalReady("", decision)
-		}
-	}
+		case floor.InfoEvent:
+			f.renderSystemInfo(e.Text)
 
-	return nil
-}
+		case floor.SessionCleared:
+			f.out.Print("%s[Conversation cleared]%s\n", Dim, Reset)
 
-// handleDecision acts on a Controller Decision by dispatching agents.
-func (f *CLIFrontend) handleDecision(sess *floor.Session, ctrl *floor.Controller, agents map[string]floor.Agent, d floor.Decision, cancelAgent *context.CancelFunc) error {
-	switch d.Action {
-	case "trigger":
-		agent, ok := agents[d.AgentID]
-		if !ok {
-			f.renderSystemInfo(fmt.Sprintf("[ERROR: unknown agent %s]", d.AgentID))
+		case floor.SessionStopped:
+			f.out.Print("\n%sGoodbye! ofc. 🎤%s\n", Dim, Reset)
 			return nil
+
+		case floor.AwaitingInput:
+			if oneShot {
+				return nil
+			}
+			signalReady()
 		}
-
-		// Show thinking indicator
-		f.out.Print("\n")
-		f.out.Terminal("%s%s[%s]:%s %sthinking...%s", Bold, f.agentColor(d.AgentID), d.AgentID, Reset, Dim, Reset)
-
-		ctx, cancel := context.WithCancel(context.Background())
-		*cancelAgent = cancel
-
-		// Build a per-turn capability handle and run the agent in a goroutine.
-		turn := floor.NewAgentTurn(sess, sess.MainRoom, sess.Floor, d.AgentID)
-		go func() {
-			defer cancel()
-			agent.Run(ctx, turn)
-			// Agent.Run() posts MessagePosted (or AgentPassedEvent/AgentErrorEvent)
-			// to the session's main room. The main loop will pick it up and
-			// call Decide again.
-		}()
-
-	case "wait":
-		// Nothing — user will type, or we'll exit in one-shot mode
-
-	case "stop":
-		f.out.Print("\n%sGoodbye! ofc. 🎤%s\n", Dim, Reset)
-		return fmt.Errorf("stop")
 	}
 
 	return nil
@@ -236,8 +166,7 @@ func (f *CLIFrontend) handleDecision(sess *floor.Session, ctrl *floor.Controller
 // readStdinLoop reads lines from stdin and posts them to the default session's main room.
 // Waits for readyForInput before showing the prompt (so it doesn't
 // appear while agents are streaming).
-func (f *CLIFrontend) readStdinLoop(fl *floor.Floor, readyForInput chan struct{}) {
-	sess := fl.DefaultSession()
+func (f *CLIFrontend) readStdinLoop(sess *floor.Session, readyForInput chan struct{}) {
 	for range readyForInput {
 		f.out.Print("\n")
 		f.out.AgentLabel("@user", f.agentColor("@user"))

@@ -33,8 +33,12 @@ type Session struct {
 	Rooms         map[string]*Room
 	AgentContexts map[string]*AgentContext
 
+	// Controller decides turn-taking in #main. Sub-rooms have their own.
+	Controller *Controller
+
 	agentRoom map[string]string // agentID → roomID ("" or MainRoomID = on main)
 	unified   chan TaggedEvent  // lazy, set by StartUnified
+	loop      sessionLoop       // subscribers + stop state, see session_loop.go
 }
 
 // ID implements SessionView. Returns the session identifier.
@@ -55,6 +59,7 @@ func NewSession(id string, floor *Floor) *Session {
 		MainRoom:      main,
 		Rooms:         map[string]*Room{MainRoomID: main},
 		AgentContexts: make(map[string]*AgentContext),
+		Controller:    NewController(floor),
 		agentRoom:     make(map[string]string),
 	}
 	main.setSession(s)
