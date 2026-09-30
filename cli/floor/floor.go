@@ -46,9 +46,14 @@ type Floor struct {
 	// initial blueprint loading populates them via the same mutations.
 	// agents is read via the Agents() method (which also implements
 	// AgentRegistry for Controller).
-	agents          []blueprint.Agent
-	Furniture       map[string]furniture.Furniture
-	ACPSubprocesses map[string]*acpclient.Subprocess
+	agents    []blueprint.Agent
+	Furniture map[string]furniture.Furniture
+
+	// ACP subprocesses, one per (session, agent), spawned on the agent's
+	// first turn in a session. Guarded by acpMu, not mu: spawning takes
+	// seconds and must not block floor mutations.
+	acpSubprocesses map[acpKey]*acpclient.Subprocess
+	acpMu           sync.Mutex
 
 	Sandbox   *sandbox.Sandbox
 	APIServer APIServer // interface; concrete impl in the top-level api/ package. Caller assigns before Start.
@@ -113,7 +118,7 @@ func NewFloorWithSession(bp *blueprint.Blueprint, sessionID string) *Floor {
 	f := &Floor{
 		Blueprint:          bp,
 		Furniture:          make(map[string]furniture.Furniture),
-		ACPSubprocesses:    make(map[string]*acpclient.Subprocess),
+		acpSubprocesses:    make(map[acpKey]*acpclient.Subprocess),
 		Store:              NewMemoryStore(),
 		Sessions:           make(map[string]*Session),
 		DebugFunc:          func(string) {},
@@ -292,10 +297,7 @@ func (f *Floor) Start(renderInfo func(string)) error {
 // Stop tears down ACP sessions, furniture, API server, sandbox, and
 // closes the store if it implements io.Closer (e.g. JSONLStore).
 func (f *Floor) Stop() {
-	for id, sub := range f.ACPSubprocesses {
-		f.debug("closing ACP subprocess for %s", id)
-		sub.Close()
-	}
+	f.closeACPSubprocesses(func(acpKey) bool { return true })
 	if f.APIServer != nil {
 		f.APIServer.Stop()
 	}
@@ -382,13 +384,11 @@ func (f *Floor) RemoveFurniture(name string) error {
 }
 
 // AddAgent appends an agent to the floor and creates an AgentContext for
-// it in every existing session. For ACP agents, also spawns the
-// subprocess and registers its MCP server list — this requires Start()
-// to have run (the API server must be up so ACP can reach furniture MCPs).
+// it in every existing session. ACP agents require Start() to have run
+// (the API server must be up so ACP can reach furniture MCPs); their
+// subprocesses start on each session's first turn.
 //
-// renderInfo receives status updates during ACP subprocess startup. For
-// non-ACP agents (LLM) it is unused. Pass a no-op for non-interactive
-// callers.
+// renderInfo is kept for callers that report progress; it is unused.
 func (f *Floor) AddAgent(spec blueprint.Agent, renderInfo func(string)) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -402,14 +402,6 @@ func (f *Floor) AddAgent(spec blueprint.Agent, renderInfo func(string)) error {
 		return fmt.Errorf("AddAgent(%s): ACP agent requires Floor.Start() first", spec.ID)
 	}
 
-	// For ACP, spawn the subprocess before recording the agent — if startup
-	// fails we don't want a half-registered agent.
-	if spec.Type == "acp" {
-		if err := f.spawnACPSubprocess(spec, renderInfo); err != nil {
-			return err
-		}
-	}
-
 	f.agents = append(f.agents, spec)
 	for _, sess := range f.Sessions {
 		sess.AddAgentContext(spec.ID)
@@ -418,7 +410,8 @@ func (f *Floor) AddAgent(spec blueprint.Agent, renderInfo func(string)) error {
 }
 
 // RemoveAgent removes an agent from the floor. For ACP agents, terminates
-// the subprocess. Removes the AgentContext from every session.
+// its subprocesses in every session. Removes the AgentContext from every
+// session.
 func (f *Floor) RemoveAgent(id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -434,12 +427,7 @@ func (f *Floor) RemoveAgent(id string) error {
 		return fmt.Errorf("agent %s not found", id)
 	}
 
-	// Terminate ACP subprocess if present.
-	if sub, ok := f.ACPSubprocesses[id]; ok {
-		f.debug("closing ACP subprocess for %s", id)
-		sub.Close()
-		delete(f.ACPSubprocesses, id)
-	}
+	f.closeACPSubprocesses(func(k acpKey) bool { return k.agent == id })
 
 	f.agents = append(f.agents[:idx], f.agents[idx+1:]...)
 	for _, sess := range f.Sessions {

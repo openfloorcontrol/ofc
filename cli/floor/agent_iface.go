@@ -34,7 +34,9 @@ type AgentTurn interface {
 	// caller distinguish "not configured" from "exists but empty".
 	Furniture(name string) (furniture.Furniture, bool)
 	Sandbox() *sandbox.Sandbox
-	ACPSubprocess() (*acpclient.Subprocess, bool)
+	// ACPSubprocess returns this agent's subprocess in this turn's
+	// session, starting it on the agent's first turn there.
+	ACPSubprocess() (*acpclient.Subprocess, error)
 
 	// Debug logging, routed through the engine's debug sink.
 	Debug(format string, args ...any)

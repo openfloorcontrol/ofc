@@ -27,13 +27,10 @@ func (a *ACPAgent) AgentID() string { return a.agent.ID }
 // Run executes one ACP agent turn: build context, prompt session, post results.
 // Blocks until complete.
 func (a *ACPAgent) Run(ctx context.Context, turn floor.AgentTurn) error {
-	subproc, ok := turn.ACPSubprocess()
-	if !ok {
-		turn.Status(floor.AgentErrorEvent{
-			AgentID: a.agent.ID,
-			Err:     fmt.Errorf("no ACP subprocess for agent %s", a.agent.ID),
-		})
-		return fmt.Errorf("no ACP subprocess for agent %s", a.agent.ID)
+	subproc, err := turn.ACPSubprocess()
+	if err != nil {
+		turn.Status(floor.AgentErrorEvent{AgentID: a.agent.ID, Err: err})
+		return err
 	}
 
 	client := subproc.Client

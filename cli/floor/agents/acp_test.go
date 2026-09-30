@@ -86,6 +86,66 @@ func ask(t *testing.T, sess *floor.Session, events <-chan floor.TaggedEvent, tex
 	}
 }
 
+// pid extracts the process id from a fakeagent reply.
+func pid(t *testing.T, reply string) string {
+	t.Helper()
+	field, _, ok := strings.Cut(reply, " ")
+	if !ok || !strings.HasPrefix(field, "pid=") {
+		t.Fatalf("not a fakeagent reply: %q", reply)
+	}
+	return strings.TrimPrefix(field, "pid=")
+}
+
+// Each session talks to its own agent process, and a session keeps its
+// process across turns.
+func TestACPSubprocessPerSession(t *testing.T) {
+	f := startACPFloor(t)
+	a, err := f.CreateSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := f.CreateSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	aEvents, bEvents := a.Subscribe(), b.Subscribe()
+
+	a1 := pid(t, ask(t, a, aEvents, "one"))
+	b1 := pid(t, ask(t, b, bEvents, "one"))
+	a2 := pid(t, ask(t, a, aEvents, "two"))
+
+	if a1 == b1 {
+		t.Errorf("sessions share agent process %s", a1)
+	}
+	if a1 != a2 {
+		t.Errorf("session changed agent process between turns: %s, then %s", a1, a2)
+	}
+}
+
+// /quit ends the session's agent process.
+func TestACPSubprocessClosedOnQuit(t *testing.T) {
+	f := startACPFloor(t)
+	sess := f.DefaultSession()
+	events := sess.Subscribe()
+	sess.Start()
+
+	p := pid(t, ask(t, sess, events, "hello"))
+	sess.MainRoom.PostUserInput("/quit")
+	deadline := time.Now().Add(5 * time.Second)
+	for processAlive(p) {
+		if time.Now().After(deadline) {
+			t.Fatalf("agent process %s still running after /quit", p)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// processAlive reports whether a process with the given pid exists.
+func processAlive(pid string) bool {
+	_, err := os.Stat("/proc/" + pid)
+	return err == nil
+}
+
 // The reply must hold the agent's streamed text even when the agent ends
 // its turn right after sending it.
 func TestACPReplyHasStreamedText(t *testing.T) {

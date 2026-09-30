@@ -181,5 +181,6 @@ func (s *Session) buildAgent(agentID string) (Agent, error) {
 
 func (s *Session) stop() {
 	s.loop.stopped = true
+	s.Floor.closeACPSubprocesses(func(k acpKey) bool { return k.session == s.id })
 	s.emit("", SessionStopped{})
 }

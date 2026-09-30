@@ -73,9 +73,8 @@ func (t *agentTurn) Sandbox() *sandbox.Sandbox {
 	return t.floor.Sandbox
 }
 
-func (t *agentTurn) ACPSubprocess() (*acpclient.Subprocess, bool) {
-	sub, ok := t.floor.ACPSubprocesses[t.agentID]
-	return sub, ok
+func (t *agentTurn) ACPSubprocess() (*acpclient.Subprocess, error) {
+	return t.floor.acpSubprocess(t.view.ID(), t.agentID)
 }
 
 func (t *agentTurn) Debug(format string, args ...any) {
