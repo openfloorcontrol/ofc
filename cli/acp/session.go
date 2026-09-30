@@ -69,7 +69,7 @@ func (s *Subprocess) Initialize(ctx context.Context) error {
 	resp, err := s.Conn.Initialize(ctx, acpsdk.InitializeRequest{
 		ProtocolVersion: acpsdk.ProtocolVersionNumber,
 		ClientCapabilities: acpsdk.ClientCapabilities{
-			Fs: acpsdk.FileSystemCapability{
+			Fs: acpsdk.FileSystemCapabilities{
 				ReadTextFile:  true,
 				WriteTextFile: true,
 			},

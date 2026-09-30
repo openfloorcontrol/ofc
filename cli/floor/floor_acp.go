@@ -87,7 +87,7 @@ func (f *Floor) buildACPMCPServers(agent blueprint.Agent, session *acpclient.Sub
 		case caps.Sse:
 			url := base + "/api/v1/floors/" + floorID + "/sse/" + fname
 			servers = append(servers, acpsdk.McpServer{
-				Sse: &acpsdk.McpServerSse{
+				Sse: &acpsdk.McpServerSseInline{
 					Type:    "sse",
 					Name:    fname,
 					Url:     url,
@@ -97,7 +97,7 @@ func (f *Floor) buildACPMCPServers(agent blueprint.Agent, session *acpclient.Sub
 		case caps.Http:
 			url := base + "/api/v1/floors/" + floorID + "/mcp/" + fname + "/"
 			servers = append(servers, acpsdk.McpServer{
-				Http: &acpsdk.McpServerHttp{
+				Http: &acpsdk.McpServerHttpInline{
 					Type:    "http",
 					Name:    fname,
 					Url:     url,

@@ -332,9 +332,9 @@ func (c *FloorClient) WaitForTerminalExit(ctx context.Context, params acpsdk.Wai
 	}, nil
 }
 
-func (c *FloorClient) KillTerminalCommand(ctx context.Context, params acpsdk.KillTerminalCommandRequest) (acpsdk.KillTerminalCommandResponse, error) {
+func (c *FloorClient) KillTerminal(ctx context.Context, params acpsdk.KillTerminalRequest) (acpsdk.KillTerminalResponse, error) {
 	_ = c.Terminals.Kill(params.TerminalId)
-	return acpsdk.KillTerminalCommandResponse{}, nil
+	return acpsdk.KillTerminalResponse{}, nil
 }
 
 func (c *FloorClient) ReleaseTerminal(ctx context.Context, params acpsdk.ReleaseTerminalRequest) (acpsdk.ReleaseTerminalResponse, error) {
