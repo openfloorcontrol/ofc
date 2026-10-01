@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Live ACP checks against opencode, run through mf with a real model.
 #
-#   tests/live/opencode/run.sh [mf-model]     (default: groq/qwen38)
+#   tests/live/opencode/run.sh [mf-model]     (default: @ofc-test)
 #
-# Needs ofc (or $OFC), mf and opencode. Each check uses its own sessions
-# directory under a fresh temp dir, which is kept for inspection.
+# Needs ofc (or $OFC), mf and opencode, and a cheap model tagged for live
+# tests in mf:  mf set <name> tags ofc-test
+# Each check uses its own sessions directory under a fresh temp dir,
+# which is kept for inspection.
 #
 #   1. one-shot   — a single turn gets an answer
 #   2. sessions   — two web sessions get separate opencode processes and
@@ -13,8 +15,13 @@
 #                   session in a new process
 set -euo pipefail
 
-MODEL=${1:-groq/qwen38}
+MODEL=${1:-@ofc-test}
 OFC=${OFC:-ofc}
+
+if ! mf get "$MODEL" model >/dev/null 2>&1; then
+  echo "mf has no model '$MODEL'. Tag one for live tests:  mf set <name> tags ofc-test" >&2
+  exit 1
+fi
 PORT=${PORT:-18199}
 BP="$(cd "$(dirname "$0")" && pwd)/blueprint.yaml"
 WORK=$(mktemp -d -t ofc-live-opencode.XXXXXX)

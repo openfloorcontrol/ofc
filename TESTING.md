@@ -171,7 +171,8 @@ OFC_INTEGRATION=1 go test ./... -timeout 120s
 `go test` covers ACP with `cli/acp/fakeagent`, a deterministic agent. To check the same behavior against a real agent and model, run:
 
 ```bash
-tests/live/opencode/run.sh [mf-model]    # default: groq/qwen38; OFC=path/to/ofc to pick a binary
+mf set <name> tags ofc-test             # once: tag a cheap model for live tests
+tests/live/opencode/run.sh [mf-model]    # default: @ofc-test; OFC=path/to/ofc to pick a binary
 ```
 
 It runs opencode through `mf run opencode <model> -- acp` and checks a one-shot turn, that two web sessions get separate opencode processes and conversations, and that `ofc run --session` resumes the agent's session in a new process. Work files stay in a temp dir printed at the start.
