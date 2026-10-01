@@ -99,6 +99,9 @@ type Floor struct {
 	// means nobody can consent (e.g. a cron run): unauthorized OAuth
 	// furniture fails, pointing to `ofc auth`.
 	OAuthConsent func(furniture, authURL string)
+	// OAuthCallbackURL is the consent redirect target (see
+	// furniture.OAuth.CallbackURL); empty for a loopback port.
+	OAuthCallbackURL string
 
 	// mu serializes mutations to the live runtime state (Agents,
 	// Furniture, ACPSubprocesses). v1 uses a plain mutex; if/when we
@@ -512,6 +515,7 @@ func (f *Floor) OAuthHandler(fd blueprint.FurnitureDef) (auth.OAuthHandler, erro
 		ClientID:          o.ClientID,
 		ClientSecret:      o.ClientSecret,
 		Scopes:            o.Scopes,
+		CallbackURL:       f.OAuthCallbackURL,
 	}
 	if !cfg.ClientCredentials {
 		if f.OAuthDir == "" {

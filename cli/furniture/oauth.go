@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/auth"
@@ -43,6 +44,12 @@ type OAuth struct {
 	// Consent shows a person the authorization URL. Nil means nobody can
 	// consent here: an unauthorized server fails with ErrNotAuthorized.
 	Consent func(authURL string)
+
+	// CallbackURL is where the authorization server sends the browser
+	// after consent, e.g. http://host.tailnet:8765/callback. ofc listens on
+	// its port, on all interfaces unless the host is loopback, while it
+	// waits. Empty: a free loopback port on this machine.
+	CallbackURL string
 }
 
 // Handler returns the OAuth handler for the MCP transport.
@@ -65,8 +72,14 @@ func (o OAuth) Handler() (auth.OAuthHandler, error) {
 		return &noConsentHandler{name: o.Name, ts: initial}, nil
 	}
 
-	redirect, err := loopbackRedirectURL()
-	if err != nil {
+	redirect := o.CallbackURL
+	if redirect == "" {
+		var err error
+		if redirect, err = loopbackRedirectURL(); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := callbackListenAddr(redirect); err != nil {
 		return nil, err
 	}
 	cfg := &auth.AuthorizationCodeHandlerConfig{
@@ -102,7 +115,35 @@ func (o OAuth) Handler() (auth.OAuthHandler, error) {
 			},
 		}
 	}
-	return auth.NewAuthorizationCodeHandler(cfg)
+	h, err := auth.NewAuthorizationCodeHandler(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &failOnceHandler{OAuthHandler: h}, nil
+}
+
+// failOnceHandler stops after a failed authorization: the transport
+// retries a rejected request, which would otherwise ask the person to
+// consent again before reporting why the first consent failed.
+type failOnceHandler struct {
+	auth.OAuthHandler
+	mu     sync.Mutex
+	failed error
+}
+
+func (h *failOnceHandler) Authorize(ctx context.Context, req *http.Request, resp *http.Response) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.failed != nil {
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		return h.failed
+	}
+	if err := h.OAuthHandler.Authorize(ctx, req, resp); err != nil {
+		h.failed = err
+		return err
+	}
+	return nil
 }
 
 // noConsentHandler uses the stored token and fails, instead of starting a
@@ -137,16 +178,43 @@ func loopbackRedirectURL() (string, error) {
 	return "http://" + addr + "/callback", nil
 }
 
+// callbackListenAddr is where ofc listens for a callback URL: the URL's
+// own host if it is loopback, otherwise all interfaces on its port.
+func callbackListenAddr(callback string) (string, error) {
+	u, err := url.Parse(callback)
+	if err != nil || u.Scheme != "http" || u.Host == "" {
+		return "", fmt.Errorf("OAuth callback %q: want http://host:port/path", callback)
+	}
+	if u.Port() == "" {
+		return "", fmt.Errorf("OAuth callback %q needs an explicit port", callback)
+	}
+	if ip := net.ParseIP(u.Hostname()); (ip != nil && ip.IsLoopback()) || u.Hostname() == "localhost" {
+		return u.Host, nil
+	}
+	return ":" + u.Port(), nil
+}
+
 // fetchCode shows authURL via consent and waits for the authorization
-// server to redirect the browser to redirect with the code.
+// server to redirect the browser to redirect with the code. A callback
+// whose state doesn't match authURL's (stale, or cut off at an unquoted
+// "&" in a shell) is answered with an error and ignored.
 func fetchCode(ctx context.Context, redirect, authURL string, consent func(string)) (*auth.AuthorizationResult, error) {
 	u, err := url.Parse(redirect)
 	if err != nil {
 		return nil, err
 	}
-	l, err := net.Listen("tcp", u.Host)
+	au, err := url.Parse(authURL)
 	if err != nil {
-		return nil, fmt.Errorf("listen for the OAuth callback on %s: %w", u.Host, err)
+		return nil, err
+	}
+	wantState := au.Query().Get("state")
+	addr, err := callbackListenAddr(redirect)
+	if err != nil {
+		return nil, err
+	}
+	l, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("listen for the OAuth callback on %s: %w", addr, err)
 	}
 	results := make(chan *auth.AuthorizationResult, 1)
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -159,7 +227,13 @@ func fetchCode(ctx context.Context, redirect, authURL string, consent func(strin
 			http.Error(w, "authorization failed: "+e, http.StatusBadRequest)
 			return
 		}
-		fmt.Fprintln(w, "ofc is authorized. You can close this tab.")
+		if q.Get("state") != wantState {
+			http.Error(w, "ofc: this callback's state does not match the waiting authorization. "+
+				"Use the callback URL of the current `ofc auth` run, in full (quote it in a shell).",
+				http.StatusBadRequest)
+			return
+		}
+		fmt.Fprintln(w, "ofc received the authorization. You can close this tab.")
 		select {
 		case results <- &auth.AuthorizationResult{Code: q.Get("code"), State: q.Get("state"), Iss: q.Get("iss")}:
 		default:

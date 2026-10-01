@@ -18,7 +18,12 @@ var authCmd = &cobra.Command{
 	Long: `Connect to an MCP furniture with an oauth: block and, if it needs it, run
 the OAuth consent: open the printed URL and approve. The token is stored in
 ~/.ofc/oauth/<floor>/<furniture>.json (or $OFC_OAUTH_DIR) and refreshed by
-every ofc run that uses the furniture, including ones already running.`,
+every ofc run that uses the furniture, including ones already running.
+
+After consent the browser is sent to a callback on a free loopback port of
+this machine. If the browser runs elsewhere, set $OFC_OAUTH_CALLBACK to a
+URL that reaches this machine, e.g. http://pi.tailnet.ts.net:8765/callback;
+ofc listens on its port while it waits.`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		if err := authorize(args[0]); err != nil {
@@ -57,6 +62,7 @@ func authorize(name string) error {
 	}
 	f := floor.NewFloor(bp)
 	f.OAuthDir = dir
+	f.OAuthCallbackURL = os.Getenv("OFC_OAUTH_CALLBACK")
 	f.OAuthConsent = func(_, authURL string) {
 		fmt.Printf("Open this URL to authorize %s:\n  %s\n", name, authURL)
 	}

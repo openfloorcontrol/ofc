@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -163,6 +164,109 @@ func TestOAuthConsentRegistersAndStoresToken(t *testing.T) {
 	}
 	if info, _ := os.Stat(file); info.Mode().Perm() != 0o600 {
 		t.Errorf("token file mode = %v, want 0600", info.Mode().Perm())
+	}
+}
+
+// A failed code exchange is reported after one consent; the transport's
+// retry must not ask the person again.
+func TestOAuthFailedExchangeAsksOnce(t *testing.T) {
+	srv := newOAuthServer(t)
+	consents := 0
+	badBrowser := func(authURL string) {
+		consents++
+		u, _ := url.Parse(authURL)
+		q := u.Query()
+		resp, err := http.Get(q.Get("redirect_uri") + "?code=WRONG&state=" + url.QueryEscape(q.Get("state")))
+		if err == nil {
+			resp.Body.Close()
+		}
+	}
+	_, err := connectOAuth(t, srv, OAuth{Name: "kb", TokenFile: filepath.Join(t.TempDir(), "kb.json"), Consent: badBrowser})
+	if err == nil || !strings.Contains(err.Error(), "invalid_grant") {
+		t.Errorf("err = %v, want the token endpoint's error", err)
+	}
+	if consents != 1 {
+		t.Errorf("consents = %d, want 1", consents)
+	}
+}
+
+// A callback with the wrong state is refused, and the right one still
+// completes the consent.
+func TestOAuthCallbackWithWrongStateIsIgnored(t *testing.T) {
+	srv := newOAuthServer(t)
+	var refused int
+	browser := func(authURL string) {
+		u, _ := url.Parse(authURL)
+		q := u.Query()
+		cb := q.Get("redirect_uri")
+		if resp, err := http.Get(cb + "?code=code-1"); err == nil { // state cut off
+			if resp.StatusCode == http.StatusBadRequest {
+				refused++
+			}
+			resp.Body.Close()
+		}
+		resp, err := http.Get(cb + "?code=code-1&state=" + url.QueryEscape(q.Get("state")))
+		if err == nil {
+			resp.Body.Close()
+		}
+	}
+	m, err := connectOAuth(t, srv, OAuth{Name: "kb", TokenFile: filepath.Join(t.TempDir(), "kb.json"), Consent: browser})
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	m.Close()
+	if refused != 1 {
+		t.Errorf("callback without state: refused %d times, want 1", refused)
+	}
+}
+
+func TestCallbackListenAddr(t *testing.T) {
+	cases := map[string]string{
+		"http://127.0.0.1:8765/callback":       "127.0.0.1:8765",
+		"http://localhost:8765/callback":       "localhost:8765",
+		"http://pi.tail.ts.net:8765/callback":  ":8765",
+		"http://pi.tail.ts.net/callback":       "", // no port
+		"https://pi.tail.ts.net:8765/callback": "", // ofc serves plain http
+	}
+	for in, want := range cases {
+		got, err := callbackListenAddr(in)
+		if want == "" && err == nil {
+			t.Errorf("%s: want an error, got %q", in, got)
+		}
+		if want != "" && got != want {
+			t.Errorf("%s: got %q (%v), want %q", in, got, err, want)
+		}
+	}
+}
+
+// With a configured callback URL, ofc registers that URL and listens on
+// its port on all interfaces.
+func TestOAuthConfiguredCallback(t *testing.T) {
+	srv := newOAuthServer(t)
+	l, _ := net.Listen("tcp", "127.0.0.1:0")
+	port := l.Addr().(*net.TCPAddr).Port
+	l.Close()
+	callback := fmt.Sprintf("http://ofc-test.invalid:%d/callback", port)
+
+	var gotRedirect string
+	viaLoopback := func(authURL string) {
+		u, _ := url.Parse(authURL)
+		q := u.Query()
+		gotRedirect = q.Get("redirect_uri")
+		local := strings.Replace(gotRedirect, "ofc-test.invalid", "127.0.0.1", 1)
+		resp, err := http.Get(local + "?code=code-1&state=" + url.QueryEscape(q.Get("state")))
+		if err == nil {
+			resp.Body.Close()
+		}
+	}
+	m, err := connectOAuth(t, srv, OAuth{Name: "kb", TokenFile: filepath.Join(t.TempDir(), "kb.json"),
+		Consent: viaLoopback, CallbackURL: callback})
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	m.Close()
+	if gotRedirect != callback {
+		t.Errorf("redirect_uri = %q, want %q", gotRedirect, callback)
 	}
 }
 

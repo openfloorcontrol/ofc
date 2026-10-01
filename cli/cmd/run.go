@@ -399,6 +399,7 @@ func newFloorWithStore(bp *blueprint.Blueprint) (f *floor.Floor, resuming bool) 
 		os.Exit(1)
 	}
 	f.OAuthDir = oauthDir
+	f.OAuthCallbackURL = os.Getenv("OFC_OAUTH_CALLBACK")
 	if interactive() {
 		f.OAuthConsent = func(name, authURL string) {
 			fmt.Fprintf(os.Stderr, "\n%s needs authorization. Open this URL to continue:\n  %s\n\n", name, authURL)
