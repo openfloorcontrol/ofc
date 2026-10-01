@@ -221,21 +221,58 @@ func TestOAuthCallbackWithWrongStateIsIgnored(t *testing.T) {
 }
 
 func TestCallbackListenAddr(t *testing.T) {
-	cases := map[string]string{
-		"http://127.0.0.1:8765/callback":       "127.0.0.1:8765",
-		"http://localhost:8765/callback":       "localhost:8765",
-		"http://pi.tail.ts.net:8765/callback":  ":8765",
-		"http://pi.tail.ts.net/callback":       "", // no port
-		"https://pi.tail.ts.net:8765/callback": "", // ofc serves plain http
+	cases := []struct {
+		url  string
+		port int
+		want string // "" for an error
+	}{
+		{"http://127.0.0.1:8765/callback", 0, "127.0.0.1:8765"},
+		{"http://localhost:8765/callback", 0, "localhost:8765"},
+		{"http://pi.tail.ts.net:8765/callback", 0, ":8765"},
+		{"http://pi.tail.ts.net/callback", 0, ""},                         // no port
+		{"https://pi.tail.ts.net:8765/callback", 0, ""},                   // ofc serves plain http
+		{"https://ofc-auth.example.com/callback", 8765, "127.0.0.1:8765"}, // behind a proxy
+		{"ftp://example.com/callback", 8765, ""},
 	}
-	for in, want := range cases {
-		got, err := callbackListenAddr(in)
-		if want == "" && err == nil {
-			t.Errorf("%s: want an error, got %q", in, got)
+	for _, c := range cases {
+		got, err := callbackListenAddr(c.url, c.port)
+		if c.want == "" && err == nil {
+			t.Errorf("%s (port %d): want an error, got %q", c.url, c.port, got)
 		}
-		if want != "" && got != want {
-			t.Errorf("%s: got %q (%v), want %q", in, got, err, want)
+		if c.want != "" && got != c.want {
+			t.Errorf("%s (port %d): got %q (%v), want %q", c.url, c.port, got, err, c.want)
 		}
+	}
+}
+
+// With an https callback behind a proxy, ofc registers the https URL and
+// listens on plain http on 127.0.0.1:CallbackPort.
+func TestOAuthCallbackBehindProxy(t *testing.T) {
+	srv := newOAuthServer(t)
+	l, _ := net.Listen("tcp", "127.0.0.1:0")
+	port := l.Addr().(*net.TCPAddr).Port
+	l.Close()
+	callback := "https://ofc-auth.example.com/callback"
+
+	var gotRedirect string
+	viaProxy := func(authURL string) {
+		u, _ := url.Parse(authURL)
+		q := u.Query()
+		gotRedirect = q.Get("redirect_uri")
+		// The proxy forwards https://ofc-auth.example.com/callback to ofc.
+		resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/callback?code=code-1&state=%s", port, url.QueryEscape(q.Get("state"))))
+		if err == nil {
+			resp.Body.Close()
+		}
+	}
+	m, err := connectOAuth(t, srv, OAuth{Name: "kb", TokenFile: filepath.Join(t.TempDir(), "kb.json"),
+		Consent: viaProxy, CallbackURL: callback, CallbackPort: port})
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	m.Close()
+	if gotRedirect != callback {
+		t.Errorf("redirect_uri = %q, want %q", gotRedirect, callback)
 	}
 }
 

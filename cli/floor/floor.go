@@ -102,6 +102,9 @@ type Floor struct {
 	// OAuthCallbackURL is the consent redirect target (see
 	// furniture.OAuth.CallbackURL); empty for a loopback port.
 	OAuthCallbackURL string
+	// OAuthCallbackPort is the 127.0.0.1 port to listen on behind a proxy
+	// serving OAuthCallbackURL (see furniture.OAuth.CallbackPort).
+	OAuthCallbackPort int
 
 	// mu serializes mutations to the live runtime state (Agents,
 	// Furniture, ACPSubprocesses). v1 uses a plain mutex; if/when we
@@ -516,6 +519,7 @@ func (f *Floor) OAuthHandler(fd blueprint.FurnitureDef) (auth.OAuthHandler, erro
 		ClientSecret:      o.ClientSecret,
 		Scopes:            o.Scopes,
 		CallbackURL:       f.OAuthCallbackURL,
+		CallbackPort:      f.OAuthCallbackPort,
 	}
 	if !cfg.ClientCredentials {
 		if f.OAuthDir == "" {

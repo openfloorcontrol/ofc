@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/openfloorcontrol/ofc/floor"
 	"github.com/openfloorcontrol/ofc/floor/sessionstore"
@@ -39,6 +40,25 @@ func defaultOAuthDir() (string, error) {
 		return "", fmt.Errorf("locate home dir: %w", err)
 	}
 	return filepath.Join(home, ".ofc", "oauth"), nil
+}
+
+// applyOAuthCallback sets the floor's consent callback from
+// $OFC_OAUTH_CALLBACK (the URL registered with authorization servers) and
+// $OFC_OAUTH_CALLBACK_PORT (the 127.0.0.1 port ofc listens on, behind a
+// proxy serving that URL).
+func applyOAuthCallback(f *floor.Floor) error {
+	f.OAuthCallbackURL = os.Getenv("OFC_OAUTH_CALLBACK")
+	if p := os.Getenv("OFC_OAUTH_CALLBACK_PORT"); p != "" {
+		port, err := strconv.Atoi(p)
+		if err != nil || port <= 0 || port > 65535 {
+			return fmt.Errorf("OFC_OAUTH_CALLBACK_PORT=%q: want a port number", p)
+		}
+		if f.OAuthCallbackURL == "" {
+			return fmt.Errorf("OFC_OAUTH_CALLBACK_PORT needs OFC_OAUTH_CALLBACK, the URL that reaches it")
+		}
+		f.OAuthCallbackPort = port
+	}
+	return nil
 }
 
 // interactive reports whether a person is at the terminal: stdin is a

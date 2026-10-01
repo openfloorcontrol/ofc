@@ -27,9 +27,12 @@ every ofc run that uses the furniture, including ones already running.
 
 After consent the browser is sent to a callback on a free loopback port of
 this machine. If the browser runs elsewhere, that page won't load: paste
-its address into ofc auth, which delivers it. Alternatively set
-$OFC_OAUTH_CALLBACK to a URL that reaches this machine and that the
-authorization server accepts; ofc listens on its port while it waits.`,
+its address into ofc auth, which delivers it.
+
+Alternatively set $OFC_OAUTH_CALLBACK to a URL that reaches this machine
+and that the authorization server accepts. ofc listens on plain http:
+on that URL's port, or — for an https URL served by a proxy such as Caddy —
+on 127.0.0.1:$OFC_OAUTH_CALLBACK_PORT, where the proxy forwards to.`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		if err := authorize(args[0]); err != nil {
@@ -68,7 +71,9 @@ func authorize(name string) error {
 	}
 	f := floor.NewFloor(bp)
 	f.OAuthDir = dir
-	f.OAuthCallbackURL = os.Getenv("OFC_OAUTH_CALLBACK")
+	if err := applyOAuthCallback(f); err != nil {
+		return err
+	}
 	pasting := false
 	f.OAuthConsent = func(_, authURL string) {
 		fmt.Printf("Open this URL to authorize %s:\n  %s\n\n", name, authURL)

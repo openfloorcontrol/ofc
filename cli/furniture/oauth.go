@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -50,6 +51,9 @@ type OAuth struct {
 	// its port, on all interfaces unless the host is loopback, while it
 	// waits. Empty: a free loopback port on this machine.
 	CallbackURL string
+	// CallbackPort, if set, is the port ofc listens on, on 127.0.0.1, for
+	// a CallbackURL served by a proxy in front of it (which may be https).
+	CallbackPort int
 }
 
 // Handler returns the OAuth handler for the MCP transport.
@@ -79,13 +83,14 @@ func (o OAuth) Handler() (auth.OAuthHandler, error) {
 			return nil, err
 		}
 	}
-	if _, err := callbackListenAddr(redirect); err != nil {
+	listen, err := callbackListenAddr(redirect, o.CallbackPort)
+	if err != nil {
 		return nil, err
 	}
 	cfg := &auth.AuthorizationCodeHandlerConfig{
 		RedirectURL: redirect,
 		AuthorizationCodeFetcher: func(ctx context.Context, args *auth.AuthorizationArgs) (*auth.AuthorizationResult, error) {
-			return fetchCode(ctx, redirect, args.URL, o.Consent)
+			return fetchCode(ctx, redirect, listen, args.URL, o.Consent)
 		},
 		RequestRefreshToken: true,
 		InitialTokenSource:  initial,
@@ -178,15 +183,20 @@ func loopbackRedirectURL() (string, error) {
 	return "http://" + addr + "/callback", nil
 }
 
-// callbackListenAddr is where ofc listens for a callback URL: the URL's
-// own host if it is loopback, otherwise all interfaces on its port.
-func callbackListenAddr(callback string) (string, error) {
+// callbackListenAddr is where ofc listens for a callback URL: 127.0.0.1
+// on port if given (behind a proxy, so the URL may be https); otherwise
+// the URL's own host if it is loopback, else all interfaces on its port.
+// ofc's listener always speaks plain http.
+func callbackListenAddr(callback string, port int) (string, error) {
 	u, err := url.Parse(callback)
-	if err != nil || u.Scheme != "http" || u.Host == "" {
-		return "", fmt.Errorf("OAuth callback %q: want http://host:port/path", callback)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "", fmt.Errorf("OAuth callback %q: want http(s)://host[:port]/path", callback)
 	}
-	if u.Port() == "" {
-		return "", fmt.Errorf("OAuth callback %q needs an explicit port", callback)
+	if port != 0 {
+		return net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), nil
+	}
+	if u.Scheme != "http" || u.Port() == "" {
+		return "", fmt.Errorf("OAuth callback %q: ofc listens on plain http, so it needs an http URL with an explicit port, or a port to listen on behind a proxy (OFC_OAUTH_CALLBACK_PORT)", callback)
 	}
 	if ip := net.ParseIP(u.Hostname()); (ip != nil && ip.IsLoopback()) || u.Hostname() == "localhost" {
 		return u.Host, nil
@@ -198,7 +208,7 @@ func callbackListenAddr(callback string) (string, error) {
 // server to redirect the browser to redirect with the code. A callback
 // whose state doesn't match authURL's (stale, or cut off at an unquoted
 // "&" in a shell) is answered with an error and ignored.
-func fetchCode(ctx context.Context, redirect, authURL string, consent func(string)) (*auth.AuthorizationResult, error) {
+func fetchCode(ctx context.Context, redirect, listen, authURL string, consent func(string)) (*auth.AuthorizationResult, error) {
 	u, err := url.Parse(redirect)
 	if err != nil {
 		return nil, err
@@ -208,13 +218,9 @@ func fetchCode(ctx context.Context, redirect, authURL string, consent func(strin
 		return nil, err
 	}
 	wantState := au.Query().Get("state")
-	addr, err := callbackListenAddr(redirect)
+	l, err := net.Listen("tcp", listen)
 	if err != nil {
-		return nil, err
-	}
-	l, err := net.Listen("tcp", addr)
-	if err != nil {
-		return nil, fmt.Errorf("listen for the OAuth callback on %s: %w", addr, err)
+		return nil, fmt.Errorf("listen for the OAuth callback on %s: %w", listen, err)
 	}
 	results := make(chan *auth.AuthorizationResult, 1)
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
