@@ -216,7 +216,18 @@ func (s *Server) BaseURL() string {
 	if s.listener == nil {
 		return ""
 	}
-	return fmt.Sprintf("http://%s", s.listener.Addr().String())
+	addr, ok := s.listener.Addr().(*net.TCPAddr)
+	if !ok {
+		return fmt.Sprintf("http://%s", s.listener.Addr().String())
+	}
+	// A server bound to all interfaces is reached locally via loopback;
+	// the MCP handlers reject loopback requests with a non-localhost Host
+	// (DNS rebinding protection), and "[::]" is not localhost.
+	host := addr.IP.String()
+	if addr.IP.IsUnspecified() {
+		host = "127.0.0.1"
+	}
+	return fmt.Sprintf("http://%s", net.JoinHostPort(host, strconv.Itoa(addr.Port)))
 }
 
 // RegisterFloorAPI adds the session, agent and furniture endpoints for
