@@ -93,6 +93,7 @@ config:
   store:
     type: jsonl         # jsonl | postgres
     dsn: ${OFC_DATABASE_URL}  # keep secrets out of the file
+  acp_idle_timeout: 15m # close idle ACP agent processes; the next turn resumes. 0 = never
 ```
 
 Precedence: a CLI flag wins when explicitly passed (`cobra` `Changed()` semantics); otherwise the blueprint `config:` value is used; otherwise the built-in default. Profiles (`profiles:` overlays) and `~/.ofc/defaults.yaml` are noted but not yet implemented.

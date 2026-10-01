@@ -7,6 +7,9 @@
 // use pid to tell subprocesses apart, prompts to see whether a session
 // continued, and the text to see what context the agent received.
 //
+// A prompt containing "sleep=<ms>" delays the reply by that long, for
+// tests of long-running turns.
+//
 // It supports session/resume: each ACP session's prompt count is kept in
 // $FAKE_ACP_STATE_DIR/<session id>, so a new process can resume it.
 // Without FAKE_ACP_STATE_DIR, sessions live only in memory and resume
@@ -18,12 +21,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	acp "github.com/coder/acp-go-sdk"
 )
+
+var sleepRe = regexp.MustCompile(`sleep=(\d+)`)
 
 type fakeAgent struct {
 	conn     *acp.AgentSideConnection
@@ -96,7 +103,13 @@ func (a *fakeAgent) Prompt(ctx context.Context, params acp.PromptRequest) (acp.P
 		return acp.PromptResponse{}, err
 	}
 
-	reply := fmt.Sprintf("pid=%d prompts=%d | %s", os.Getpid(), n, strings.Join(texts, " / "))
+	text := strings.Join(texts, " / ")
+	if m := sleepRe.FindStringSubmatch(text); m != nil {
+		ms, _ := strconv.Atoi(m[1])
+		time.Sleep(time.Duration(ms) * time.Millisecond)
+	}
+
+	reply := fmt.Sprintf("pid=%d prompts=%d | %s", os.Getpid(), n, text)
 	err = a.conn.SessionUpdate(ctx, acp.SessionNotification{
 		SessionId: params.SessionId,
 		Update:    acp.UpdateAgentMessageText(reply),

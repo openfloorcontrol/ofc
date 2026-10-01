@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 	acpclient "github.com/openfloorcontrol/ofc/acp"
@@ -19,8 +20,16 @@ type acpKey struct {
 	agent   string
 }
 
+// acpEntry is a running ACP subprocess and its use.
+type acpEntry struct {
+	sub      *acpclient.Subprocess
+	busy     bool      // a turn is running: from acpSubprocess until acpTurnDone
+	lastUsed time.Time // end of the last turn
+}
+
 // acpSubprocess returns the ACP subprocess for agentID in sessionID,
-// spawning it on the agent's first turn in that session.
+// spawning it on the agent's first turn in that session, and marks it busy
+// until acpTurnDone.
 func (f *Floor) acpSubprocess(sessionID, agentID string) (*acpclient.Subprocess, error) {
 	// Lock order is mu before acpMu (RemoveAgent holds mu while closing),
 	// so the spec is read before taking acpMu.
@@ -33,28 +42,72 @@ func (f *Floor) acpSubprocess(sessionID, agentID string) (*acpclient.Subprocess,
 	defer f.acpMu.Unlock()
 
 	key := acpKey{session: sessionID, agent: agentID}
-	if sub, ok := f.acpSubprocesses[key]; ok {
-		return sub, nil
+	if e, ok := f.acpSubprocesses[key]; ok {
+		e.busy = true
+		return e.sub, nil
 	}
 	sub, err := f.spawnACPSubprocess(sessionID, spec)
 	if err != nil {
 		return nil, err
 	}
-	f.acpSubprocesses[key] = sub
+	f.acpSubprocesses[key] = &acpEntry{sub: sub, busy: true}
 	return sub, nil
+}
+
+// acpTurnDone marks the agent's subprocess in the session idle, if it has
+// one. Called by the session loop when an agent's turn ends.
+func (f *Floor) acpTurnDone(sessionID, agentID string) {
+	f.acpMu.Lock()
+	defer f.acpMu.Unlock()
+	if e, ok := f.acpSubprocesses[acpKey{session: sessionID, agent: agentID}]; ok {
+		e.busy = false
+		e.lastUsed = time.Now()
+	}
 }
 
 // closeACPSubprocesses closes the subprocesses whose key matches.
 func (f *Floor) closeACPSubprocesses(match func(acpKey) bool) {
 	f.acpMu.Lock()
 	defer f.acpMu.Unlock()
-	for key, sub := range f.acpSubprocesses {
+	for key, e := range f.acpSubprocesses {
 		if match(key) {
-			f.debug("closing ACP subprocess for %s in session %s", key.agent, key.session)
-			sub.Close()
-			delete(f.acpSubprocesses, key)
+			f.closeACPEntry(key, e)
 		}
 	}
+}
+
+// closeIdleACPSubprocesses closes subprocesses idle for longer than
+// timeout. Their sessions resume in a new process on the next turn.
+func (f *Floor) closeIdleACPSubprocesses(timeout time.Duration) {
+	f.acpMu.Lock()
+	defer f.acpMu.Unlock()
+	for key, e := range f.acpSubprocesses {
+		if !e.busy && time.Since(e.lastUsed) > timeout {
+			f.closeACPEntry(key, e)
+		}
+	}
+}
+
+// reapIdleACPSubprocesses runs closeIdleACPSubprocesses until done is
+// closed, checking several times per timeout.
+func (f *Floor) reapIdleACPSubprocesses(timeout time.Duration, done <-chan struct{}) {
+	tick := time.NewTicker(min(timeout/4, 30*time.Second))
+	defer tick.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-tick.C:
+			f.closeIdleACPSubprocesses(timeout)
+		}
+	}
+}
+
+// closeACPEntry closes one subprocess. Must be called with acpMu held.
+func (f *Floor) closeACPEntry(key acpKey, e *acpEntry) {
+	f.debug("closing ACP subprocess for %s in session %s", key.agent, key.session)
+	e.sub.Close()
+	delete(f.acpSubprocesses, key)
 }
 
 // agentSpec returns the live spec of an agent on the floor.

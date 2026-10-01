@@ -11,7 +11,6 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
-	acpclient "github.com/openfloorcontrol/ofc/acp"
 	"github.com/openfloorcontrol/ofc/blueprint"
 	"github.com/openfloorcontrol/ofc/furniture"
 	"github.com/openfloorcontrol/ofc/sandbox"
@@ -52,8 +51,9 @@ type Floor struct {
 	// ACP subprocesses, one per (session, agent), spawned on the agent's
 	// first turn in a session. Guarded by acpMu, not mu: spawning takes
 	// seconds and must not block floor mutations.
-	acpSubprocesses map[acpKey]*acpclient.Subprocess
+	acpSubprocesses map[acpKey]*acpEntry
 	acpMu           sync.Mutex
+	stopReaper      chan struct{} // closed by Stop; nil when no idle timeout
 
 	Sandbox   *sandbox.Sandbox
 	APIServer APIServer // interface; concrete impl in the top-level api/ package. Caller assigns before Start.
@@ -118,7 +118,7 @@ func NewFloorWithSession(bp *blueprint.Blueprint, sessionID string) *Floor {
 	f := &Floor{
 		Blueprint:          bp,
 		Furniture:          make(map[string]furniture.Furniture),
-		acpSubprocesses:    make(map[acpKey]*acpclient.Subprocess),
+		acpSubprocesses:    make(map[acpKey]*acpEntry),
 		Store:              NewMemoryStore(),
 		Sessions:           make(map[string]*Session),
 		DebugFunc:          func(string) {},
@@ -291,12 +291,20 @@ func (f *Floor) Start(renderInfo func(string)) error {
 		}
 	}
 
+	if timeout := f.Blueprint.Config.ACPIdleTimeout; timeout > 0 {
+		f.stopReaper = make(chan struct{})
+		go f.reapIdleACPSubprocesses(timeout, f.stopReaper)
+	}
+
 	return nil
 }
 
 // Stop tears down ACP sessions, furniture, API server, sandbox, and
 // closes the store if it implements io.Closer (e.g. JSONLStore).
 func (f *Floor) Stop() {
+	if f.stopReaper != nil {
+		close(f.stopReaper)
+	}
 	f.closeACPSubprocesses(func(acpKey) bool { return true })
 	if f.APIServer != nil {
 		f.APIServer.Stop()

@@ -48,18 +48,19 @@ func fakeAgent(t *testing.T) string {
 // answers every message. The floor stops at test cleanup.
 func startACPFloor(t *testing.T) *floor.Floor {
 	t.Helper()
-	f := newACPFloor(t, floor.NewMemoryStore(), "")
+	f := newACPFloor(t, floor.NewMemoryStore(), "", 0)
 	t.Cleanup(f.Stop)
 	return f
 }
 
 // newACPFloor starts a floor with @fake on the given store. stateDir is
-// where @fake keeps its sessions for resume ("" for none). The caller
-// stops the floor.
-func newACPFloor(t *testing.T, store floor.SessionStore, stateDir string) *floor.Floor {
+// where @fake keeps its sessions for resume ("" for none); idle is the
+// ACP idle timeout (0 for none). The caller stops the floor.
+func newACPFloor(t *testing.T, store floor.SessionStore, stateDir string, idle time.Duration) *floor.Floor {
 	t.Helper()
 	bp := &blueprint.Blueprint{
-		Name: "acp-test",
+		Name:   "acp-test",
+		Config: blueprint.Config{ACPIdleTimeout: idle},
 		Agents: []blueprint.Agent{{
 			ID: "@fake", Type: "acp", Command: fakeAgent(t), Activation: "always",
 			Env:    map[string]string{"FAKE_ACP_STATE_DIR": stateDir},
@@ -86,7 +87,7 @@ func TestACPSessionResumesAfterRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f1 := newACPFloor(t, store1, stateDir)
+	f1 := newACPFloor(t, store1, stateDir, 0)
 	sess, err := f1.CreateSession()
 	if err != nil {
 		t.Fatal(err)
@@ -103,7 +104,7 @@ func TestACPSessionResumesAfterRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f2 := newACPFloor(t, store2, stateDir)
+	f2 := newACPFloor(t, store2, stateDir, 0)
 	defer f2.Stop()
 	resumed, err := f2.Session(sess.ID())
 	if err != nil {
@@ -178,6 +179,49 @@ func TestACPSubprocessPerSession(t *testing.T) {
 	}
 	if a1 != a2 {
 		t.Errorf("session changed agent process between turns: %s, then %s", a1, a2)
+	}
+}
+
+// An idle agent process is closed after the idle timeout; the session's
+// next turn resumes the agent's session in a new process.
+func TestACPIdleSubprocessClosedAndResumed(t *testing.T) {
+	f := newACPFloor(t, floor.NewMemoryStore(), t.TempDir(), 200*time.Millisecond)
+	defer f.Stop()
+	sess := f.DefaultSession()
+	events := sess.Subscribe()
+	sess.Start()
+
+	first := ask(t, sess, events, "one")
+	p := pid(t, first)
+	deadline := time.Now().Add(5 * time.Second)
+	for processAlive(p) {
+		if time.Now().After(deadline) {
+			t.Fatalf("idle agent process %s still running", p)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	second := ask(t, sess, events, "two")
+	if pid(t, second) == p {
+		t.Errorf("second turn reused closed process %s", p)
+	}
+	if !strings.Contains(second, "prompts=2 ") {
+		t.Errorf("second reply = %q, want the resumed session's second prompt", second)
+	}
+}
+
+// A turn that runs longer than the idle timeout keeps its process.
+func TestACPBusySubprocessNotClosed(t *testing.T) {
+	f := newACPFloor(t, floor.NewMemoryStore(), t.TempDir(), 100*time.Millisecond)
+	defer f.Stop()
+	sess := f.DefaultSession()
+	events := sess.Subscribe()
+	sess.Start()
+
+	// The fake agent sleeps for "sleep=<ms>" in its prompt.
+	reply := ask(t, sess, events, "sleep=400")
+	if !strings.HasPrefix(reply, "pid=") {
+		t.Fatalf("reply = %q, want the agent's text", reply)
 	}
 }
 

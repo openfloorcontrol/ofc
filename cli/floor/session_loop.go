@@ -150,7 +150,10 @@ func (s *Session) act(roomID string, view *Session, d Decision) {
 		turn := NewAgentTurn(view, view.MainRoom, s.Floor, d.AgentID)
 		// Agent.Run posts its result (message, pass, or error) to the room,
 		// which comes back through the loop and drives the next decision.
-		go agent.Run(context.Background(), turn)
+		go func() {
+			agent.Run(context.Background(), turn)
+			s.Floor.acpTurnDone(s.id, d.AgentID)
+		}()
 
 	case "wait":
 		if roomID == "" {

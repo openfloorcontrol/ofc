@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"text/template"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -185,6 +186,11 @@ type Config struct {
 
 	// Log is an output log path. Empty means no log file.
 	Log string `yaml:"log,omitempty"`
+
+	// ACPIdleTimeout closes an ACP agent's subprocess after it has been
+	// idle this long (e.g. "15m"); its next turn resumes the session in a
+	// new process. Zero keeps subprocesses until their session closes.
+	ACPIdleTimeout time.Duration `yaml:"acp_idle_timeout,omitempty"`
 }
 
 // WebConfig groups web-UI settings.
