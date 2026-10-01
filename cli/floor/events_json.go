@@ -8,6 +8,7 @@ func EventJSON(ev ChatEvent) map[string]interface{} {
 	case MessagePosted:
 		return map[string]interface{}{
 			"type": "message_posted",
+			"seq":  e.Seq,
 			"message": map[string]interface{}{
 				"from":              e.Message.From,
 				"content":           e.Message.Content,

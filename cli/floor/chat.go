@@ -16,8 +16,10 @@ type ChatEvent interface {
 }
 
 // MessagePosted is emitted when a complete message is added to history.
+// Seq is its position in the session store (0 for rooms without one).
 type MessagePosted struct {
 	Message ChatMessage
+	Seq     uint64
 }
 
 // StreamEvent wraps a streaming event (tokens, tool calls) from an agent.

@@ -149,19 +149,21 @@ export function useChat() {
   /**
    * Load initial messages from the session's messages endpoint.
    */
+  /**
+   * Returns the seq of the last loaded message (0 if none), so the event
+   * stream can continue right after it.
+   */
   async function loadHistory(url) {
-    try {
-      const resp = await apiFetch(url)
-      const data = await resp.json()
-      messages.value = (data.messages || []).map((m, i) => ({
-        id: i,
-        from: m.from,
-        content: m.content,
-        toolInteractions: m.tool_interactions || [],
-      }))
-    } catch {
-      // silently ignore — SSE will catch up
-    }
+    const resp = await apiFetch(url)
+    const data = await resp.json()
+    const loaded = data.messages || []
+    messages.value = loaded.map((m, i) => ({
+      id: i,
+      from: m.from,
+      content: m.content,
+      toolInteractions: m.tool_interactions || [],
+    }))
+    return loaded.length > 0 ? loaded[loaded.length - 1].seq : 0
   }
 
   const isStreaming = computed(() => state.value === 'streaming')

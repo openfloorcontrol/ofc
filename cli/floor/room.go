@@ -82,27 +82,29 @@ func (r *Room) setSession(s SessionView) { r.session = s }
 // agents are currently in this room) and fires runtime events for
 // frontends.
 func (r *Room) Post(msg ChatMessage) {
-	r.appendToStore(msg)
+	seq := r.appendToStore(msg)
 
-	ev := MessagePosted{Message: msg}
+	ev := MessagePosted{Message: msg, Seq: seq}
 	r.eventCh <- ev
 	r.fanOut(ev)
 }
 
 // appendToStore writes the message to the session store with VisibleTo
-// computed from current room membership. No-op if r.session is nil
-// (stand-alone room — typically a test fixture).
-func (r *Room) appendToStore(msg ChatMessage) {
+// computed from current room membership and returns its Seq. No-op
+// returning 0 if r.session is nil (stand-alone room — typically a test
+// fixture).
+func (r *Room) appendToStore(msg ChatMessage) uint64 {
 	if r.session == nil {
-		return
+		return 0
 	}
 	visibleTo := r.session.AgentsInRoom(r.ID)
-	r.session.Store().Append(AppendOpts{
+	stored, _ := r.session.Store().Append(AppendOpts{
 		SessionID: r.session.ID(),
 		RoomID:    r.ID,
 		Event:     MessagePostedEvent{Message: msg},
 		VisibleTo: visibleTo,
 	})
+	return stored.Seq
 }
 
 // PostStream emits a streaming event without storing it. Used for

@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -313,20 +314,31 @@ func handlePostMessage(c echo.Context, sess *floor.Session) error {
 }
 
 // GET /api/v1/sessions/:id/messages — the session's #main history as JSON.
+// Each message carries its seq; open the event stream with
+// ?last_event_id=<last seq> to continue exactly after it.
 func handleGetMessages(c echo.Context, sess *floor.Session) error {
 	type jsonMessage struct {
+		Seq              uint64                  `json:"seq"`
 		From             string                  `json:"from"`
 		Content          string                  `json:"content"`
 		ToolInteractions []floor.ToolInteraction `json:"tool_interactions,omitempty"`
 	}
-	history := sess.MainRoom.History()
-	msgs := make([]jsonMessage, len(history))
-	for i, m := range history {
-		msgs[i] = jsonMessage{
-			From:             m.From,
-			Content:          m.Content,
-			ToolInteractions: m.ToolInteractions,
+	events, err := sess.Store().Read(sess.ID(), floor.EventFilter{RoomID: floor.MainRoomID})
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+	msgs := []jsonMessage{}
+	for _, ev := range events {
+		mp, ok := ev.Event.(floor.MessagePostedEvent)
+		if !ok {
+			continue
 		}
+		msgs = append(msgs, jsonMessage{
+			Seq:              ev.Seq,
+			From:             mp.Message.From,
+			Content:          mp.Message.Content,
+			ToolInteractions: mp.Message.ToolInteractions,
+		})
 	}
 	return c.JSON(http.StatusOK, map[string]interface{}{"messages": msgs})
 }
@@ -542,15 +554,54 @@ func handleServeFile(furnitureMap map[string]furniture.Furniture, workspacePath 
 // GET /api/v1/sessions/:id/events — SSE stream of the session's events
 // (all rooms, plus the loop's lifecycle events). Sub-room events carry
 // a room_id.
+//
+// Stored messages carry their seq as the SSE id. A client that sends
+// Last-Event-ID (browsers do on reconnect) or ?last_event_id= first gets
+// the stored messages after that seq, then the live stream. Streaming
+// events (tokens, tool calls) are not stored and are not replayed.
 func handleSSEEvents(c echo.Context, sess *floor.Session) error {
+	cursorText := c.Request().Header.Get("Last-Event-ID")
+	if cursorText == "" {
+		cursorText = c.QueryParam("last_event_id")
+	}
+	var cursor uint64
+	if cursorText != "" {
+		n, err := strconv.ParseUint(cursorText, 10, 64)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "last event id must be a seq number"})
+		}
+		cursor = n
+	}
+
 	c.Response().Header().Set("Content-Type", "text/event-stream")
 	c.Response().Header().Set("Cache-Control", "no-cache")
 	c.Response().Header().Set("Connection", "keep-alive")
 	c.Response().WriteHeader(http.StatusOK)
 	c.Response().Flush()
 
+	// Subscribe before reading the store, so nothing posted in between
+	// is missed; live messages already replayed are skipped by seq.
 	sub := sess.Subscribe()
 	defer sess.Unsubscribe(sub)
+
+	if cursorText != "" {
+		events, err := sess.Store().Read(sess.ID(), floor.EventFilter{FromSeq: cursor})
+		if err != nil {
+			return nil
+		}
+		for _, ev := range events {
+			mp, ok := ev.Event.(floor.MessagePostedEvent)
+			if !ok {
+				continue
+			}
+			roomID := ev.RoomID
+			if roomID == floor.MainRoomID {
+				roomID = ""
+			}
+			writeSSE(c, roomID, floor.MessagePosted{Message: mp.Message, Seq: ev.Seq})
+			cursor = ev.Seq
+		}
+	}
 
 	ctx := c.Request().Context()
 	for {
@@ -561,16 +612,28 @@ func handleSSEEvents(c echo.Context, sess *floor.Session) error {
 			if !ok {
 				return nil
 			}
-			payload := floor.EventJSON(tagged.Event)
-			if payload == nil {
+			if mp, isMsg := tagged.Event.(floor.MessagePosted); isMsg && mp.Seq <= cursor {
 				continue
 			}
-			if tagged.RoomID != "" {
-				payload["room_id"] = tagged.RoomID
-			}
-			data, _ := json.Marshal(payload)
-			fmt.Fprintf(c.Response(), "data: %s\n\n", data)
-			c.Response().Flush()
+			writeSSE(c, tagged.RoomID, tagged.Event)
 		}
 	}
+}
+
+// writeSSE writes one event to the stream. Stored messages get their seq
+// as the SSE id.
+func writeSSE(c echo.Context, roomID string, ev floor.ChatEvent) {
+	payload := floor.EventJSON(ev)
+	if payload == nil {
+		return
+	}
+	if roomID != "" {
+		payload["room_id"] = roomID
+	}
+	data, _ := json.Marshal(payload)
+	if mp, ok := ev.(floor.MessagePosted); ok && mp.Seq > 0 {
+		fmt.Fprintf(c.Response(), "id: %d\n", mp.Seq)
+	}
+	fmt.Fprintf(c.Response(), "data: %s\n\n", data)
+	c.Response().Flush()
 }

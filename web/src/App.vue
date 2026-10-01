@@ -76,9 +76,11 @@ onMounted(async () => {
   try {
     await fetchMetadata()
     sessionBase = `/api/v1/sessions/${encodeURIComponent(await resolveSession())}`
-    await Promise.all([loadHistory(`${sessionBase}/messages`), fetchFurniture()])
+    const [lastSeq] = await Promise.all([loadHistory(`${sessionBase}/messages`), fetchFurniture()])
     sse.onEvent(handleEventWithRefresh)
-    sse.connect(`${sessionBase}/events`)
+    // Continue right after the loaded history; on reconnect the browser
+    // sends Last-Event-ID itself.
+    sse.connect(`${sessionBase}/events?last_event_id=${lastSeq}`)
   } catch (err) {
     if (err.message === 'unauthorized') {
       authError.value = 'Authentication required. Open the URL with token from the ofc console output.'
