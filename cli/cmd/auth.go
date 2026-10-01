@@ -110,11 +110,14 @@ func forwardPastedCallbacks(in io.Reader, out io.Writer) {
 			continue
 		}
 		u, err := url.Parse(pasted)
-		if err != nil || u.Scheme != "http" || u.Query().Get("code") == "" {
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Query().Get("code") == "" {
 			fmt.Fprintln(out, "That is not a callback address (http://…/callback?code=…&state=…). Try again:")
 			continue
 		}
-		resp, err := http.Get(pasted)
+		// The listener speaks plain http; https here is a browser's
+		// automatic upgrade of the redirect.
+		u.Scheme = "http"
+		resp, err := http.Get(u.String())
 		if err != nil {
 			fmt.Fprintf(out, "Could not deliver it: %v. Try again:\n", err)
 			continue
