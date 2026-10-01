@@ -47,50 +47,37 @@ func (j *JSONFrontend) Debug(msg string) {
 	}
 }
 
-// RunLoop is the event-driven main loop for JSON output.
-func (j *JSONFrontend) RunLoop(fl *floor.Floor, initialPrompt string) error {
+// EmitInfo writes a system_info line, e.g. floor startup progress.
+func (j *JSONFrontend) EmitInfo(text string) {
+	j.emit(map[string]interface{}{"type": "system_info", "text": text})
+}
+
+// RunLoop writes the session's events as JSONL until the session stops
+// (or, with an initial prompt, until it waits for the user). The session
+// may be local or remote.
+func (j *JSONFrontend) RunLoop(client SessionClient, initialPrompt string) error {
 	// Set up log file (stdout is reserved for JSON)
 	if j.logFile != "" || j.debug {
 		j.out = NewOutput(j.logFile, j.debug)
 		defer j.out.Close()
 	}
+	defer client.Close()
 
-	// Start floor infrastructure
-	if err := fl.Start(func(msg string) {
-		j.emit(map[string]interface{}{
-			"type": "system_info",
-			"text": msg,
-		})
-	}); err != nil {
-		return err
-	}
-	defer fl.Stop()
-
-	// Emit floor_started
-	agentIDs := make([]string, 0, len(fl.Blueprint.Agents))
-	for _, a := range fl.Blueprint.Agents {
-		agentIDs = append(agentIDs, a.ID)
-	}
-	furnitureNames := make([]string, 0, len(fl.Furniture))
-	for name := range fl.Furniture {
-		furnitureNames = append(furnitureNames, name)
-	}
+	info := client.Info()
 	j.emit(map[string]interface{}{
 		"type":      "floor_started",
-		"name":      fl.Blueprint.Name,
-		"agents":    agentIDs,
-		"furniture": furnitureNames,
+		"name":      info.Name,
+		"agents":    info.Agents,
+		"furniture": info.Furniture,
+		"session":   client.ID(),
 	})
 
-	sess := fl.DefaultSession()
-	events := sess.Subscribe()
-	defer sess.Unsubscribe(events)
-	sess.Start()
-
-	// Post initial prompt
 	if initialPrompt != "" {
-		sess.MainRoom.PostUserInput(initialPrompt)
+		if err := client.PostUserInput(initialPrompt); err != nil {
+			return err
+		}
 	}
+	events := client.Events()
 
 	oneShot := initialPrompt != "" && !floor.IsCommand(initialPrompt)
 

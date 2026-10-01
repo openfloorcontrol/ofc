@@ -1,6 +1,5 @@
 package frontend
 
-import "github.com/openfloorcontrol/ofc/blueprint"
 
 // ANSI color codes used by frontends (CLI, TUI) for rendering.
 const (
@@ -21,10 +20,10 @@ const (
 var agentColors = []string{Green, Purple, Yellow, Blue, Red}
 
 // BuildColorMap assigns colors to agents, cycling through the palette.
-func BuildColorMap(bp *blueprint.Blueprint) map[string]string {
+func BuildColorMap(agentIDs []string) map[string]string {
 	cm := map[string]string{"@user": Cyan}
-	for i, a := range bp.Agents {
-		cm[a.ID] = agentColors[i%len(agentColors)]
+	for i, id := range agentIDs {
+		cm[id] = agentColors[i%len(agentColors)]
 	}
 	return cm
 }

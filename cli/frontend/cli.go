@@ -60,30 +60,20 @@ func (f *CLIFrontend) Debug(msg string) {
 	f.out.Debug("%s", msg)
 }
 
-// RunLoop starts the floor and its default session, then renders the
-// session's events and feeds stdin to it until the session stops (or,
-// with an initial prompt, until the session waits for the user).
-func (f *CLIFrontend) RunLoop(fl *floor.Floor, initialPrompt string) error {
-	// Start floor infrastructure
-	if err := fl.Start(func(msg string) {
-		f.renderSystemInfo(msg)
-	}); err != nil {
-		return err
-	}
-	defer fl.Stop()
+// RunLoop renders the session's events and feeds stdin to it until the
+// session stops (or, with an initial prompt, until the session waits for
+// the user). The session may be local or remote.
+func (f *CLIFrontend) RunLoop(client SessionClient, initialPrompt string) error {
 	defer f.Close()
+	defer client.Close()
 
-	f.renderHeader(fl)
+	f.renderHeader(client.Info())
 
-	sess := fl.DefaultSession()
+	// If the session has prior history (resumed), replay the last turn so
+	// the user sees the context they're picking up.
+	f.renderLastTurnIfAny(client.History())
 
-	// If the session has prior history (resumed from disk), replay the
-	// last turn so the user sees the context they're picking up.
-	f.renderLastTurnIfAny(sess)
-
-	events := sess.Subscribe()
-	defer sess.Unsubscribe(events)
-	sess.Start()
+	events := client.Events()
 
 	// readyForInput signals the stdin goroutine to show the prompt.
 	// It gates input so we don't show "@user:" while agents are streaming.
@@ -96,20 +86,34 @@ func (f *CLIFrontend) RunLoop(fl *floor.Floor, initialPrompt string) error {
 	}
 
 	// Stdin reader waits for readyForInput before each prompt.
-	go f.readStdinLoop(sess, readyForInput)
+	stdinDone := make(chan struct{})
+	go f.readStdinLoop(client, readyForInput, stdinDone)
 
 	// If initial prompt, post it as @user (or handle as command)
 	if initialPrompt != "" {
 		f.renderStream(floor.AgentLabel{AgentID: "@user"}, "")
 		f.renderStream(floor.TokenStreamed{AgentID: "@user", Token: initialPrompt + "\n"}, "")
-		sess.MainRoom.PostUserInput(initialPrompt)
+		if err := client.PostUserInput(initialPrompt); err != nil {
+			return err
+		}
 	} else {
 		signalReady()
 	}
 
 	oneShot := initialPrompt != "" && !floor.IsCommand(initialPrompt)
 
-	for tagged := range events {
+	for {
+		var tagged floor.TaggedEvent
+		select {
+		case <-stdinDone:
+			return nil
+		case ev, ok := <-events:
+			if !ok {
+				return nil
+			}
+			tagged = ev
+		}
+
 		switch e := tagged.Event.(type) {
 		case floor.StreamEvent:
 			f.renderStream(e.Event, tagged.RoomID)
@@ -147,19 +151,19 @@ func (f *CLIFrontend) RunLoop(fl *floor.Floor, initialPrompt string) error {
 
 		case floor.AwaitingInput:
 			if oneShot {
+				f.out.Print("\n")
 				return nil
 			}
 			signalReady()
 		}
 	}
-
-	return nil
 }
 
-// readStdinLoop reads lines from stdin and posts them to the default session's main room.
+// readStdinLoop reads lines from stdin and posts them to the session.
 // Waits for readyForInput before showing the prompt (so it doesn't
-// appear while agents are streaming).
-func (f *CLIFrontend) readStdinLoop(sess *floor.Session, readyForInput chan struct{}) {
+// appear while agents are streaming). Closes stdinDone at end of input:
+// that ends this frontend, not the session.
+func (f *CLIFrontend) readStdinLoop(client SessionClient, readyForInput chan struct{}, stdinDone chan<- struct{}) {
 	for range readyForInput {
 		f.out.Print("\n")
 		f.out.AgentLabel("@user", f.agentColor("@user"))
@@ -167,7 +171,7 @@ func (f *CLIFrontend) readStdinLoop(sess *floor.Session, readyForInput chan stru
 		input, err := f.reader.ReadString('\n')
 		if err != nil {
 			f.out.Print("%s[Interrupted]%s\n", Dim, Reset)
-			sess.MainRoom.PostEvent(floor.UserCommandEvent{Command: "/quit"})
+			close(stdinDone)
 			return
 		}
 
@@ -183,7 +187,13 @@ func (f *CLIFrontend) readStdinLoop(sess *floor.Session, readyForInput chan stru
 			continue
 		}
 
-		sess.MainRoom.PostUserInput(text)
+		if err := client.PostUserInput(text); err != nil {
+			f.renderSystemInfo(fmt.Sprintf("[ERROR: %v]", err))
+			select {
+			case readyForInput <- struct{}{}:
+			default:
+			}
+		}
 	}
 }
 
@@ -242,6 +252,9 @@ func (f *CLIFrontend) clearThinking() {
 }
 
 // renderSystemInfo shows a system info message.
+// RenderInfo prints a system line, e.g. floor startup progress.
+func (f *CLIFrontend) RenderInfo(text string) { f.renderSystemInfo(text) }
+
 func (f *CLIFrontend) renderSystemInfo(text string) {
 	f.out.Print("%s[System]: %s%s\n", Dim, text, Reset)
 }
@@ -250,8 +263,7 @@ func (f *CLIFrontend) renderSystemInfo(text string) {
 // message and everything after) if the session has prior history. Used
 // on resume so the user sees what they're picking up. Does nothing for
 // fresh sessions.
-func (f *CLIFrontend) renderLastTurnIfAny(sess *floor.Session) {
-	history := sess.MainRoom.History()
+func (f *CLIFrontend) renderLastTurnIfAny(history []floor.ChatMessage) {
 	if len(history) == 0 {
 		return
 	}
@@ -274,24 +286,20 @@ func (f *CLIFrontend) renderLastTurnIfAny(sess *floor.Session) {
 }
 
 // renderHeader prints the floor header for the new loop.
-func (f *CLIFrontend) renderHeader(fl *floor.Floor) {
+func (f *CLIFrontend) renderHeader(info FloorInfo) {
 	f.renderSystemInfo(fmt.Sprintf("%s%s%s", Bold, strings.Repeat("=", 50), Reset))
-	f.renderSystemInfo(fmt.Sprintf("%sOFC - %s%s", Bold, fl.Blueprint.Name, Reset))
-	if fl.Blueprint.Description != "" {
-		f.renderSystemInfo(fl.Blueprint.Description)
+	f.renderSystemInfo(fmt.Sprintf("%sOFC - %s%s", Bold, info.Name, Reset))
+	if info.Description != "" {
+		f.renderSystemInfo(info.Description)
 	}
 
 	var agentList []string
-	for _, a := range fl.Blueprint.Agents {
-		agentList = append(agentList, f.agentColor(a.ID)+a.ID+Reset)
+	for _, id := range info.Agents {
+		agentList = append(agentList, f.agentColor(id)+id+Reset)
 	}
 	f.renderSystemInfo(fmt.Sprintf("Agents: %s", strings.Join(agentList, ", ")))
-	if len(fl.Furniture) > 0 {
-		var names []string
-		for name := range fl.Furniture {
-			names = append(names, name)
-		}
-		f.renderSystemInfo(fmt.Sprintf("Furniture: %s", strings.Join(names, ", ")))
+	if len(info.Furniture) > 0 {
+		f.renderSystemInfo(fmt.Sprintf("Furniture: %s", strings.Join(info.Furniture, ", ")))
 	}
 	f.renderSystemInfo(fmt.Sprintf("Type %s/quit%s to exit, %s/clear%s to reset", Bold, Reset, Bold, Reset))
 	f.renderSystemInfo(fmt.Sprintf("%s%s%s", Bold, strings.Repeat("=", 50), Reset))

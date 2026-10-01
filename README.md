@@ -125,6 +125,7 @@ ofc version             Print version info
 | `--port` | Web UI port (default: `8080`) |
 | `--hostname <url>` | External URL for the printed web link (e.g. `https://ofc.example.com`) |
 | `--db <dsn>` | Postgres DSN for session storage (overrides JSONL; falls back to `OFC_DATABASE_URL`) |
+| `--remote <url>` | Run against a session on an `ofc run --web` server instead of a local floor (CLI or `--json`). The URL may carry `?token=` and `?session=`; otherwise the token comes from `OFC_TOKEN` and the session from `--session`, or a new one is started |
 
 Most of these have blueprint-level defaults — see the `config:` section in [BLUEPRINT.md](BLUEPRINT.md#config). A CLI flag wins when explicitly passed; otherwise the blueprint's `config:` value is used.
 
@@ -145,7 +146,15 @@ Launch with `ofc run --web` to open a browser-based interface:
 - **Furniture sidebar** with live task board and file list panels
 - **Inline images** — agents write standard markdown (`![chart](chart.png)`) and images render directly in chat
 - **Responsive design** — works on desktop and mobile
-- **Auth** — token-based, auto-injected for the local session
+- **Sessions** — each tab works in its own session (`?session=<id>`); `?sessions` lists and switches them
+- **Auth** — a Bearer token: `OFC_TOKEN` if set (stable across restarts), otherwise random; the printed URL carries it as `?token=`
+
+Other ofc processes can work in the server's sessions with `--remote`, e.g. a scheduled prompt whose session you open in the browser later:
+
+```bash
+# crontab: OFC_TOKEN=… set above
+0 7 * * * ofc run --remote https://ofc.example.com "Summarize yesterday's notes"
+```
 
 ## Architecture
 

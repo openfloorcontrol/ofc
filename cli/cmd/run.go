@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -25,12 +26,17 @@ import (
 )
 
 // attachAPIServer constructs and attaches an api.Server to the floor.
-// If web mode is requested, also generates an auth token. Called by
-// every runCLI/runTUI/runJSON before f.Start.
+// In web mode it requires a Bearer token: $OFC_TOKEN if set (stable
+// across restarts, for clients like `ofc run --remote`), otherwise a
+// random one. Called before f.Start.
 func attachAPIServer(f *floor.Floor) {
 	srv := api.New()
 	if useWeb {
-		srv.SetAuthToken(api.GenerateToken())
+		token := os.Getenv("OFC_TOKEN")
+		if token == "" {
+			token = api.GenerateToken()
+		}
+		srv.SetAuthToken(token)
 	}
 	f.APIServer = srv
 }
@@ -45,6 +51,7 @@ var (
 	webHostname   string
 	useJSON       bool
 	sessionID     string
+	remoteURL     string
 	dbDSN         string
 
 	// resolvedSessionID is the actual UUID used by this invocation —
@@ -60,6 +67,19 @@ var runCmd = &cobra.Command{
 	Long:  `Run a floor with optional initial prompt.`,
 	Args:  cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
+		if remoteURL != "" {
+			if useWeb || useTUI {
+				fmt.Fprintln(os.Stderr, "Error: --remote works with the CLI and --json frontends")
+				os.Exit(1)
+			}
+			var prompt string
+			if len(args) > 0 {
+				prompt = args[0]
+			}
+			runRemote(prompt)
+			return
+		}
+
 		// Load blueprint
 		bp, err := blueprint.Load(blueprintFile)
 		if err != nil {
@@ -140,8 +160,7 @@ func applyBlueprintConfig(cmd *cobra.Command, cfg *blueprint.Config) {
 }
 
 func runCLI(bp *blueprint.Blueprint, initialPrompt string) {
-	cm := frontend.BuildColorMap(bp)
-	fe := frontend.NewCLI(logFile, debug, cm)
+	fe := frontend.NewCLI(logFile, debug, frontend.BuildColorMap(agentIDs(bp)))
 
 	f, _ := newFloorWithStore(bp)
 	if debug {
@@ -153,10 +172,81 @@ func runCLI(bp *blueprint.Blueprint, initialPrompt string) {
 		f.DefaultSession().Controller.DebugFunc = fe.Debug
 	}
 
-	if err := fe.RunLoop(f, initialPrompt); err != nil {
+	client, err := startLocalSession(f, fe.RenderInfo)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+	defer f.Stop()
+
+	if err := fe.RunLoop(client, initialPrompt); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// runRemote runs the CLI or JSON frontend against a session on the ofc
+// web server at --remote, without a local floor.
+func runRemote(initialPrompt string) {
+	client, err := openRemoteSession()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	if useJSON {
+		err = frontend.NewJSON(logFile, debug).RunLoop(client, initialPrompt)
+	} else {
+		fmt.Fprintf(os.Stderr, "Session: %s (remote)\n", client.ID())
+		fe := frontend.NewCLI(logFile, debug, frontend.BuildColorMap(client.Info().Agents))
+		err = fe.RunLoop(client, initialPrompt)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// openRemoteSession connects to the server named by --remote. The URL
+// may carry ?token= and ?session= (as printed by `ofc run --web`); the
+// token otherwise comes from $OFC_TOKEN, the session from --session.
+// Without a session, a new one is started.
+func openRemoteSession() (frontend.SessionClient, error) {
+	u, err := url.Parse(remoteURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return nil, fmt.Errorf("--remote needs a URL like https://host:port, got %q", remoteURL)
+	}
+	q := u.Query()
+	token := q.Get("token")
+	if token == "" {
+		token = os.Getenv("OFC_TOKEN")
+	}
+	sid := q.Get("session")
+	if sid == "" {
+		sid = sessionID
+	}
+	base := u.Scheme + "://" + u.Host + strings.TrimSuffix(u.Path, "/")
+	return frontend.NewRemoteSession(base, token, sid)
+}
+
+// startLocalSession starts the floor and its default session, subscribed
+// before the session starts so no event is missed. The caller stops the
+// floor.
+func startLocalSession(f *floor.Floor, renderInfo func(string)) (frontend.SessionClient, error) {
+	if err := f.Start(renderInfo); err != nil {
+		return nil, err
+	}
+	sess := f.DefaultSession()
+	client := frontend.NewLocalSession(f, sess)
+	sess.Start()
+	return client, nil
+}
+
+func agentIDs(bp *blueprint.Blueprint) []string {
+	ids := make([]string, len(bp.Agents))
+	for i, a := range bp.Agents {
+		ids[i] = a.ID
+	}
+	return ids
 }
 
 // runWeb serves the web UI and API until interrupted. Each browser tab
@@ -196,8 +286,7 @@ func runWeb(bp *blueprint.Blueprint) {
 }
 
 func runTUI(bp *blueprint.Blueprint, initialPrompt string) {
-	cm := frontend.BuildColorMap(bp)
-	fe, model := frontend.NewTUI(logFile, debug, cm)
+	fe, model := frontend.NewTUI(logFile, debug, frontend.BuildColorMap(agentIDs(bp)))
 
 	f, _ := newFloorWithStore(bp)
 	if debug {
@@ -253,7 +342,14 @@ func runJSON(bp *blueprint.Blueprint, initialPrompt string) {
 		f.DefaultSession().Controller.DebugFunc = fe.Debug
 	}
 
-	if err := fe.RunLoop(f, initialPrompt); err != nil {
+	client, err := startLocalSession(f, fe.EmitInfo)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	defer f.Stop()
+
+	if err := fe.RunLoop(client, initialPrompt); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -269,6 +365,7 @@ func init() {
 	runCmd.Flags().StringVar(&webHostname, "hostname", "", "External URL for web UI (e.g. https://myhost.dev), overrides localhost in printed URL")
 	runCmd.Flags().BoolVar(&useJSON, "json", false, "Output events as JSONL to stdout")
 	runCmd.Flags().StringVar(&sessionID, "session", "", "Session UUID to resume (default: generate a new one)")
+	runCmd.Flags().StringVar(&remoteURL, "remote", "", "Use a session on a running `ofc run --web` server at this URL (token from ?token= or $OFC_TOKEN) instead of a local floor")
 	runCmd.Flags().StringVar(&dbDSN, "db", "", "Postgres DSN for session storage (overrides JSONL; falls back to OFC_DATABASE_URL)")
 }
 
