@@ -158,6 +158,23 @@ type FurnitureDef struct {
 	URL     string            `yaml:"url,omitempty"`     // URL for already-running MCP servers (HTTP)
 	Headers map[string]string `yaml:"headers,omitempty"` // HTTP headers (supports ${VAR} env expansion)
 	Config  map[string]string `yaml:"config,omitempty"`  // type-specific configuration
+	OAuth   *OAuthConfig      `yaml:"oauth,omitempty"`   // OAuth for a URL-based MCP server
+}
+
+// OAuthConfig makes a URL-based MCP furniture authorize with OAuth.
+type OAuthConfig struct {
+	// Grant is "authorization_code" (default): a person consents once,
+	// with `ofc auth` or when an interactive `ofc run` asks; ofc then keeps
+	// and refreshes the token. "client_credentials" needs no person and
+	// requires ClientID and ClientSecret.
+	Grant string `yaml:"grant,omitempty"`
+	// ClientID and ClientSecret name a client registered with the
+	// authorization server. Without ClientID, ofc registers itself
+	// (dynamic client registration).
+	ClientID     string `yaml:"client_id,omitempty"`
+	ClientSecret string `yaml:"client_secret,omitempty"`
+	// Scopes to request; empty requests what the server advertises.
+	Scopes []string `yaml:"scopes,omitempty"`
 }
 
 // Config holds runtime/deployment knobs — things that historically came
@@ -226,6 +243,27 @@ type Blueprint struct {
 	Dir string `yaml:"-"`
 }
 
+// validateOAuth checks a furniture's oauth block, if any.
+func validateOAuth(fd FurnitureDef) error {
+	o := fd.OAuth
+	if o == nil {
+		return nil
+	}
+	if fd.Type != "mcp" || fd.URL == "" {
+		return fmt.Errorf("oauth needs an MCP server reached by url")
+	}
+	switch o.Grant {
+	case "", "authorization_code":
+	case "client_credentials":
+		if o.ClientID == "" || o.ClientSecret == "" {
+			return fmt.Errorf("oauth grant client_credentials needs client_id and client_secret")
+		}
+	default:
+		return fmt.Errorf("oauth grant %q: want authorization_code or client_credentials", o.Grant)
+	}
+	return nil
+}
+
 // Load reads a blueprint from a YAML file
 func Load(path string) (*Blueprint, error) {
 	data, err := os.ReadFile(path)
@@ -249,6 +287,11 @@ func Load(path string) (*Blueprint, error) {
 	// stored sessions belong to this floor.
 	if !validName.MatchString(bp.Name) {
 		return nil, fmt.Errorf("blueprint name %q must be non-empty and use only letters, digits, '.', '_' or '-': it identifies the floor in URLs", bp.Name)
+	}
+	for _, fd := range bp.Furniture {
+		if err := validateOAuth(fd); err != nil {
+			return nil, fmt.Errorf("furniture %q: %w", fd.Name, err)
+		}
 	}
 
 	// Resolve prompt files relative to blueprint directory, then expand templates

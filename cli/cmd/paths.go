@@ -28,6 +28,30 @@ func defaultSessionsDir() (string, error) {
 	return filepath.Join(home, ".ofc", "sessions"), nil
 }
 
+// defaultOAuthDir returns where OAuth tokens for furniture live:
+// $OFC_OAUTH_DIR if set, else $HOME/.ofc/oauth.
+func defaultOAuthDir() (string, error) {
+	if d := os.Getenv("OFC_OAUTH_DIR"); d != "" {
+		return d, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("locate home dir: %w", err)
+	}
+	return filepath.Join(home, ".ofc", "oauth"), nil
+}
+
+// interactive reports whether a person is at the terminal: stdin is a
+// terminal and the output is not --json. Only then may ofc ask for OAuth
+// consent.
+func interactive() bool {
+	if useJSON {
+		return false
+	}
+	info, err := os.Stdin.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
 // sessionStore is a floor.SessionStore that holds resources (files, a
 // DB pool) the caller must release.
 type sessionStore interface {

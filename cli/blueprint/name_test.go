@@ -19,6 +19,28 @@ func TestLoadParsesACPIdleTimeout(t *testing.T) {
 	}
 }
 
+func TestLoadValidatesOAuth(t *testing.T) {
+	const head = "name: t\nfurniture:\n  - name: kb\n    type: mcp\n"
+	cases := map[string]bool{
+		"    url: https://kb\n    oauth: {}\n": true,
+		"    url: https://kb\n    oauth: {grant: client_credentials, client_id: a, client_secret: b}\n": true,
+		"    command: kbmcp\n    oauth: {}\n":                                         false, // stdio
+		"    url: https://kb\n    oauth: {grant: client_credentials, client_id: a}\n": false, // no secret
+		"    url: https://kb\n    oauth: {grant: implicit}\n":                         false,
+	}
+	for tail, ok := range cases {
+		path := filepath.Join(t.TempDir(), "blueprint.yaml")
+		os.WriteFile(path, []byte(head+tail), 0o644)
+		_, err := Load(path)
+		if ok && err != nil {
+			t.Errorf("%q: unexpected error %v", tail, err)
+		}
+		if !ok && err == nil {
+			t.Errorf("%q: expected an error", tail)
+		}
+	}
+}
+
 func TestLoadRequiresURLSafeName(t *testing.T) {
 	cases := map[string]bool{
 		"name: taskboard-demo\n": true,

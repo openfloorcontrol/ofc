@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"path/filepath"
 	"strings"
 	"sync"
 
 	"github.com/google/uuid"
+	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/openfloorcontrol/ofc/blueprint"
 	"github.com/openfloorcontrol/ofc/furniture"
 	"github.com/openfloorcontrol/ofc/sandbox"
@@ -89,6 +91,14 @@ type Floor struct {
 	DebugFunc    func(string)
 	LogWriter    io.Writer
 	StderrWriter io.Writer // where ACP subprocess stderr goes
+
+	// OAuthDir holds OAuth token files for furniture, one per floor and
+	// furniture: <OAuthDir>/<floor>/<furniture>.json.
+	OAuthDir string
+	// OAuthConsent shows a person the URL to authorize a furniture. Nil
+	// means nobody can consent (e.g. a cron run): unauthorized OAuth
+	// furniture fails, pointing to `ofc auth`.
+	OAuthConsent func(furniture, authURL string)
 
 	// mu serializes mutations to the live runtime state (Agents,
 	// Furniture, ACPSubprocesses). v1 uses a plain mutex; if/when we
@@ -349,7 +359,11 @@ func (f *Floor) AddFurniture(fd blueprint.FurnitureDef) error {
 		return fmt.Errorf("furniture %q already exists", fd.Name)
 	}
 
-	fur, err := createFurniture(context.Background(), fd, f.Blueprint.Dir)
+	oauth, err := f.OAuthHandler(fd)
+	if err != nil {
+		return fmt.Errorf("furniture %q: %w", fd.Name, err)
+	}
+	fur, err := createFurniture(context.Background(), fd, f.Blueprint.Dir, oauth)
 	if err != nil {
 		return err
 	}
@@ -484,15 +498,43 @@ func (f *Floor) debug(format string, args ...any) {
 	}
 }
 
+// OAuthHandler returns the OAuth handler for a furniture with an oauth
+// block, nil for one without. Its tokens live in OAuthDir, and it asks
+// for consent through OAuthConsent.
+func (f *Floor) OAuthHandler(fd blueprint.FurnitureDef) (auth.OAuthHandler, error) {
+	o := fd.OAuth
+	if o == nil {
+		return nil, nil
+	}
+	cfg := furniture.OAuth{
+		Name:              fd.Name,
+		ClientCredentials: o.Grant == "client_credentials",
+		ClientID:          o.ClientID,
+		ClientSecret:      o.ClientSecret,
+		Scopes:            o.Scopes,
+	}
+	if !cfg.ClientCredentials {
+		if f.OAuthDir == "" {
+			return nil, fmt.Errorf("oauth needs a token directory (Floor.OAuthDir)")
+		}
+		cfg.TokenFile = filepath.Join(f.OAuthDir, f.ID(), fd.Name+".json")
+	}
+	if consent := f.OAuthConsent; consent != nil {
+		cfg.Consent = func(authURL string) { consent(fd.Name, authURL) }
+	}
+	return cfg.Handler()
+}
+
 // createFurniture instantiates a furniture from its blueprint definition.
-// bpDir is the absolute blueprint directory, used as cwd for stdio MCP subprocesses.
-func createFurniture(ctx context.Context, fd blueprint.FurnitureDef, bpDir string) (furniture.Furniture, error) {
+// bpDir is the absolute blueprint directory, used as cwd for stdio MCP
+// subprocesses; oauth authorizes URL-based MCP servers (nil for none).
+func createFurniture(ctx context.Context, fd blueprint.FurnitureDef, bpDir string, oauth auth.OAuthHandler) (furniture.Furniture, error) {
 	switch fd.Type {
 	case "taskboard":
 		return furniture.NewTaskBoard(), nil
 	case "mcp":
 		if fd.URL != "" {
-			return furniture.NewExternalMCPFromURL(ctx, fd.Name, fd.URL, fd.Headers)
+			return furniture.NewExternalMCPFromURL(ctx, fd.Name, fd.URL, fd.Headers, oauth)
 		}
 		if fd.Command == "" {
 			return nil, fmt.Errorf("mcp furniture %q requires a command or url", fd.Name)

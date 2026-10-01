@@ -393,6 +393,17 @@ func newFloorWithStore(bp *blueprint.Blueprint) (f *floor.Floor, resuming bool) 
 	sid, resuming := resolveSessionID()
 	f = floor.NewFloorWithSession(bp, sid)
 	f.AgentFactory = agents.New
+	oauthDir, err := defaultOAuthDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	f.OAuthDir = oauthDir
+	if interactive() {
+		f.OAuthConsent = func(name, authURL string) {
+			fmt.Fprintf(os.Stderr, "\n%s needs authorization. Open this URL to continue:\n  %s\n\n", name, authURL)
+		}
+	}
 	if err := applySessionStore(f, bp, resuming); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)

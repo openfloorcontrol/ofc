@@ -107,6 +107,8 @@ See [BLUEPRINT.md](BLUEPRINT.md) for the full reference.
 
 ```
 ofc run [prompt]        Run a floor (optional initial prompt)
+ofc auth <furniture>    Authorize an OAuth MCP furniture (consent once; tokens are refreshed)
+ofc sessions ls|show|rm Manage stored sessions
 ofc init [name]         Create a new blueprint template
 ofc version             Print version info
 ```

@@ -323,6 +323,23 @@ furniture:
       Authorization: "Bearer ${MCP_TOKEN}"
 ```
 
+**OAuth** — for MCP servers behind OAuth, add an `oauth:` block instead of a fixed header:
+
+```yaml
+furniture:
+  - name: kb
+    type: mcp
+    url: https://kb.example.com/mcp
+    oauth: {}                             # discover, register (DCR), consent once
+    # oauth:
+    #   scopes: [kb.read]                 # default: what the server advertises
+    #   client_id: ${KB_CLIENT_ID}        # a pre-registered client instead of DCR
+    #   client_secret: ${KB_CLIENT_SECRET}
+    #   grant: client_credentials         # no person involved; needs client_id + client_secret
+```
+
+With the default `authorization_code` grant, a person consents once: run `ofc auth -f blueprint.yaml kb` and open the printed URL, or let an interactive `ofc run` (a terminal, not `--json`) ask. The token goes to `~/.ofc/oauth/<floor>/kb.json` (or `$OFC_OAUTH_DIR`), and every ofc using the furniture refreshes it there — including ones already running. A run nobody can answer, such as a cron job, never asks: it fails with a hint to run `ofc auth kb`.
+
 ### Furniture fields
 
 | Field | Default | Description |
@@ -333,6 +350,7 @@ furniture:
 | `args` | `[]` | Arguments for the command |
 | `url` | | URL of an already-running MCP server (HTTP transport) |
 | `headers` | `{}` | HTTP headers for URL connections |
+| `oauth` | | OAuth for URL connections (see above) |
 | `config` | `{}` | Type-specific key-value configuration |
 
 ### Agent access

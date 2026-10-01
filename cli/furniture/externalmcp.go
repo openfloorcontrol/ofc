@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -81,9 +82,10 @@ func NewExternalMCP(ctx context.Context, name, command string, args []string, cw
 
 // NewExternalMCPFromURL connects to an already-running MCP server via HTTP.
 // Headers are added to every request, verbatim — ${VAR} references in
-// blueprint values are already resolved by blueprint.Load.
-func NewExternalMCPFromURL(ctx context.Context, name, url string, headers map[string]string) (*ExternalMCP, error) {
-	transport := &mcp.StreamableClientTransport{Endpoint: url}
+// blueprint values are already resolved by blueprint.Load. oauth, if
+// non-nil, authorizes the requests (see OAuth.Handler).
+func NewExternalMCPFromURL(ctx context.Context, name, url string, headers map[string]string, oauth auth.OAuthHandler) (*ExternalMCP, error) {
+	transport := &mcp.StreamableClientTransport{Endpoint: url, OAuthHandler: oauth}
 
 	if len(headers) > 0 {
 		transport.HTTPClient = &http.Client{
