@@ -1,0 +1,10 @@
+name: live-opencode
+description: "Live ACP checks: opencode run through mf"
+agents:
+  - id: "@oc"
+    type: acp
+    command: mf
+    args: ["run", "opencode", "${OFC_LIVE_MODEL}", "--", "acp"]
+    activation: always
+    prompt: |
+      You are @oc. Answer in one short sentence. Do not use tools.
