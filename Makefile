@@ -16,7 +16,7 @@ test:
 	cd cli && go test ./...
 
 web:
-	cd web && npm run build
+	cd web && { [ -d node_modules ] || npm ci; } && npm run build
 
 # Releasing (GoReleaser builds archives, the GitHub release, and the
 # Homebrew cask in openfloorcontrol/homebrew-tap):
