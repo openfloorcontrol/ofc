@@ -8,6 +8,7 @@ const props = defineProps({
   messages: { type: Array, default: () => [] },
   hasFurniture: { type: Boolean, default: false },
   sidebarOpen: { type: Boolean, default: false },
+  sessionsHref: { type: String, default: '' },
 })
 
 defineEmits(['toggle-sidebar'])
@@ -77,6 +78,12 @@ function borderForAgent(index) {
         </div>
       </div>
       <div class="flex items-center gap-2">
+        <a
+          v-if="sessionsHref"
+          :href="sessionsHref"
+          class="text-xs text-slate-500 hover:text-slate-300 transition-colors px-1"
+          title="Switch session"
+        >Sessions</a>
         <!-- Copy conversation button -->
         <button
           v-if="messages.length > 0"

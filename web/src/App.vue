@@ -8,6 +8,36 @@ import Header from './components/Header.vue'
 import ChatPanel from './components/ChatPanel.vue'
 import InputBar from './components/InputBar.vue'
 import Sidebar from './components/Sidebar.vue'
+import SessionPicker from './components/SessionPicker.vue'
+
+// ?sessions shows the session picker instead of a conversation.
+const picking = new URLSearchParams(window.location.search).has('sessions')
+const sessions = ref([])
+
+// urlWith returns the current URL with query params changed; a null
+// value removes the param. Keeps the token.
+function urlWith(changes) {
+  const params = new URLSearchParams(window.location.search)
+  for (const [key, value] of Object.entries(changes)) {
+    if (value === null) {
+      params.delete(key)
+    } else {
+      params.set(key, value)
+    }
+  }
+  return `${window.location.pathname}?${params}`
+}
+
+const sessionsHref = urlWith({ sessions: '', session: null })
+const sessionHref = (id) => urlWith({ sessions: null, session: id })
+
+async function fetchSessions() {
+  const resp = await apiFetch('/api/v1/sessions')
+  if (resp.status === 401) {
+    throw new Error('unauthorized')
+  }
+  sessions.value = (await resp.json()).sessions || []
+}
 
 const floorName = ref('')
 const floorDescription = ref('')
@@ -75,6 +105,10 @@ function handleEventWithRefresh(event) {
 onMounted(async () => {
   try {
     await fetchMetadata()
+    if (picking) {
+      await fetchSessions()
+      return
+    }
     sessionBase = `/api/v1/sessions/${encodeURIComponent(await resolveSession())}`
     const [lastSeq] = await Promise.all([loadHistory(`${sessionBase}/messages`), fetchFurniture()])
     sse.onEvent(handleEventWithRefresh)
@@ -113,9 +147,11 @@ onMounted(async () => {
       :messages="messages"
       :hasFurniture="furniture.length > 0"
       :sidebarOpen="sidebarOpen"
+      :sessionsHref="picking ? '' : sessionsHref"
       @toggle-sidebar="sidebarOpen = !sidebarOpen"
     />
-    <div class="flex flex-1 min-h-0 relative">
+    <SessionPicker v-if="picking" :sessions="sessions" :hrefFor="sessionHref" />
+    <div v-else class="flex flex-1 min-h-0 relative">
       <!-- Mobile backdrop -->
       <div
         v-if="sidebarOpen && furniture.length > 0"
