@@ -36,6 +36,7 @@ dist/
 *.html
 !site/*.html
 !history/**/*.html
+!web/index.html
 
 # Web UI bundle, embedded into the binary by cli/webui (built by `make web`)
 cli/webui/dist/*
