@@ -365,7 +365,7 @@ func (f *Floor) AddFurniture(fd blueprint.FurnitureDef) error {
 		return fmt.Errorf("furniture %q already exists", fd.Name)
 	}
 
-	oauth, err := f.OAuthHandler(fd)
+	oauth, err := f.OAuthHandler(fd, false)
 	if err != nil {
 		return fmt.Errorf("furniture %q: %w", fd.Name, err)
 	}
@@ -506,8 +506,9 @@ func (f *Floor) debug(format string, args ...any) {
 
 // OAuthHandler returns the OAuth handler for a furniture with an oauth
 // block, nil for one without. Its tokens live in OAuthDir, and it asks
-// for consent through OAuthConsent.
-func (f *Floor) OAuthHandler(fd blueprint.FurnitureDef) (auth.OAuthHandler, error) {
+// for consent through OAuthConsent. fresh ignores the stored session and
+// asks for consent (ofc auth).
+func (f *Floor) OAuthHandler(fd blueprint.FurnitureDef, fresh bool) (auth.OAuthHandler, error) {
 	o := fd.OAuth
 	if o == nil {
 		return nil, nil
@@ -520,6 +521,7 @@ func (f *Floor) OAuthHandler(fd blueprint.FurnitureDef) (auth.OAuthHandler, erro
 		Scopes:            o.Scopes,
 		CallbackURL:       f.OAuthCallbackURL,
 		CallbackPort:      f.OAuthCallbackPort,
+		Fresh:             fresh,
 	}
 	if !cfg.ClientCredentials {
 		if f.OAuthDir == "" {

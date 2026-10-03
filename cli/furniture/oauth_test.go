@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"golang.org/x/oauth2"
 )
 
 // oauthServer is an MCP server behind OAuth, which is also its own
@@ -71,7 +72,15 @@ func newOAuthServer(t *testing.T) *oauthServer {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		var access, refresh string
+		clientID := r.Form.Get("client_id")
+		if user, _, ok := r.BasicAuth(); ok {
+			clientID = user
+		}
 		switch {
+		case clientID != "dcr-client":
+			// e.g. the client was deleted on the server
+			writeJSON(w, 401, map[string]string{"error": "invalid_client"})
+			return
 		case r.Form.Get("grant_type") == "authorization_code" && r.Form.Get("code") == "code-1":
 			access, refresh = "tok-1", "ref-1"
 		case r.Form.Get("grant_type") == "refresh_token" && r.Form.Get("refresh_token") == "ref-1":
@@ -347,6 +356,84 @@ func TestOAuthStoredTokenIsUsedAndRefreshed(t *testing.T) {
 	defer srv.mu.Unlock()
 	if srv.refreshes != 1 {
 		t.Errorf("refreshes = %d, want 1", srv.refreshes)
+	}
+}
+
+// A stored session whose refresh no longer works (e.g. the client was
+// deleted on the server) fails a normal connect; Fresh asks for consent
+// and replaces it.
+// writeRejectedSession stores a session the server refuses to refresh:
+// its client was deleted and its access token has expired.
+func writeRejectedSession(t *testing.T, srv *oauthServer) string {
+	t.Helper()
+	file := filepath.Join(t.TempDir(), "kb.json")
+	data, _ := json.Marshal(storedSession{
+		ClientID: "deleted-client", TokenURL: srv.URL + "/token",
+		Token: &oauth2.Token{AccessToken: "old", RefreshToken: "revoked", Expiry: time.Now().Add(-time.Hour)},
+	})
+	os.WriteFile(file, data, 0o600)
+	return file
+}
+
+// countingBrowser is browser(t) that counts consents.
+func countingBrowser(t *testing.T, n *int) func(string) {
+	b := browser(t)
+	return func(authURL string) {
+		*n++
+		b(authURL)
+	}
+}
+
+func TestOAuthRejectedSessionWithoutConsentFailsWithHint(t *testing.T) {
+	srv := newOAuthServer(t)
+	file := writeRejectedSession(t, srv)
+	if m, err := connectOAuth(t, srv, OAuth{Name: "kb", TokenFile: file}); err == nil {
+		m.Close()
+		t.Fatal("connect succeeded, want a hint to run ofc auth")
+	} else if !strings.Contains(err.Error(), "ofc auth kb") {
+		t.Fatalf("err = %v, want a hint to run ofc auth", err)
+	}
+}
+
+// A stored session the server rejects counts as none: where a person can
+// consent, consent replaces it.
+func TestOAuthRejectedSessionIsReplacedByConsent(t *testing.T) {
+	srv := newOAuthServer(t)
+	file := writeRejectedSession(t, srv)
+	consents := 0
+	m, err := connectOAuth(t, srv, OAuth{Name: "kb", TokenFile: file, Consent: countingBrowser(t, &consents)})
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	m.Close()
+	if consents != 1 {
+		t.Errorf("consents = %d, want 1", consents)
+	}
+	if s := readSession(t, file); s.ClientID != "dcr-client" || s.Token.RefreshToken != "ref-1" {
+		t.Errorf("session after consent = %+v", s)
+	}
+}
+
+// A working session is used without consent; Fresh asks anyway.
+func TestOAuthFreshAsksEvenWithWorkingSession(t *testing.T) {
+	srv := newOAuthServer(t)
+	file := filepath.Join(t.TempDir(), "kb.json")
+	if m, err := connectOAuth(t, srv, OAuth{Name: "kb", TokenFile: file, Consent: browser(t)}); err != nil {
+		t.Fatalf("first consent: %v", err)
+	} else {
+		m.Close()
+	}
+
+	for _, fresh := range []bool{false, true} {
+		consents := 0
+		m, err := connectOAuth(t, srv, OAuth{Name: "kb", TokenFile: file, Consent: countingBrowser(t, &consents), Fresh: fresh})
+		if err != nil {
+			t.Fatalf("fresh=%v: %v", fresh, err)
+		}
+		m.Close()
+		if want := map[bool]int{false: 0, true: 1}[fresh]; consents != want {
+			t.Errorf("fresh=%v: consents = %d, want %d", fresh, consents, want)
+		}
 	}
 }
 

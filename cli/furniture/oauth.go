@@ -54,6 +54,11 @@ type OAuth struct {
 	// CallbackPort, if set, is the port ofc listens on, on 127.0.0.1, for
 	// a CallbackURL served by a proxy in front of it (which may be https).
 	CallbackPort int
+
+	// Fresh ignores the stored session and asks for consent, replacing it
+	// — e.g. to change the granted scopes. (A session the server rejects
+	// is replaced by consent anyway.)
+	Fresh bool
 }
 
 // Handler returns the OAuth handler for the MCP transport.
@@ -69,7 +74,7 @@ func (o OAuth) Handler() (auth.OAuthHandler, error) {
 
 	store := &tokenFile{path: o.TokenFile, name: o.Name}
 	var initial oauth2.TokenSource
-	if store.exists() {
+	if store.exists() && !o.Fresh {
 		initial = store
 	}
 	if o.Consent == nil {
@@ -282,7 +287,8 @@ func (s *storedSession) config() *oauth2.Config {
 // tokenFile is an oauth2.TokenSource backed by a file. Token reads the
 // file under a lock and, if the token has expired, refreshes and writes it
 // back, so processes sharing the file never use a rotated-out refresh
-// token.
+// token. A refresh the authorization server refuses yields no token (nil,
+// nil): the MCP transport then sends the request without one.
 type tokenFile struct {
 	path string
 	name string
@@ -308,8 +314,17 @@ func (f *tokenFile) Token() (*oauth2.Token, error) {
 		return s.Token, nil
 	}
 	tok, err := s.config().TokenSource(context.Background(), s.Token).Token()
+	var rejected *oauth2.RetrieveError
+	if errors.As(err, &rejected) {
+		// The authorization server refused the refresh (e.g. invalid_client
+		// for a deleted client, invalid_grant for a revoked token): the
+		// stored session counts as none. Without a token the request goes
+		// out unauthenticated, and the server's 401 starts authorization —
+		// consent where a person can give it, otherwise ErrNotAuthorized.
+		return nil, nil
+	}
 	if err != nil {
-		return nil, fmt.Errorf("%s: refreshing the OAuth token failed: %w (run `ofc auth %s`)", f.name, err, f.name)
+		return nil, fmt.Errorf("%s: refreshing the OAuth token failed: %w", f.name, err)
 	}
 	s.Token = tok
 	return tok, f.write(s)

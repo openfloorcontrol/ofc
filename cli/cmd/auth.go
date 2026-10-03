@@ -20,8 +20,10 @@ import (
 var authCmd = &cobra.Command{
 	Use:   "auth <furniture>",
 	Short: "Authorize an OAuth MCP furniture",
-	Long: `Connect to an MCP furniture with an oauth: block and, if it needs it, run
-the OAuth consent: open the printed URL and approve. The token is stored in
+	Long: `Make sure ofc is authorized for an MCP furniture with an oauth: block. If
+there is no stored session, or the server rejects it (e.g. a deleted client
+or revoked token), it asks for consent: open the printed URL and approve.
+--force asks anyway, e.g. after changing the scopes. The token is stored in
 ~/.ofc/oauth/<floor>/<furniture>.json (or $OFC_OAUTH_DIR) and refreshed by
 every ofc run that uses the furniture, including ones already running.
 
@@ -42,8 +44,11 @@ on 127.0.0.1:$OFC_OAUTH_CALLBACK_PORT, where the proxy forwards to.`,
 	},
 }
 
+var authForce bool
+
 func init() {
 	authCmd.Flags().StringVarP(&blueprintFile, "file", "f", "blueprint.yaml", "Blueprint file")
+	authCmd.Flags().BoolVar(&authForce, "force", false, "Ask for consent even if the stored session works")
 	rootCmd.AddCommand(authCmd)
 }
 
@@ -74,17 +79,17 @@ func authorize(name string) error {
 	if err := applyOAuthCallback(f); err != nil {
 		return err
 	}
-	pasting := false
+	asked := false
 	f.OAuthConsent = func(_, authURL string) {
 		fmt.Printf("Open this URL to authorize %s:\n  %s\n\n", name, authURL)
 		fmt.Printf("If the browser can't reach this machine afterwards, paste the address it\n" +
 			"was sent to (from its address bar) here and press Enter:\n")
-		if !pasting {
-			pasting = true
+		if !asked {
+			asked = true
 			go forwardPastedCallbacks(os.Stdin, os.Stdout)
 		}
 	}
-	handler, err := f.OAuthHandler(*fd)
+	handler, err := f.OAuthHandler(*fd, authForce)
 	if err != nil {
 		return err
 	}
@@ -94,7 +99,11 @@ func authorize(name string) error {
 		return err
 	}
 	defer m.Close()
-	fmt.Printf("%s is authorized (%d tools)", name, len(m.Tools()))
+	if asked {
+		fmt.Printf("%s is authorized (%d tools)", name, len(m.Tools()))
+	} else {
+		fmt.Printf("%s is already authorized (%d tools); --force asks anew", name, len(m.Tools()))
+	}
 	if fd.OAuth.Grant != "client_credentials" {
 		fmt.Printf("; token in %s", filepath.Join(dir, bp.Name, name+".json"))
 	}
