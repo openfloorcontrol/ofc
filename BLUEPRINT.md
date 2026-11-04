@@ -389,7 +389,7 @@ agents:
     furniture: [tasks, fs]       # can access task board and filesystem
 ```
 
-LLM agents get furniture tools injected as function calls, namespaced as `{furniture}__{tool}` (e.g. `tasks__add_task`), and a call to furniture the agent doesn't list fails. ACP agents receive MCP server URLs and connect themselves. Every name in `furniture` must be a furniture of the floor.
+LLM agents get furniture tools injected as function calls, namespaced as `{furniture}__{tool}` (e.g. `tasks__add_task`), and a call to furniture the agent doesn't list fails. ACP agents receive MCP server URLs and connect themselves, with a token of their own that opens only the furniture they list. Every name in `furniture` must be a furniture of the floor.
 
 ## Turn-taking
 

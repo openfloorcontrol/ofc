@@ -11,7 +11,7 @@ Furniture are shared interactive objects that live on the floor (or in a room) �
 - **"Furniture"** is the term — shared objects on the floor, like furniture in a room
 - **MCP is the internal transport** — all furniture (built-in and external) gets wrapped as MCP servers
 - **OFC always proxies** — agents never talk directly to furniture; OFC mediates for access control and observability
-- **Access control is per-tool** — not read/write semantics, but which specific tools an agent can call (planned, not yet implemented)
+- **Access control is per-furniture** — an agent can see and call the furniture it lists in `furniture:`, and nothing else. LLM agents are checked on every call; ACP agents get a token of their own that opens only the MCP endpoints of their furniture
 - **Two agent paths** — LLM agents get tools injected directly; ACP agents get MCP server URLs
 
 ## Architecture
@@ -85,7 +85,7 @@ Agent → OFC (access control, logging) → Furniture
 
 This applies to both built-in and external furniture. Even when the furniture is an external MCP server, OFC connects to it first, then re-exposes it through its own API server. This gives OFC:
 
-1. **Access control** — per-agent, per-tool filtering (which tools each agent can see/call)
+1. **Access control** — per-agent: which furniture each agent can see and call
 2. **Observability** — all tool calls logged, streamed to frontend, included in conversation context
 3. **Uniform interface** — agents don't need to know if furniture is built-in or external
 
@@ -206,7 +206,7 @@ agents:
 ## What's Next
 
 - [ ] Advanced MCP features (progress notifications, resource subscriptions, logging)
-- [ ] Per-agent access control at the tool level
+- [ ] Access control at the tool level (today it is per furniture)
 - [ ] Furniture persistence (TaskBoard is in-memory only)
 - [ ] Stdio bridge for ACP agents that only support stdio MCP
 

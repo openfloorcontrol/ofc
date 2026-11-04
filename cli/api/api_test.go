@@ -22,6 +22,7 @@ func TestAPIServerMCPEndToEnd(t *testing.T) {
 
 	// Start API server on auto-assigned port
 	api := api.New()
+	api.SetAuthToken("access")
 	api.RegisterFurniture("default", "tasks", mcpSrv)
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start API server: %v", err)
@@ -42,7 +43,8 @@ func TestAPIServerMCPEndToEnd(t *testing.T) {
 
 	endpoint := baseURL + "/api/v1/floors/default/mcp/tasks/"
 	session, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{
-		Endpoint: endpoint,
+		Endpoint:   endpoint,
+		HTTPClient: bearerClient("access"),
 	}, nil)
 	if err != nil {
 		t.Fatalf("failed to connect MCP client: %v", err)
@@ -564,4 +566,107 @@ func contentText(result *mcp.CallToolResult) string {
 		}
 	}
 	return "<non-text content>"
+}
+
+// bearerClient is an HTTP client that sends Authorization: Bearer token.
+func bearerClient(token string) *http.Client {
+	return &http.Client{Transport: bearerTransport(token)}
+}
+
+type bearerTransport string
+
+func (b bearerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	r.Header.Set("Authorization", "Bearer "+string(b))
+	return http.DefaultTransport.RoundTrip(r)
+}
+
+// A furniture MCP endpoint opens to the access token and to the token of
+// an agent that lists the furniture; an agent token opens nothing else.
+func TestFurnitureEndpointsCheckAgentTokens(t *testing.T) {
+	f := newTestFloor(&blueprint.Blueprint{Name: "tok", Agents: []blueprint.Agent{
+		{ID: "@a", Furniture: []string{"tasks"}},
+	}}, nil)
+	srv := api.New()
+	srv.SetAuthToken("access")
+	srv.RegisterFloorAPI(f)
+	srv.RegisterFurniture("tok", "tasks", furniture.WrapAsMCP(furniture.NewTaskBoard()))
+	srv.RegisterFurniture("tok", "secret", furniture.WrapAsMCP(furniture.NewTaskBoard()))
+	if err := srv.Start("127.0.0.1:0"); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	agentToken := f.AgentToken("@a")
+	connects := func(furnitureName, token string) bool {
+		client := mcp.NewClient(&mcp.Implementation{Name: "t", Version: "1"}, nil)
+		session, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{
+			Endpoint:   srv.BaseURL() + "/api/v1/floors/tok/mcp/" + furnitureName + "/",
+			HTTPClient: bearerClient(token),
+		}, nil)
+		if err != nil {
+			return false
+		}
+		session.Close()
+		return true
+	}
+	cases := []struct {
+		furniture, token string
+		want             bool
+	}{
+		{"tasks", "access", true},
+		{"secret", "access", true},
+		{"tasks", agentToken, true},
+		{"secret", agentToken, false},
+		{"tasks", "", false},
+		{"tasks", "wrong", false},
+	}
+	for _, c := range cases {
+		if got := connects(c.furniture, c.token); got != c.want {
+			t.Errorf("%s with token %q: connected = %v, want %v", c.furniture, c.token, got, c.want)
+		}
+	}
+
+	req, _ := http.NewRequest("GET", srv.BaseURL()+"/api/v1/agents", nil)
+	req.Header.Set("Authorization", "Bearer "+agentToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("agent token on /api/v1/agents: status %d, want 401", resp.StatusCode)
+	}
+}
+
+// Without an access token, furniture endpoints still need an agent token.
+func TestFurnitureEndpointsNeedATokenWithoutAccessToken(t *testing.T) {
+	f := newTestFloor(&blueprint.Blueprint{Name: "tok", Agents: []blueprint.Agent{
+		{ID: "@a", Furniture: []string{"tasks"}},
+	}}, nil)
+	srv := api.New()
+	srv.RegisterFloorAPI(f)
+	srv.RegisterFurniture("tok", "tasks", furniture.WrapAsMCP(furniture.NewTaskBoard()))
+	if err := srv.Start("127.0.0.1:0"); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	for token, want := range map[string]int{"": http.StatusUnauthorized, f.AgentToken("@a"): http.StatusOK} {
+		req, _ := http.NewRequest("POST", srv.BaseURL()+"/api/v1/floors/tok/mcp/tasks/",
+			strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != want {
+			t.Errorf("token %q: status %d, want %d", token, resp.StatusCode, want)
+		}
+	}
 }

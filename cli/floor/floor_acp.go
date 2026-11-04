@@ -212,13 +212,9 @@ func (f *Floor) buildACPMCPServers(agent blueprint.Agent, session *acpclient.Sub
 	base := f.APIServer.BaseURL()
 	floorID := f.ID()
 
-	// Include auth header if token is set. Init as empty slice (not nil)
-	// so it serializes to JSON `[]` instead of `null` — claude-code-acp's
-	// schema rejects null for the headers field.
-	headers := []acpsdk.HttpHeader{}
-	if token := f.APIServer.AuthToken(); token != "" {
-		headers = append(headers, acpsdk.HttpHeader{Name: "Authorization", Value: "Bearer " + token})
-	}
+	// The agent authenticates with its own token, which grants only the
+	// furniture it lists.
+	headers := []acpsdk.HttpHeader{{Name: "Authorization", Value: "Bearer " + f.AgentToken(agent.ID)}}
 
 	var servers []acpsdk.McpServer
 	for _, fname := range agent.Furniture {
