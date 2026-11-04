@@ -5,7 +5,6 @@ import (
 
 	acpclient "github.com/openfloorcontrol/ofc/acp"
 	"github.com/openfloorcontrol/ofc/furniture"
-	"github.com/openfloorcontrol/ofc/sandbox"
 )
 
 // agentTurn is the engine-side implementation of AgentTurn. It binds an
@@ -31,7 +30,7 @@ type agentTurn struct {
 //
 //	sub-room dispatch, the sub-room.
 //
-// floor: provides access to furniture, sandbox, ACP subprocesses, debug.
+// floor: provides access to furniture, ACP subprocesses, debug.
 // agentID: the agent's ID.
 func NewAgentTurn(view SessionView, room *Room, floor *Floor, agentID string) AgentTurn {
 	return &agentTurn{view: view, room: room, floor: floor, agentID: agentID}
@@ -60,17 +59,13 @@ func (t *agentTurn) MarkSent() {
 	}
 }
 
-func (t *agentTurn) Stream(ev Event)        { t.room.PostStream(ev) }
-func (t *agentTurn) Status(ev ChatEvent)    { t.room.PostEvent(ev) }
-func (t *agentTurn) Reply(msg ChatMessage)  { t.room.Post(msg) }
+func (t *agentTurn) Stream(ev Event)       { t.room.PostStream(ev) }
+func (t *agentTurn) Status(ev ChatEvent)   { t.room.PostEvent(ev) }
+func (t *agentTurn) Reply(msg ChatMessage) { t.room.Post(msg) }
 
+// Furniture returns the named furniture if the agent lists it.
 func (t *agentTurn) Furniture(name string) (furniture.Furniture, bool) {
-	f, ok := t.floor.Furniture[name]
-	return f, ok
-}
-
-func (t *agentTurn) Sandbox() *sandbox.Sandbox {
-	return t.floor.Sandbox
+	return t.floor.agentFurniture(t.agentID, name)
 }
 
 func (t *agentTurn) ACPSubprocess() (*acpclient.Subprocess, error) {

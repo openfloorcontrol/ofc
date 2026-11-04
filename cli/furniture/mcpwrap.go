@@ -61,8 +61,7 @@ func makeHandler(f Furniture, toolName string) mcp.ToolHandler {
 			}, nil
 		}
 
-		// Marshal result to JSON text
-		data, err := json.Marshal(result)
+		text, err := ResultText(result)
 		if err != nil {
 			return &mcp.CallToolResult{
 				Content: []mcp.Content{
@@ -74,7 +73,7 @@ func makeHandler(f Furniture, toolName string) mcp.ToolHandler {
 
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{
-				&mcp.TextContent{Text: string(data)},
+				&mcp.TextContent{Text: text},
 			},
 		}, nil
 	}

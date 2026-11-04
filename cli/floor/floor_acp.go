@@ -11,6 +11,7 @@ import (
 	acpsdk "github.com/coder/acp-go-sdk"
 	acpclient "github.com/openfloorcontrol/ofc/acp"
 	"github.com/openfloorcontrol/ofc/blueprint"
+	"github.com/openfloorcontrol/ofc/sandbox"
 )
 
 // acpKey identifies one ACP subprocess: each agent gets its own process
@@ -136,10 +137,22 @@ func (f *Floor) spawnACPSubprocess(sessionID string, agent blueprint.Agent) (*ac
 
 	f.debug("starting ACP agent %s (%s)", agent.ID, agent.Command)
 
-	cwd, _ := os.Getwd()
-	workDir := filepath.Join(cwd, "workspace")
-	os.MkdirAll(workDir, 0o755)
-	client := acpclient.NewFloorClient(f.Sandbox, workDir)
+	// The agent's file and terminal requests run in its sandbox, rooted
+	// at the sandbox's workspace, or else on the host in ./workspace.
+	var sb *sandbox.Sandbox
+	var workDir string
+	if agent.Sandbox != "" {
+		var ok bool
+		if sb, ok = f.sandbox(agent.Sandbox); !ok {
+			return nil, fmt.Errorf("ACP agent %s: no sandbox %q on the floor", agent.ID, agent.Sandbox)
+		}
+		workDir = sb.WorkspaceDir
+	} else {
+		cwd, _ := os.Getwd()
+		workDir = filepath.Join(cwd, "workspace")
+		os.MkdirAll(workDir, 0o755)
+	}
+	client := acpclient.NewFloorClient(sb, workDir)
 	client.LogWriter = f.LogWriter
 	client.DebugFunc = func(msg string) { f.debug("%s", msg) }
 

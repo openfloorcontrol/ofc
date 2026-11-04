@@ -274,16 +274,13 @@ func TestSessionForRoom(t *testing.T) {
 	go func() { for range room.Events() {} }()
 
 	// ForRoom should return a session view with room's Chat,
-	// sharing Floor (and thus Sandbox/Blueprint via Floor) with the parent.
+	// sharing Floor (and thus Blueprint via Floor) with the parent.
 	view := sess.ForRoom(room)
 	if view.MainRoom != room {
 		t.Error("ForRoom Chat should be room's Chat")
 	}
 	if view.Floor != floor {
 		t.Error("ForRoom should share Floor")
-	}
-	if view.Floor.Sandbox != floor.Sandbox {
-		t.Error("ForRoom should expose same Sandbox via Floor")
 	}
 	if view.Floor.Blueprint != floor.Blueprint {
 		t.Error("ForRoom should expose same Blueprint via Floor")

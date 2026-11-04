@@ -1,7 +1,10 @@
 // Package furniture defines the interface for shared interactive objects on the floor.
 package furniture
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // Tool describes a single capability offered by a piece of furniture.
 type Tool struct {
@@ -23,6 +26,19 @@ type Furniture interface {
 	// Call invokes a tool by name with JSON-compatible arguments.
 	// Returns a JSON-serializable result.
 	Call(toolName string, args map[string]interface{}) (interface{}, error)
+}
+
+// ResultText renders a tool result for a model or an MCP client: a
+// string is the text itself, any other value its JSON encoding.
+func ResultText(result interface{}) (string, error) {
+	if s, ok := result.(string); ok {
+		return s, nil
+	}
+	data, err := json.Marshal(result)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
 }
 
 // FileReader is an optional interface for furniture that can serve raw file data.

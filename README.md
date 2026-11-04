@@ -50,7 +50,7 @@ ofc run --web
 
 - **LLM agents**: An OpenAI-compatible endpoint (Ollama, OpenRouter, etc.)
 - **ACP agents**: The agent's ACP adapter installed (e.g. `npm i -g @anthropic-ai/claude-code-acp` for Claude Code)
-- **Sandbox**: Docker (for workstation-based code execution)
+- **Sandbox**: Docker (for sandbox furniture)
 
 ## Blueprint
 
@@ -67,7 +67,7 @@ defaults:
 agents:
   - id: "@data"
     activation: always
-    can_use_sandbox: true
+    furniture: [sandbox]
     prompt: "You are @data, a senior data analyst..."
 
   - id: "@code"
@@ -85,10 +85,10 @@ furniture:
     command: npx
     args: ["-y", "@modelcontextprotocol/server-filesystem", "./workspace"]
 
-workstations:
-  - type: sandbox
+  - name: sandbox
+    type: sandbox
     image: python:3.11-slim
-    mount: ./workspace:/workspace
+    workspace: ./workspace
 ```
 
 See [BLUEPRINT.md](BLUEPRINT.md) for the full reference.
@@ -97,8 +97,7 @@ See [BLUEPRINT.md](BLUEPRINT.md) for the full reference.
 
 - **Floor**: A workspace where agents collaborate
 - **Agents**: AI participants — LLM (OpenAI-compatible) or ACP (Claude Code, etc.)
-- **Furniture**: Shared tools on the floor — task boards, MCP servers, file systems
-- **Workstations**: Sandboxed environments for code execution (Docker)
+- **Furniture**: Shared tools on the floor — task boards, MCP servers, file systems, Docker sandboxes. An agent can use the furniture it lists, and only that
 - **Turn-taking**: Agents use `@mentions?` to invoke others, `[PASS]` to decline
 - **Rooms**: Isolated sub-conversations for focused work (`/room #name @agent1 @agent2 prompt`)
 - **AgentContext**: Per-agent message streams — each agent sees their own view of the conversation
@@ -196,8 +195,8 @@ cli/
 │   ├── api.go             # HTTP API: messages, SSE events, MCP, file serving
 │   ├── cli.go             # CLI frontend
 │   └── tui.go             # TUI frontend (bubbletea)
-├── blueprint/     # YAML loading, agent/workstation config
-├── furniture/     # Furniture interface, TaskBoard, ExternalMCP
+├── blueprint/     # YAML loading, agent/furniture config
+├── furniture/     # Furniture interface, TaskBoard, ExternalMCP, Sandbox
 ├── sandbox/       # Docker sandbox management
 └── acp/           # ACP client: session management, callbacks
 ```

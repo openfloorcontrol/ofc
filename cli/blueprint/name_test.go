@@ -6,6 +6,30 @@ import (
 	"testing"
 )
 
+func TestLoadValidatesSandboxAndAgentFurniture(t *testing.T) {
+	const box = "furniture:\n  - name: box\n    type: sandbox\n  - name: tasks\n    type: taskboard\n"
+	cases := map[string]bool{
+		box + "agents:\n  - id: \"@a\"\n    furniture: [box, tasks]\n":                      true,
+		box + "agents:\n  - id: \"@c\"\n    type: acp\n    sandbox: box\n":                  true,
+		box + "agents:\n  - id: \"@a\"\n    furniture: [missing]\n":                         false,
+		box + "agents:\n  - id: \"@a\"\n    sandbox: box\n":                                 false, // LLM agent
+		box + "agents:\n  - id: \"@c\"\n    type: acp\n    sandbox: tasks\n":                false, // not a sandbox
+		"furniture:\n  - name: kb\n    type: taskboard\n    image: python\n":                false,
+		"furniture:\n  - name: box\n    type: sandbox\n    image: a\n    dockerfile: ./d\n": true,
+	}
+	for body, ok := range cases {
+		path := filepath.Join(t.TempDir(), "blueprint.yaml")
+		os.WriteFile(path, []byte("name: t\n"+body), 0o644)
+		_, err := Load(path)
+		if ok && err != nil {
+			t.Errorf("%q: unexpected error %v", body, err)
+		}
+		if !ok && err == nil {
+			t.Errorf("%q: expected an error", body)
+		}
+	}
+}
+
 func TestLoadValidatesOAuth(t *testing.T) {
 	const head = "name: t\nfurniture:\n  - name: kb\n    type: mcp\n"
 	cases := map[string]bool{

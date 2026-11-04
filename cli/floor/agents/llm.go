@@ -15,7 +15,6 @@ import (
 	"github.com/openfloorcontrol/ofc/floor"
 	"github.com/openfloorcontrol/ofc/furniture"
 	llmsdk "github.com/openfloorcontrol/ofc/llm"
-	"github.com/openfloorcontrol/ofc/sandbox"
 )
 
 // LLMAgent is an agent backed by an OpenAI-compatible LLM API.
@@ -229,9 +228,6 @@ func (a *LLMAgent) buildContext(turn floor.AgentTurn) ([]llmsdk.Message, error) 
 // buildTools constructs the tool list for this agent.
 func (a *LLMAgent) buildTools(turn floor.AgentTurn) []llmsdk.Tool {
 	var tools []llmsdk.Tool
-	if a.agent.CanUseSandbox && turn.Sandbox() != nil {
-		tools = append(tools, llmsdk.BashTool)
-	}
 	for _, fname := range a.agent.Furniture {
 		f, ok := turn.Furniture(fname)
 		if !ok {
@@ -262,11 +258,6 @@ func (a *LLMAgent) dispatchToolCall(turn floor.AgentTurn, tc llmsdk.ToolCall) []
 		return a.dispatchFurnitureCall(turn, tc, parts[0], parts[1])
 	}
 
-	// Default: bash tool
-	if name == "bash" {
-		return a.dispatchBashCall(turn.Sandbox(), tc)
-	}
-
 	return []expandedCall{{Call: tc, Title: name, Output: fmt.Sprintf("[ERROR: unknown tool %q]", name)}}
 }
 
@@ -276,7 +267,7 @@ func (a *LLMAgent) dispatchFurnitureCall(turn floor.AgentTurn, tc llmsdk.ToolCal
 		return []expandedCall{{
 			Call:   tc,
 			Title:  furnitureName + "." + toolName,
-			Output: fmt.Sprintf("[ERROR: unknown furniture %q]", furnitureName),
+			Output: fmt.Sprintf("[ERROR: no furniture %q available to %s]", furnitureName, a.agent.ID),
 		}}
 	}
 
@@ -301,11 +292,11 @@ func (a *LLMAgent) dispatchFurnitureCall(turn floor.AgentTurn, tc llmsdk.ToolCal
 
 		callResult, err := f.Call(toolName, args)
 		var output string
+		if err == nil {
+			output, err = furniture.ResultText(callResult)
+		}
 		if err != nil {
 			output = fmt.Sprintf("[ERROR: %v]", err)
-		} else {
-			data, _ := json.Marshal(callResult)
-			output = string(data)
 		}
 
 		argsJSON, _ := json.Marshal(args)
@@ -326,26 +317,6 @@ func (a *LLMAgent) dispatchFurnitureCall(turn floor.AgentTurn, tc llmsdk.ToolCal
 		})
 	}
 	return expanded
-}
-
-func (a *LLMAgent) dispatchBashCall(sb *sandbox.Sandbox, tc llmsdk.ToolCall) []expandedCall {
-	if sb == nil {
-		return []expandedCall{{Call: tc, Title: "bash", Output: "[ERROR: no sandbox available]"}}
-	}
-
-	var args struct {
-		Cmd string `json:"cmd"`
-	}
-	if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
-		args.Cmd = tc.Function.Arguments
-	}
-
-	// Note: ToolCallStarted is emitted by the caller after expandToolCalls returns
-	output, err := sb.Execute(args.Cmd)
-	if err != nil {
-		return []expandedCall{{Call: tc, Title: args.Cmd, Output: fmt.Sprintf("[ERROR: %v]", err)}}
-	}
-	return []expandedCall{{Call: tc, Title: args.Cmd, Output: output}}
 }
 
 // --- Shared tool helpers ---

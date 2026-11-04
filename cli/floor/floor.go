@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -58,7 +59,10 @@ type Floor struct {
 	acpMu           sync.Mutex
 	stopReaper      chan struct{} // closed by Stop; nil when no idle timeout
 
-	Sandbox   *sandbox.Sandbox
+	// sandboxes holds the containers of the floor's sandbox furniture, by
+	// furniture name. Guarded by mu.
+	sandboxes map[string]*sandbox.Sandbox
+
 	APIServer APIServer // interface; concrete impl in the top-level api/ package. Caller assigns before Start.
 
 	// AgentFactory builds the Agent that runs one turn for an agent spec.
@@ -188,12 +192,38 @@ func (f *Floor) Agents() []blueprint.Agent {
 	return f.agents
 }
 
-// WorkspacePath returns the sandbox workspace directory, or "" if no sandbox.
-func (f *Floor) WorkspacePath() string {
-	if f.Sandbox != nil {
-		return f.Sandbox.WorkspaceDir
+// WorkspacePaths returns the workspace directories of the floor's
+// sandboxes, in blueprint order.
+func (f *Floor) WorkspacePaths() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var dirs []string
+	for _, fd := range f.Blueprint.Furniture {
+		if sb, ok := f.sandboxes[fd.Name]; ok {
+			dirs = append(dirs, sb.WorkspaceDir)
+		}
 	}
-	return ""
+	return dirs
+}
+
+// agentFurniture returns the named furniture if agentID lists it.
+func (f *Floor) agentFurniture(agentID, name string) (furniture.Furniture, bool) {
+	spec, ok := f.agentSpec(agentID)
+	if !ok || !slices.Contains(spec.Furniture, name) {
+		return nil, false
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	fur, ok := f.Furniture[name]
+	return fur, ok
+}
+
+// sandbox returns the container of the sandbox furniture called name.
+func (f *Floor) sandbox(name string) (*sandbox.Sandbox, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	sb, ok := f.sandboxes[name]
+	return sb, ok
 }
 
 // joinAgentIDs formats a list of agent IDs, excluding one (the agent itself).
@@ -226,31 +256,7 @@ func (f *Floor) Start(renderInfo func(string)) error {
 
 	f.APIServer.RegisterFloorAPI(f)
 
-	// 2. Sandbox
-	var sandboxWS *blueprint.Workstation
-	for i := range f.Blueprint.Workstations {
-		if f.Blueprint.Workstations[i].Type == "sandbox" {
-			sandboxWS = &f.Blueprint.Workstations[i]
-			break
-		}
-	}
-	if sandboxWS != nil {
-		workspaceDir := "./workspace"
-		if sandboxWS.Mount != "" {
-			// Mount format: "host:container" — use host part as workspace dir
-			if parts := strings.SplitN(sandboxWS.Mount, ":", 2); len(parts) == 2 {
-				workspaceDir = parts[0]
-			}
-		}
-		f.Sandbox = sandbox.New(workspaceDir, sandboxWS.Image, sandboxWS.Dockerfile)
-		renderInfo("Starting sandbox...")
-		if err := f.Sandbox.Start(); err != nil {
-			return fmt.Errorf("failed to start sandbox: %w", err)
-		}
-		renderInfo(fmt.Sprintf("Sandbox ready (%s)", f.Sandbox.ContainerID[:12]))
-	}
-
-	// 3. Serve the web UI if enabled
+	// Serve the web UI if enabled
 	if f.WebMode {
 		if f.WebUI != nil {
 			f.APIServer.ServeStaticWeb(f.WebUI)
@@ -260,7 +266,7 @@ func (f *Floor) Start(renderInfo func(string)) error {
 		}
 	}
 
-	// 4. Start API server. Routes can be added after Start() — both
+	// Start API server. Routes can be added after Start() — both
 	// AddFurniture (MCP routes) and the static handler register against
 	// the running server. Echo serves whatever routes are registered
 	// when a request comes in.
@@ -285,7 +291,7 @@ func (f *Floor) Start(renderInfo func(string)) error {
 		}
 	}
 
-	// 5. Apply the infrastructure-dependent parts of the blueprint via
+	// Apply the infrastructure-dependent parts of the blueprint via
 	// mutations. LLM agents are already applied by NewFloor; here we
 	// add furniture (needs API server for MCP routes) and ACP agents
 	// (need API server for furniture MCP URLs).
@@ -315,7 +321,7 @@ func (f *Floor) Start(renderInfo func(string)) error {
 	return nil
 }
 
-// Stop tears down ACP sessions, furniture, API server, sandbox, and
+// Stop tears down ACP sessions, API server, furniture (sandboxes included), and
 // closes the store if it implements io.Closer (e.g. JSONLStore).
 func (f *Floor) Stop() {
 	if f.stopReaper != nil {
@@ -329,9 +335,6 @@ func (f *Floor) Stop() {
 		if closer, ok := fur.(io.Closer); ok {
 			closer.Close()
 		}
-	}
-	if f.Sandbox != nil {
-		f.Sandbox.Stop()
 	}
 	for _, sess := range f.Sessions {
 		sess.Close()
@@ -374,6 +377,13 @@ func (f *Floor) AddFurniture(fd blueprint.FurnitureDef) error {
 		return err
 	}
 
+	if s, ok := fur.(*furniture.Sandbox); ok {
+		if f.sandboxes == nil {
+			f.sandboxes = map[string]*sandbox.Sandbox{}
+		}
+		f.sandboxes[fd.Name] = s.Container()
+	}
+
 	// Wrap so all Call() invocations emit FurnitureUpdated events in every
 	// running session — furniture belongs to the floor, not one session.
 	wrapped := &observableFurniture{inner: fur, notify: f.notifySessions}
@@ -401,6 +411,7 @@ func (f *Floor) RemoveFurniture(name string) error {
 	}
 
 	delete(f.Furniture, name)
+	delete(f.sandboxes, name)
 
 	if closer, ok := fur.(io.Closer); ok {
 		if err := closer.Close(); err != nil {
@@ -550,6 +561,16 @@ func createFurniture(ctx context.Context, fd blueprint.FurnitureDef, bpDir strin
 			return nil, fmt.Errorf("mcp furniture %q requires a command or url", fd.Name)
 		}
 		return furniture.NewExternalMCP(ctx, fd.Name, fd.Command, fd.Args, bpDir)
+	case "sandbox":
+		workspace := fd.Workspace
+		if workspace == "" {
+			workspace = "./workspace"
+		}
+		sb := sandbox.New(workspace, fd.Image, fd.Dockerfile)
+		if err := sb.Start(); err != nil {
+			return nil, fmt.Errorf("sandbox %q: %w", fd.Name, err)
+		}
+		return furniture.NewSandbox(fd.Name, sb), nil
 	default:
 		return nil, fmt.Errorf("unknown furniture type %q", fd.Type)
 	}

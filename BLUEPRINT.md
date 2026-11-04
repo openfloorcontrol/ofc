@@ -1,6 +1,6 @@
 # Blueprint Reference
 
-A blueprint is a YAML file that defines a floor — the agents, their configuration, and the workstations (tools) available to them. Think of it as `docker-compose.yaml` for AI teams. How a floor is run — frontend, port, session store — is set by ofc's flags, environment variables or a config file; see [Settings](README.md#settings).
+A blueprint is a YAML file that defines a floor — the agents, their configuration, and the furniture (tools) available to them. Think of it as `docker-compose.yaml` for AI teams. How a floor is run — frontend, port, session store — is set by ofc's flags, environment variables or a config file; see [Settings](README.md#settings).
 
 ## Quick start
 
@@ -24,8 +24,8 @@ agents:
   - id: "@assistant"
     # ...
 
-workstations:
-  - type: sandbox
+furniture:
+  - name: tasks
     # ...
 ```
 
@@ -37,10 +37,9 @@ workstations:
 | `description` | no | Short description of the floor |
 | `defaults` | no | Default `endpoint`, `model`, `api_key` and `thinking` for all agents |
 | `agents` | yes | List of agents on this floor |
-| `furniture` | no | List of shared furniture (task boards, MCP servers) |
-| `workstations` | no | List of workstations (sandboxed environments) |
+| `furniture` | no | List of shared furniture (task boards, MCP servers, sandboxes) |
 
-A key that isn't a field of the blueprint, an agent, a furniture or a workstation is an error.
+A key that isn't a field of the blueprint, an agent or a furniture is an error.
 
 ## Environment variables
 
@@ -102,7 +101,7 @@ agents:
   - id: "@data"
     name: "Data Analyst"
     activation: always
-    can_use_sandbox: true
+    furniture: [sandbox]
     tool_context: summary
     temperature: 0.7
     prompt: |
@@ -179,6 +178,22 @@ Most agents need an ACP adapter — for example, Claude Code uses
 If credentials are required, set them through `env:` using whatever variable the
 adapter expects.
 
+An ACP agent reads and writes files and runs terminal commands by asking ofc,
+which carries the requests out on the host, rooted at `./workspace`. With
+`sandbox:` naming a [sandbox furniture](#sandbox), ofc carries them out in that
+container instead, rooted at its workspace:
+
+```yaml
+agents:
+  - id: "@claude"
+    type: acp
+    command: claude-code-acp
+    sandbox: box
+```
+
+The agent process itself runs on the host either way, and an agent may use its
+own built-in tools without asking ofc.
+
 ### External prompt files
 
 For longer prompts, use `prompt_file` to keep the blueprint clean:
@@ -254,9 +269,8 @@ varies invalidates it.
 | `prompt` | | System prompt defining the agent's role and behavior |
 | `prompt_file` | | Path to a file containing the system prompt (relative to blueprint dir). Cannot be used together with `prompt`. |
 | `activation` | `"mention"` | When the agent wakes up: `"mention"` (only on `@id?`) or `"always"` (listens to everything) |
-| `can_use_sandbox` | `false` | Whether the agent can use workstation tools (sandbox, etc.) |
 | `tool_context` | `"full"` | How much of other agents' tool output to include: `"full"`, `"summary"`, or `"none"` |
-| `furniture` | `[]` | List of furniture names this agent can access (e.g. `[tasks, fs]`) |
+| `furniture` | `[]` | The furniture this agent can use (e.g. `[tasks, fs]`) — see [Agent access](#agent-access) |
 | `temperature` | `0.7` | LLM temperature |
 
 **LLM-only fields:**
@@ -276,6 +290,7 @@ varies invalidates it.
 | `command` | *required for ACP* | Command to launch the ACP agent process |
 | `args` | `[]` | Arguments for the command |
 | `env` | `{}` | Environment variables for the agent process |
+| `sandbox` | | Sandbox furniture in which the agent's file and terminal requests run; without it they run on the host |
 
 ## Furniture
 
@@ -288,6 +303,21 @@ furniture:
   - name: tasks
     type: taskboard    # in-memory task board (list, add, update, get)
 ```
+
+### Sandbox
+
+A Docker container for running code. Its one tool, `bash`, runs a command in the container:
+
+```yaml
+furniture:
+  - name: box
+    type: sandbox
+    image: python:3.11-slim
+    dockerfile: ./sandbox/Dockerfile   # optional: build `image` from this
+    workspace: ./workspace
+```
+
+The `workspace` directory on the host is mounted into the container at the same absolute path, and commands run there. With `dockerfile` (a Dockerfile or its directory), ofc builds `image` from it when the image is missing or older than the Dockerfile; otherwise `image` is used as is. An LLM agent gets `bash` by listing the sandbox in `furniture`; an ACP agent names it in `sandbox` (see [ACP agents](#acp-agents)).
 
 ### External MCP servers
 
@@ -336,13 +366,16 @@ With the default `authorization_code` grant, a person consents once: run `ofc au
 | Field | Default | Description |
 |-------|---------|-------------|
 | `name` | *required* | Identifier used in agent `furniture` lists |
-| `type` | *required* | `"taskboard"` (built-in) or `"mcp"` (external MCP server) |
+| `type` | *required* | `"taskboard"` (built-in), `"mcp"` (external MCP server) or `"sandbox"` (Docker container) |
 | `command` | | Command to launch the MCP server (stdio transport) |
 | `args` | `[]` | Arguments for the command |
 | `url` | | URL of an already-running MCP server (HTTP transport) |
 | `headers` | `{}` | HTTP headers for URL connections |
 | `oauth` | | OAuth for URL connections (see above) |
 | `config` | `{}` | Type-specific key-value configuration |
+| `image` | `"python:3.11-slim"` | Sandbox: Docker image |
+| `dockerfile` | | Sandbox: Dockerfile to build `image` from |
+| `workspace` | `./workspace` | Sandbox: host directory mounted into the container; relative to the blueprint |
 
 ### Agent access
 
@@ -356,36 +389,7 @@ agents:
     furniture: [tasks, fs]       # can access task board and filesystem
 ```
 
-LLM agents get furniture tools injected as function calls, namespaced as `{furniture}__{tool}` (e.g. `tasks__add_task`). ACP agents receive MCP server URLs and connect themselves.
-
-## Workstations
-
-Workstations are sandboxed environments for code execution.
-
-### Sandbox
-
-A Docker-based sandbox for code execution:
-
-```yaml
-workstations:
-  - type: sandbox
-    name: python-sandbox
-    image: python:3.11-slim
-    dockerfile: ./sandbox/Dockerfile
-    mount: ./workspace:/workspace
-```
-
-If `dockerfile` is specified, the image is built automatically (and rebuilt when the Dockerfile changes). Otherwise, the `image` is pulled directly.
-
-### Workstation fields
-
-| Field | Default | Description |
-|-------|---------|-------------|
-| `type` | *required* | Workstation type (currently: `"sandbox"`) |
-| `name` | | Human-readable name |
-| `image` | `"python:3.11-slim"` | Docker image to use |
-| `dockerfile` | | Path to Dockerfile (builds image automatically) |
-| `mount` | | Host:container mount path |
+LLM agents get furniture tools injected as function calls, namespaced as `{furniture}__{tool}` (e.g. `tasks__add_task`), and a call to furniture the agent doesn't list fails. ACP agents receive MCP server URLs and connect themselves. Every name in `furniture` must be a furniture of the floor.
 
 ## Turn-taking
 
@@ -447,9 +451,9 @@ agents:
   - id: "@data"
     name: "Data Analyst"
     activation: always
-    can_use_sandbox: true
     temperature: 0.7
     tool_context: summary
+    furniture: [sandbox]
     prompt: |
       You are @data, a senior data analyst.
       - @code: A programmer for complex coding tasks
@@ -461,10 +465,9 @@ agents:
   - id: "@code"
     name: "Coder"
     activation: mention
-    can_use_sandbox: true
     temperature: 0.2
     tool_context: full
-    furniture: [tasks]
+    furniture: [tasks, sandbox]
     prompt: |
       You are @code, an expert programmer.
       Implement what's asked. Keep responses SHORT.
@@ -473,10 +476,9 @@ furniture:
   - name: tasks
     type: taskboard
 
-workstations:
-  - type: sandbox
-    name: python-sandbox
+  - name: sandbox
+    type: sandbox
     image: python:3.11-slim
     dockerfile: ./sandbox/Dockerfile
-    mount: ./workspace:/workspace
+    workspace: ./workspace
 ```
