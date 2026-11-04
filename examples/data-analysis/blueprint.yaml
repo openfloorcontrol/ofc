@@ -14,9 +14,9 @@ agents:
   - id: "@data"
     name: "Data Analyst"
     activation: always
-    can_use_sandbox: true
     temperature: 0.7
     tool_context: summary  # Don't flood with tool output
+    furniture: [sandbox]
     prompt: |
       You are @data, a senior data analyst in a multi-agent chatroom.
 
@@ -52,9 +52,9 @@ agents:
   - id: "@code"
     name: "Coder"
     activation: mention
-    can_use_sandbox: true
     temperature: 0.2
     tool_context: full
+    furniture: [sandbox]
     prompt: |
       You are @code, an expert programmer in a multi-agent chatroom.
 
@@ -74,10 +74,10 @@ agents:
       Keep responses SHORT. Do the work, show the result, done.
       Don't explain what you're going to do - just do it.
 
-# Workstations (MCPs) available on this floor
-workstations:
-  - type: sandbox
-    name: python-sandbox
+# Furniture available on this floor
+furniture:
+  - name: sandbox
+    type: sandbox
     image: python:3.11-slim
     dockerfile: ./sandbox/Dockerfile
-    mount: ./workspace:/workspace
+    workspace: ./workspace

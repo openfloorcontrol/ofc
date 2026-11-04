@@ -139,7 +139,7 @@ function borderForAgent(index) {
               </div>
               <div v-if="agent.sandbox" class="flex justify-between">
                 <span class="text-slate-500">Sandbox</span>
-                <span class="text-slate-300">enabled</span>
+                <span class="text-slate-300">{{ agent.sandbox }}</span>
               </div>
             </div>
           </div>

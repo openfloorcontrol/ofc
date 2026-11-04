@@ -112,10 +112,12 @@ type Agent struct {
 	Env      map[string]string `yaml:"env"`     // ACP: env vars for agent process
 	// Prompt is the agent's system prompt. It may be a <% %> template, which
 	// is parsed at load and rendered on every turn — see RenderPrompt.
-	Prompt        string `yaml:"prompt"`
-	PromptFile    string `yaml:"prompt_file"`
-	Activation    string `yaml:"activation"`
-	CanUseSandbox bool   `yaml:"can_use_sandbox"`
+	Prompt     string `yaml:"prompt"`
+	PromptFile string `yaml:"prompt_file"`
+	Activation string `yaml:"activation"`
+	// Sandbox names a furniture of type sandbox in which an ACP agent's
+	// file and terminal requests run. Empty runs them on the host.
+	Sandbox string `yaml:"sandbox,omitempty"`
 	// Thinking selects how reasoning is separated from the answer:
 	// "auto" (default), "tags", "field" or "none".
 	Thinking string `yaml:"thinking,omitempty"`
@@ -123,22 +125,13 @@ type Agent struct {
 	ThinkingTags []string `yaml:"thinking_tags,omitempty"`
 	Temperature  float64  `yaml:"temperature"`
 	ToolContext  string   `yaml:"tool_context"`
-	Furniture    []string `yaml:"furniture,omitempty"` // names of accessible furniture
+	Furniture    []string `yaml:"furniture,omitempty"` // names of the furniture the agent may use
 
 	// dir is the blueprint directory, used to resolve readfile paths at
 	// render time. tmpl is the parsed prompt template, nil when the prompt
 	// has no <% marker. Both are set by Load.
 	dir  string
 	tmpl *template.Template
-}
-
-// Workstation configuration
-type Workstation struct {
-	Type       string `yaml:"type"`
-	Name       string `yaml:"name"`
-	Image      string `yaml:"image"`
-	Dockerfile string `yaml:"dockerfile"`
-	Mount      string `yaml:"mount"`
 }
 
 // Defaults for the blueprint
@@ -159,6 +152,15 @@ type FurnitureDef struct {
 	Headers map[string]string `yaml:"headers,omitempty"` // HTTP headers (supports ${VAR} env expansion)
 	Config  map[string]string `yaml:"config,omitempty"`  // type-specific configuration
 	OAuth   *OAuthConfig      `yaml:"oauth,omitempty"`   // OAuth for a URL-based MCP server
+
+	// Sandbox furniture: a Docker container from Image. With Dockerfile
+	// (a Dockerfile or its directory), ofc builds Image from it when the
+	// image is missing or older than the Dockerfile. Workspace is a host
+	// directory mounted into the container at the same absolute path
+	// (default ./workspace, relative to where ofc runs).
+	Image      string `yaml:"image,omitempty"`
+	Dockerfile string `yaml:"dockerfile,omitempty"`
+	Workspace  string `yaml:"workspace,omitempty"`
 }
 
 // OAuthConfig makes a URL-based MCP furniture authorize with OAuth.
@@ -180,12 +182,11 @@ type OAuthConfig struct {
 // Blueprint is a complete floor configuration: what the floor is. How a
 // floor is run (frontend, ports, session store) is set by ofc's flags.
 type Blueprint struct {
-	Name         string         `yaml:"name"`
-	Description  string         `yaml:"description"`
-	Defaults     Defaults       `yaml:"defaults"`
-	Agents       []Agent        `yaml:"agents"`
-	Workstations []Workstation  `yaml:"workstations"`
-	Furniture    []FurnitureDef `yaml:"furniture,omitempty"`
+	Name        string         `yaml:"name"`
+	Description string         `yaml:"description"`
+	Defaults    Defaults       `yaml:"defaults"`
+	Agents      []Agent        `yaml:"agents"`
+	Furniture   []FurnitureDef `yaml:"furniture,omitempty"`
 
 	// Dir is the absolute directory containing the blueprint file.
 	// Used as the cwd for subprocesses (MCP servers, ACP agents) so that
@@ -254,6 +255,9 @@ func Load(path string) (*Blueprint, error) {
 		if err := validateOAuth(fd); err != nil {
 			return nil, fmt.Errorf("furniture %q: %w", fd.Name, err)
 		}
+		if err := validateSandboxFields(fd); err != nil {
+			return nil, fmt.Errorf("furniture %q: %w", fd.Name, err)
+		}
 	}
 
 	// Resolve prompt files relative to blueprint directory, then expand templates
@@ -316,19 +320,14 @@ func Load(path string) (*Blueprint, error) {
 		}
 	}
 
-	// Resolve workstation paths relative to blueprint directory
-	for i := range bp.Workstations {
-		ws := &bp.Workstations[i]
-		if ws.Dockerfile != "" && !filepath.IsAbs(ws.Dockerfile) {
-			ws.Dockerfile = filepath.Join(bpDir, ws.Dockerfile)
+	// Resolve sandbox paths relative to the blueprint directory
+	for i := range bp.Furniture {
+		fd := &bp.Furniture[i]
+		if fd.Dockerfile != "" && !filepath.IsAbs(fd.Dockerfile) {
+			fd.Dockerfile = filepath.Join(bpDir, fd.Dockerfile)
 		}
-		if ws.Mount != "" {
-			// Mount format: "host:container" — resolve host part
-			parts := strings.SplitN(ws.Mount, ":", 2)
-			if len(parts) == 2 && !filepath.IsAbs(parts[0]) {
-				parts[0] = filepath.Join(bpDir, parts[0])
-				ws.Mount = parts[0] + ":" + parts[1]
-			}
+		if fd.Workspace != "" && !filepath.IsAbs(fd.Workspace) {
+			fd.Workspace = filepath.Join(bpDir, fd.Workspace)
 		}
 	}
 
@@ -360,5 +359,48 @@ func Load(path string) (*Blueprint, error) {
 		}
 	}
 
+	if err := validateAgentFurniture(&bp); err != nil {
+		return nil, err
+	}
+
 	return &bp, nil
+}
+
+// validateSandboxFields checks that only sandbox furniture sets the
+// sandbox fields.
+func validateSandboxFields(fd FurnitureDef) error {
+	if fd.Type == "sandbox" {
+		return nil
+	}
+	if fd.Image != "" || fd.Dockerfile != "" || fd.Workspace != "" {
+		return fmt.Errorf("image, dockerfile and workspace are fields of type sandbox, not %q", fd.Type)
+	}
+	return nil
+}
+
+// validateAgentFurniture checks that every furniture an agent lists
+// exists, and that an agent's sandbox is a sandbox furniture of an ACP
+// agent.
+func validateAgentFurniture(bp *Blueprint) error {
+	types := map[string]string{}
+	for _, fd := range bp.Furniture {
+		types[fd.Name] = fd.Type
+	}
+	for _, a := range bp.Agents {
+		for _, name := range a.Furniture {
+			if _, ok := types[name]; !ok {
+				return fmt.Errorf("agent %s: furniture %q is not on the floor", a.ID, name)
+			}
+		}
+		if a.Sandbox == "" {
+			continue
+		}
+		if a.Type != "acp" {
+			return fmt.Errorf("agent %s: sandbox is a field of ACP agents; an LLM agent lists the sandbox in furniture", a.ID)
+		}
+		if types[a.Sandbox] != "sandbox" {
+			return fmt.Errorf("agent %s: sandbox %q is not a furniture of type sandbox", a.ID, a.Sandbox)
+		}
+	}
+	return nil
 }

@@ -40,26 +40,6 @@ type Tool struct {
 	} `json:"function"`
 }
 
-// BashTool is the tool definition for bash execution
-var BashTool = Tool{
-	Type: "function",
-}
-
-func init() {
-	BashTool.Function.Name = "bash"
-	BashTool.Function.Description = "Run a bash command in the workspace container."
-	BashTool.Function.Parameters = map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"cmd": map[string]interface{}{
-				"type":        "string",
-				"description": "The bash command to execute",
-			},
-		},
-		"required": []string{"cmd"},
-	}
-}
-
 // ChatRequest is the request to the chat API
 type ChatRequest struct {
 	Model       string    `json:"model"`

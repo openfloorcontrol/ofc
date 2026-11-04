@@ -185,6 +185,9 @@ prompt: |
 	bpYAML := `name: test
 defaults:
   endpoint: http://localhost:11434/v1
+furniture:
+  - name: filesystem
+    type: taskboard
 agents:
   - ref: ./datascientist.agent.yaml
 `

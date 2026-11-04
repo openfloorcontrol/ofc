@@ -9,13 +9,13 @@ agents:
   - id: "@code"
     name: "Coder"
     activation: always
-    can_use_sandbox: true
     temperature: 0.2
+    furniture: [sandbox]
     prompt_file: owning-datascientist.txt
 
-workstations:
-  - type: sandbox
-    name: python-sandbox
+furniture:
+  - name: sandbox
+    type: sandbox
     image: python:3.11-slim
     dockerfile: ./sandbox/Dockerfile
-    mount: ./workspace:/workspace
+    workspace: ./workspace

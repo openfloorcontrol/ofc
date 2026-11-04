@@ -2,6 +2,7 @@ package agents_test
 
 import (
 	"context"
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -345,5 +346,58 @@ func TestReasoningNotReplayedOnLaterTurn(t *testing.T) {
 	}
 	if !sawFirstAnswer {
 		t.Errorf("turn 2 lost the first answer entirely: %+v", reqs[1].Messages)
+	}
+}
+
+// An agent is offered, and can call, only the furniture it lists.
+func TestFurnitureAccessFollowsAgentList(t *testing.T) {
+	h := newHarness(t, nil,
+		llmtest.Response{ToolCalls: []llmtest.Call{
+			{Name: "secret__add_task", Args: `{"title":"sneaky"}`},
+		}},
+		llmtest.Response{Content: "Done."},
+	)
+	secret := furniture.NewTaskBoard()
+	h.floor.Furniture["secret"] = secret
+	h.turn(t, "add a task to the secret board")
+
+	reqs := h.mock.Requests()
+	for _, tool := range reqs[0].Tools {
+		if strings.HasPrefix(tool.Name, "secret__") {
+			t.Errorf("offered %s, which the agent doesn't list", tool.Name)
+		}
+	}
+	tools := byRole(reqs[1].Messages, "tool")
+	if len(tools) != 1 || !strings.Contains(tools[0].Content, `no furniture "secret" available to @a`) {
+		t.Errorf("tool result = %+v, want a refusal", tools)
+	}
+	if out, _ := secret.Call("list_tasks", map[string]interface{}{}); strings.Contains(fmt.Sprint(out), "sneaky") {
+		t.Errorf("the secret board got the task: %v", out)
+	}
+}
+
+// textFurniture has one tool, say, which returns its text.
+type textFurniture struct{ text string }
+
+func (textFurniture) Name() string { return "echo" }
+func (textFurniture) Tools() []furniture.Tool {
+	return []furniture.Tool{{Name: "say", Parameters: map[string]interface{}{"type": "object"}}}
+}
+func (f textFurniture) Call(string, map[string]interface{}) (interface{}, error) {
+	return f.text, nil
+}
+
+// A furniture tool's text result reaches the model as the text itself.
+func TestFurnitureTextResultIsPlain(t *testing.T) {
+	h := newHarness(t, func(a *blueprint.Agent) { a.Furniture = []string{"echo"} },
+		llmtest.Response{ToolCalls: []llmtest.Call{{Name: "echo__say", Args: `{}`}}},
+		llmtest.Response{Content: "Done."},
+	)
+	h.floor.Furniture["echo"] = textFurniture{"line one\nline two"}
+	h.turn(t, "echo")
+
+	tools := byRole(h.mock.Requests()[1].Messages, "tool")
+	if len(tools) != 1 || tools[0].Content != "line one\nline two" {
+		t.Errorf("tool result = %+v, want the text unquoted", tools)
 	}
 }

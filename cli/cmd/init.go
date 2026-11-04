@@ -37,7 +37,6 @@ agents:
   - id: "@assistant"
     name: "Assistant"
     activation: always
-    can_use_sandbox: false
     temperature: 0.7
     prompt: |
       You are a helpful assistant.

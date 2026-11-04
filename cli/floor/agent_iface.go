@@ -4,7 +4,6 @@ import (
 	"github.com/openfloorcontrol/ofc/blueprint"
 	acpclient "github.com/openfloorcontrol/ofc/acp"
 	"github.com/openfloorcontrol/ofc/furniture"
-	"github.com/openfloorcontrol/ofc/sandbox"
 )
 
 // AgentTurn is the per-turn capability handle passed to Agent.Run. It
@@ -30,10 +29,9 @@ type AgentTurn interface {
 	Status(ev ChatEvent)
 	Reply(msg ChatMessage)
 
-	// Capabilities reachable from this turn. Returning a bool lets the
-	// caller distinguish "not configured" from "exists but empty".
+	// Capabilities reachable from this turn. Furniture returns only
+	// furniture the agent lists in its blueprint entry.
 	Furniture(name string) (furniture.Furniture, bool)
-	Sandbox() *sandbox.Sandbox
 	// ACPSubprocess returns this agent's subprocess in this turn's
 	// session, starting it on the agent's first turn there.
 	ACPSubprocess() (*acpclient.Subprocess, error)

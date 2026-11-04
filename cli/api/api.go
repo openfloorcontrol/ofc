@@ -241,7 +241,7 @@ func (s *Server) RegisterFloorAPI(f *floor.Floor) {
 	s.echo.GET("/api/v1/agents", handleGetAgents(f.Blueprint))
 	s.echo.GET("/api/v1/furniture", handleGetFurniture(f.Furniture))
 	s.echo.POST("/api/v1/furniture/:name/call", handleFurnitureCall(f.Furniture))
-	s.echo.GET("/api/v1/file/*", handleServeFile(f.Furniture, f.WorkspacePath))
+	s.echo.GET("/api/v1/file/*", handleServeFile(f.Furniture, f.WorkspacePaths))
 }
 
 // withSession resolves the :id path parameter to a running session
@@ -365,7 +365,7 @@ func handleGetAgents(bp *blueprint.Blueprint) echo.HandlerFunc {
 		Command    string   `json:"command,omitempty"`
 		Furniture  []string `json:"furniture,omitempty"`
 		Prompt     string   `json:"prompt_summary,omitempty"` // first line only
-		Sandbox    bool     `json:"sandbox,omitempty"`
+		Sandbox    string   `json:"sandbox,omitempty"`
 	}
 	return func(c echo.Context) error {
 		agents := make([]jsonAgent, len(bp.Agents))
@@ -405,7 +405,7 @@ func handleGetAgents(bp *blueprint.Blueprint) echo.HandlerFunc {
 				Command:    a.Command,
 				Furniture:  a.Furniture,
 				Prompt:     promptSummary,
-				Sandbox:    a.CanUseSandbox,
+				Sandbox:    a.Sandbox,
 			}
 		}
 		return c.JSON(http.StatusOK, map[string]interface{}{
@@ -487,8 +487,9 @@ func handleFurnitureCall(furnitureMap map[string]furniture.Furniture) echo.Handl
 // GET /api/v1/file/* — unified file serving endpoint.
 // Path scheme:
 //   - ":furniture/path" → serve via furniture's FileReader (MCP)
-//   - "path"            → serve from workspace (sandbox dir or ./workspace)
-func handleServeFile(furnitureMap map[string]furniture.Furniture, workspacePath func() string) echo.HandlerFunc {
+//   - "path"            → serve from the first workspace that has it: the
+//     sandboxes' workspaces, then ./workspace
+func handleServeFile(furnitureMap map[string]furniture.Furniture, workspacePaths func() []string) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		rawPath := c.Param("*")
 		if rawPath == "" {
@@ -527,11 +528,7 @@ func handleServeFile(furnitureMap map[string]furniture.Furniture, workspacePath 
 		}
 
 		// Bare path: serve from workspace
-		wsDirs := []string{}
-		if ws := workspacePath(); ws != "" {
-			wsDirs = append(wsDirs, ws)
-		}
-		wsDirs = append(wsDirs, "workspace") // convention fallback
+		wsDirs := append(workspacePaths(), "workspace")
 
 		for _, wsDir := range wsDirs {
 			absWS, err := filepath.Abs(wsDir)

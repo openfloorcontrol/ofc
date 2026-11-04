@@ -18,11 +18,11 @@ const (
 
 // Sandbox manages a Docker container for code execution
 type Sandbox struct {
-	ContainerID    string
-	Image          string
-	DockerfileDir  string // directory containing Dockerfile (empty = use Image directly)
-	WorkspaceDir   string
-	Timeout        time.Duration
+	ContainerID   string
+	Image         string
+	DockerfileDir string // directory containing Dockerfile (empty = use Image directly)
+	WorkspaceDir  string
+	Timeout       time.Duration
 }
 
 // New creates a new sandbox
@@ -118,6 +118,7 @@ func (s *Sandbox) Start() error {
 		}
 		// Ensure the directory exists on host
 		os.MkdirAll(wsAbs, 0o755)
+		s.WorkspaceDir = wsAbs
 	}
 
 	// Start container with workspace bind-mounted at the same absolute path
