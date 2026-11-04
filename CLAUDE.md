@@ -10,7 +10,7 @@ go test ./...                   # run from cli/
 ofc run examples/taskboard-acp/blueprint.yaml --log --debug
 ```
 
-Flags: `--debug` (debug output), `--log` (write ofc.log), `--tui` (Bubble Tea UI), `--file` (blueprint path).
+Flags: `--debug` (debug output), `--log` (write ofc.log), `--tui` (Bubble Tea UI), `-f/--blueprint` (blueprint path), `--config` (env file of settings). Every flag `--foo-bar` is also `OFC_FOO_BAR`; precedence: flag > environment > config file > default (`cli/cmd/config.go`).
 
 ## Project Layout
 

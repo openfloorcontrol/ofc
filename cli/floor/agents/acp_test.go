@@ -59,8 +59,7 @@ func startACPFloor(t *testing.T) *floor.Floor {
 func newACPFloor(t *testing.T, store floor.SessionStore, stateDir string, idle time.Duration) *floor.Floor {
 	t.Helper()
 	bp := &blueprint.Blueprint{
-		Name:   "acp-test",
-		Config: blueprint.Config{ACPIdleTimeout: idle},
+		Name: "acp-test",
 		Agents: []blueprint.Agent{{
 			ID: "@fake", Type: "acp", Command: fakeAgent(t), Activation: "always",
 			Env:    map[string]string{"FAKE_ACP_STATE_DIR": stateDir},
@@ -68,6 +67,7 @@ func newACPFloor(t *testing.T, store floor.SessionStore, stateDir string, idle t
 		}},
 	}
 	f := floor.NewFloor(bp)
+	f.ACPIdleTimeout = idle
 	f.Store = store
 	f.AgentFactory = agents.New
 	f.APIServer = api.New()

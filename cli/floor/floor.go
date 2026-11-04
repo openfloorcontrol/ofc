@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/auth"
@@ -84,8 +85,8 @@ type Floor struct {
 	// Read via DefaultSession() / DefaultSessionID().
 	defaultSessionUUID string
 
-	ListenAddr   string // API server listen address (default ":0" for auto)
-	WebMode      bool   // bind to localhost, print the tokenized web UI URL, serve WebUI
+	ListenAddr   string // API server listen address (default "127.0.0.1:0", a free loopback port)
+	WebMode      bool   // print the tokenized web UI URL, serve WebUI
 	WebUI        fs.FS  // static web UI files; nil if the binary was built without them
 	ExternalURL  string // override base URL in printed web UI link (for reverse proxies)
 	DebugFunc    func(string)
@@ -105,6 +106,11 @@ type Floor struct {
 	// OAuthCallbackPort is the 127.0.0.1 port to listen on behind a proxy
 	// serving OAuthCallbackURL (see furniture.OAuth.CallbackPort).
 	OAuthCallbackPort int
+
+	// ACPIdleTimeout closes an ACP agent's subprocess after it has been
+	// idle this long; its next turn resumes the session in a new process.
+	// Zero keeps subprocesses until their session closes.
+	ACPIdleTimeout time.Duration
 
 	// mu serializes mutations to the live runtime state (Agents,
 	// Furniture, ACPSubprocesses). v1 uses a plain mutex; if/when we
@@ -260,13 +266,7 @@ func (f *Floor) Start(renderInfo func(string)) error {
 	// when a request comes in.
 	listenAddr := f.ListenAddr
 	if listenAddr == "" {
-		listenAddr = ":0"
-	}
-	// Bind to localhost by default for security (token-authenticated API)
-	if f.WebMode && !strings.Contains(listenAddr, "127.0.0.1") && !strings.Contains(listenAddr, "localhost") {
-		if strings.HasPrefix(listenAddr, ":") {
-			listenAddr = "127.0.0.1" + listenAddr
-		}
+		listenAddr = "127.0.0.1:0"
 	}
 	if err := f.APIServer.Start(listenAddr); err != nil {
 		return fmt.Errorf("failed to start API server: %w", err)
@@ -307,7 +307,7 @@ func (f *Floor) Start(renderInfo func(string)) error {
 		}
 	}
 
-	if timeout := f.Blueprint.Config.ACPIdleTimeout; timeout > 0 {
+	if timeout := f.ACPIdleTimeout; timeout > 0 {
 		f.stopReaper = make(chan struct{})
 		go f.reapIdleACPSubprocesses(timeout, f.stopReaper)
 	}

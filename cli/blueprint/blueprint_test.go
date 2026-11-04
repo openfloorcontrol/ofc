@@ -289,58 +289,28 @@ agents:
 	}
 }
 
-func TestLoad_ConfigSection(t *testing.T) {
+func TestLoad_RejectsUnknownKeys(t *testing.T) {
 	dir := t.TempDir()
+	cases := map[string]string{
+		"top level": "name: t\nconfig:\n  debug: true\n",
+		"agent":     "name: t\nagents:\n  - id: \"@a\"\n    can_use_tools: false\n",
+		"furniture": "name: t\nfurniture:\n  - name: kb\n    type: taskboard\n    colour: red\n",
+	}
+	for name, body := range cases {
+		bpPath := filepath.Join(dir, "bp.yaml")
+		if err := os.WriteFile(bpPath, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(bpPath); err == nil || !strings.Contains(err.Error(), "not found") {
+			t.Errorf("%s: want an unknown-field error, got %v", name, err)
+		}
+	}
+
+	refPath := filepath.Join(dir, "a.agent.yaml")
+	os.WriteFile(refPath, []byte("id: \"@a\"\nprompt_flie: x.md\n"), 0o644)
 	bpPath := filepath.Join(dir, "bp.yaml")
-	os.Setenv("OFC_TEST_DSN", "postgres://example/x")
-	defer os.Unsetenv("OFC_TEST_DSN")
-
-	body := `name: example
-config:
-  frontend: tui
-  debug: true
-  log: /tmp/ofc.log
-  web:
-    enabled: true
-    port: 9000
-    hostname: https://ofc.example.com
-  store:
-    type: postgres
-    dsn: ${OFC_TEST_DSN}
-agents:
-  - id: "@a"
-`
-	if err := os.WriteFile(bpPath, []byte(body), 0o644); err != nil {
-		t.Fatalf("write blueprint: %v", err)
-	}
-
-	bp, err := Load(bpPath)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	c := bp.Config
-	if c.Frontend != "tui" {
-		t.Errorf("Frontend = %q, want tui", c.Frontend)
-	}
-	if !c.Debug {
-		t.Error("Debug should be true")
-	}
-	if c.Log != "/tmp/ofc.log" {
-		t.Errorf("Log = %q", c.Log)
-	}
-	if !c.Web.Enabled {
-		t.Error("Web.Enabled should be true")
-	}
-	if c.Web.Port != 9000 {
-		t.Errorf("Web.Port = %d, want 9000", c.Web.Port)
-	}
-	if c.Web.Hostname != "https://ofc.example.com" {
-		t.Errorf("Web.Hostname = %q", c.Web.Hostname)
-	}
-	if c.Store.Type != "postgres" {
-		t.Errorf("Store.Type = %q", c.Store.Type)
-	}
-	if c.Store.DSN != "postgres://example/x" {
-		t.Errorf("Store.DSN = %q (env not expanded?)", c.Store.DSN)
+	os.WriteFile(bpPath, []byte("name: t\nagents:\n  - ref: ./a.agent.yaml\n"), 0o644)
+	if _, err := Load(bpPath); err == nil {
+		t.Error("ref file: want an unknown-field error")
 	}
 }

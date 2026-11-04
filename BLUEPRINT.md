@@ -1,6 +1,6 @@
 # Blueprint Reference
 
-A blueprint is a YAML file that defines a floor — the agents, their configuration, and the workstations (tools) available to them. Think of it as `docker-compose.yaml` for AI teams.
+A blueprint is a YAML file that defines a floor — the agents, their configuration, and the workstations (tools) available to them. Think of it as `docker-compose.yaml` for AI teams. How a floor is run — frontend, port, session store — is set by ofc's flags, environment variables or a config file; see [Settings](README.md#settings).
 
 ## Quick start
 
@@ -36,16 +36,17 @@ workstations:
 | `name` | yes | Floor name, shown in the header |
 | `description` | no | Short description of the floor |
 | `defaults` | no | Default `endpoint`, `model`, `api_key` and `thinking` for all agents |
-| `config` | no | Runtime knobs (frontend, web, store, debug, log) — see [Config](#config) |
 | `agents` | yes | List of agents on this floor |
 | `furniture` | no | List of shared furniture (task boards, MCP servers) |
 | `workstations` | no | List of workstations (sandboxed environments) |
+
+A key that isn't a field of the blueprint, an agent, a furniture or a workstation is an error.
 
 ## Environment variables
 
 Any string value in a blueprint can reference an environment variable with
 `${VAR}` — not a select few fields, but every string, anywhere in the file.
-Endpoints, API keys, commands, args, MCP headers, the store DSN: if it's a
+Endpoints, API keys, commands, args, MCP headers: if it's a
 string, it expands. Braces are required — a bare `$VAR` stays as-is, so
 prices and shell snippets survive intact. The syntax follows bash:
 
@@ -57,8 +58,8 @@ prices and shell snippets survive intact. The syntax follows bash:
 
 ```yaml
 defaults:
-  endpoint: ${OFC_ENDPOINT:-http://localhost:11434/v1}   # optional
-  api_key: ${OPENAI_API_KEY}                             # required
+  endpoint: ${OPENAI_BASE_URL:-http://localhost:11434/v1}   # optional
+  api_key: ${OPENAI_API_KEY}                                # required
 ```
 
 A bare `${VAR}` that isn't set is a hard error, and every missing variable is
@@ -77,26 +78,16 @@ Expansion happens once, when the blueprint loads, and the results are baked
 into the running floor. Changing a variable afterwards doesn't affect a floor
 that's already running.
 
-## Config
-
-The `config:` section carries runtime/deployment defaults for this project — what historically came from CLI flags or env vars. Per-invocation knobs (`--file`, `--session`, the initial prompt) stay on the command line.
+Variables come from the environment, which includes those of ofc's config
+file (`--config prod.env`, see [Settings](README.md#settings)). One blueprint
+can so be run with different values per deployment:
 
 ```yaml
-config:
-  frontend: cli         # cli | tui | json
-  debug: false
-  log: ""               # path; empty = no log file
-  web:
-    enabled: false
-    port: 8080
-    hostname: ""        # external URL for printed link
-  store:
-    type: jsonl         # jsonl | postgres
-    dsn: ${OFC_DATABASE_URL}  # keep secrets out of the file
-  acp_idle_timeout: 15m # close idle ACP agent processes; the next turn resumes. 0 = never
+agents:
+  - id: "@assistant"
+    prompt: |
+      You are running in the ${DEPLOY_ENVIRONMENT:-dev} environment.
 ```
-
-Precedence: a CLI flag wins when explicitly passed (`cobra` `Changed()` semantics); otherwise the blueprint `config:` value is used; otherwise the built-in default. Profiles (`profiles:` overlays) and `~/.ofc/defaults.yaml` are noted but not yet implemented.
 
 ## Agents
 
@@ -338,7 +329,7 @@ furniture:
     #   grant: client_credentials         # no person involved; needs client_id + client_secret
 ```
 
-With the default `authorization_code` grant, a person consents once: run `ofc auth -f blueprint.yaml kb` and open the printed URL, or let an interactive `ofc run` (a terminal, not `--json`) ask. The token goes to `~/.ofc/oauth/<floor>/kb.json` (or `$OFC_OAUTH_DIR`), and every ofc using the furniture refreshes it there — including ones already running. A run nobody can answer, such as a cron job, never asks: it fails with a hint to run `ofc auth kb`.
+With the default `authorization_code` grant, a person consents once: run `ofc auth -f blueprint.yaml kb` and open the printed URL, or let an interactive `ofc run` (a terminal, not `--json`) ask. The token goes to `~/.ofc/oauth/<floor>/kb.json` (or `--oauth-dir`), and every ofc using the furniture refreshes it there — including ones already running. A run nobody can answer, such as a cron job, never asks: it fails with a hint to run `ofc auth kb`.
 
 ### Furniture fields
 

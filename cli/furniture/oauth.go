@@ -201,7 +201,7 @@ func callbackListenAddr(callback string, port int) (string, error) {
 		return net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), nil
 	}
 	if u.Scheme != "http" || u.Port() == "" {
-		return "", fmt.Errorf("OAuth callback %q: ofc listens on plain http, so it needs an http URL with an explicit port, or a port to listen on behind a proxy (OFC_OAUTH_CALLBACK_PORT)", callback)
+		return "", fmt.Errorf("OAuth callback %q: ofc listens on plain http, so it needs an http URL with an explicit port, or a port to listen on behind a proxy (--oauth-callback-port)", callback)
 	}
 	if ip := net.ParseIP(u.Hostname()); (ip != nil && ip.IsLoopback()) || u.Hostname() == "localhost" {
 		return u.Host, nil

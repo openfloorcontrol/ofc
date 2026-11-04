@@ -69,13 +69,11 @@ func TestExpandString_Syntax(t *testing.T) {
 // somebody remembered to wire up.
 func TestExpandBlueprintEnv_ReachesEveryField(t *testing.T) {
 	t.Setenv("OFC_TEST_KEY", "sk-123")
-	t.Setenv("OFC_TEST_DSN", "postgres://db")
 	t.Setenv("OFC_TEST_TOKEN", "tok")
 	t.Setenv("OFC_TEST_BIN", "/usr/bin/agent")
 
 	bp := &Blueprint{
 		Defaults: Defaults{APIKey: "${OFC_TEST_KEY}"},
-		Config:   Config{Store: StoreConfig{DSN: "${OFC_TEST_DSN}"}},
 		Agents: []Agent{{
 			ID:      "@claude",
 			Command: "${OFC_TEST_BIN}",
@@ -94,7 +92,6 @@ func TestExpandBlueprintEnv_ReachesEveryField(t *testing.T) {
 
 	checks := map[string]string{
 		"defaults.api_key": bp.Defaults.APIKey,
-		"config.store.dsn": bp.Config.Store.DSN,
 		"agent command":    bp.Agents[0].Command,
 		"agent args":       bp.Agents[0].Args[1],
 		"agent env":        bp.Agents[0].Env["ANTHROPIC_API_KEY"],
@@ -102,7 +99,6 @@ func TestExpandBlueprintEnv_ReachesEveryField(t *testing.T) {
 	}
 	want := map[string]string{
 		"defaults.api_key": "sk-123",
-		"config.store.dsn": "postgres://db",
 		"agent command":    "/usr/bin/agent",
 		"agent args":       "sk-123",
 		"agent env":        "sk-123",

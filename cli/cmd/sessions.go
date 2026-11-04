@@ -19,8 +19,8 @@ var (
 var sessionsCmd = &cobra.Command{
 	Use:   "sessions",
 	Short: "Manage persisted sessions",
-	Long: `List, show, and remove sessions in the session store: Postgres if --db or
-$OFC_DATABASE_URL is set, otherwise ~/.ofc/sessions (or $OFC_SESSIONS_DIR).`,
+	Long: `List, show, and remove sessions in the session store: Postgres if --db is
+set, otherwise ~/.ofc/sessions (or --sessions-dir).`,
 }
 
 var sessionsLsCmd = &cobra.Command{
