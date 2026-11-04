@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/openfloorcontrol/ofc/blueprint"
+	"github.com/openfloorcontrol/ofc/furniture"
 )
 
 func mutationTestBlueprint() *blueprint.Blueprint {
@@ -153,7 +154,10 @@ func TestAddAgentContextPropagationToChat(t *testing.T) {
 	// the new agent's context.
 	f := NewFloor(&blueprint.Blueprint{Name: "test"})
 	sess := f.DefaultSession()
-	go func() { for range sess.MainRoom.Events() {} }()
+	go func() {
+		for range sess.MainRoom.Events() {
+		}
+	}()
 
 	if err := f.AddAgent(blueprint.Agent{ID: "@new", Activation: "always"}, func(string) {}); err != nil {
 		t.Fatalf("AddAgent failed: %v", err)
@@ -174,7 +178,10 @@ func TestRemoveAgentStopsContextUpdates(t *testing.T) {
 	// reach the removed agent's (former) context.
 	f := NewFloor(mutationTestBlueprint())
 	sess := f.DefaultSession()
-	go func() { for range sess.MainRoom.Events() {} }()
+	go func() {
+		for range sess.MainRoom.Events() {
+		}
+	}()
 
 	// Grab a reference to @a's context before removing
 	ctxA := sess.GetAgentContext("@a")
@@ -193,5 +200,25 @@ func TestRemoveAgentStopsContextUpdates(t *testing.T) {
 		if e.Content == "after remove" {
 			t.Error("@a's old context received a message after RemoveAgent")
 		}
+	}
+}
+
+// closingFurniture records whether it was closed.
+type closingFurniture struct{ closed bool }
+
+func (c *closingFurniture) Name() string            { return "c" }
+func (c *closingFurniture) Tools() []furniture.Tool { return nil }
+func (c *closingFurniture) Call(string, map[string]interface{}) (interface{}, error) {
+	return nil, nil
+}
+func (c *closingFurniture) Close() error { c.closed = true; return nil }
+
+func TestStopClosesFurniture(t *testing.T) {
+	f := NewFloor(mutationTestBlueprint())
+	inner := &closingFurniture{}
+	f.Furniture["c"] = &observableFurniture{inner: inner, notify: func(Event) {}}
+	f.Stop()
+	if !inner.closed {
+		t.Error("Stop left the furniture open")
 	}
 }

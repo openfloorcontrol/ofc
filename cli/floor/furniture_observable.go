@@ -2,6 +2,7 @@ package floor
 
 import (
 	"fmt"
+	"io"
 
 	"github.com/openfloorcontrol/ofc/furniture"
 )
@@ -34,7 +35,7 @@ var readOnlyTools = map[string]bool{
 	"list_allowed_directories":  true,
 }
 
-func (o *observableFurniture) Name() string           { return o.inner.Name() }
+func (o *observableFurniture) Name() string            { return o.inner.Name() }
 func (o *observableFurniture) Tools() []furniture.Tool { return o.inner.Tools() }
 
 // ReadFileRaw forwards to the inner furniture if it implements FileReader.
@@ -43,6 +44,14 @@ func (o *observableFurniture) ReadFileRaw(path string) ([]byte, string, error) {
 		return fr.ReadFileRaw(path)
 	}
 	return nil, "", fmt.Errorf("furniture %q does not support file reading", o.inner.Name())
+}
+
+// Close forwards to the inner furniture if it implements io.Closer.
+func (o *observableFurniture) Close() error {
+	if c, ok := o.inner.(io.Closer); ok {
+		return c.Close()
+	}
+	return nil
 }
 
 func (o *observableFurniture) Call(toolName string, args map[string]interface{}) (interface{}, error) {
