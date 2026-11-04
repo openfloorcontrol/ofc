@@ -14,8 +14,9 @@ import (
 // All methods called by Floor.Start, Floor.AddFurniture, Floor.Stop,
 // and floor_acp.go are listed here.
 type APIServer interface {
-	// SetAuthToken installs token-based auth on /api/* routes.
-	// Must be called before Start. Empty token disables auth.
+	// SetAuthToken sets the access token for /api/* routes. Must be
+	// called before Start. Furniture MCP endpoints also accept the token
+	// of an agent that lists the furniture (Floor.AgentMayUse).
 	SetAuthToken(token string)
 
 	// AuthToken returns the currently-configured auth token (empty if

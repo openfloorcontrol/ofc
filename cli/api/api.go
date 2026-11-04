@@ -8,6 +8,7 @@ package api
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -36,6 +38,15 @@ type Server struct {
 	echo      *echo.Echo
 	listener  net.Listener
 	authToken string
+
+	// furnitureRoutes maps the route patterns of furniture MCP endpoints
+	// to the furniture's name. Guarded by routesMu: furniture is added
+	// while the server runs.
+	furnitureRoutes map[string]string
+	routesMu        sync.RWMutex
+	// agentMayUse reports whether an agent token grants a furniture; set
+	// by RegisterFloorAPI.
+	agentMayUse func(token, furniture string) bool
 }
 
 // New creates a new API server.
@@ -51,16 +62,15 @@ func New() *Server {
 		AllowHeaders: []string{echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization},
 	}))
 
-	return &Server{echo: e}
+	s := &Server{echo: e, furnitureRoutes: map[string]string{}}
+	e.Use(s.authMiddleware)
+	return s
 }
 
-// SetAuthToken sets the token and installs auth middleware.
-// Must be called before Start(). If token is empty, no auth is enforced.
+// SetAuthToken sets the access token. Must be called before Start().
+// An empty token leaves the API open, except furniture MCP endpoints.
 func (s *Server) SetAuthToken(token string) {
 	s.authToken = token
-	if token != "" {
-		s.echo.Use(authMiddleware(token))
-	}
 }
 
 // AuthToken returns the current auth token.
@@ -77,33 +87,44 @@ func GenerateToken() string {
 	return hex.EncodeToString(b)
 }
 
-// authMiddleware checks for a valid auth token on /api/* routes.
-// Accepts Authorization: Bearer <token> header or ?token=<token> query param.
-// Skips non-API routes (static files serve without auth — not sensitive).
-func authMiddleware(token string) echo.MiddlewareFunc {
-	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
-			path := c.Request().URL.Path
+// authMiddleware checks the token of /api/* requests, given as
+// Authorization: Bearer <token> or ?token=<token> (for EventSource).
+//   - A furniture MCP endpoint needs the access token, or the token of
+//     an agent that lists the furniture.
+//   - Any other /api route needs the access token when one is set.
+//
+// Non-API routes (the web UI's static files) need no token.
+func (s *Server) authMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		if !strings.HasPrefix(c.Request().URL.Path, "/api/") {
+			return next(c)
+		}
+		token := requestToken(c)
+		isAccessToken := s.authToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(s.authToken)) == 1
 
-			// Skip non-API routes (static files)
-			if !strings.HasPrefix(path, "/api/") {
-				return next(c)
-			}
+		s.routesMu.RLock()
+		name, isFurniture := s.furnitureRoutes[c.Path()]
+		s.routesMu.RUnlock()
 
-			// Check Authorization header
-			auth := c.Request().Header.Get("Authorization")
-			if auth == "Bearer "+token {
-				return next(c)
-			}
-
-			// Check query parameter (needed for EventSource/SSE)
-			if c.QueryParam("token") == token {
-				return next(c)
-			}
-
+		var allowed bool
+		if isFurniture {
+			allowed = isAccessToken || (token != "" && s.agentMayUse != nil && s.agentMayUse(token, name))
+		} else {
+			allowed = s.authToken == "" || isAccessToken
+		}
+		if !allowed {
 			return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		}
+		return next(c)
 	}
+}
+
+// requestToken returns the request's bearer token or ?token= parameter.
+func requestToken(c echo.Context) string {
+	if t, ok := strings.CutPrefix(c.Request().Header.Get("Authorization"), "Bearer "); ok {
+		return t
+	}
+	return c.QueryParam("token")
 }
 
 // RegisterFurniture adds MCP endpoints for a piece of furniture.
@@ -118,14 +139,18 @@ func (s *Server) RegisterFurniture(floorID, name string, mcpSrv *mcp.Server) {
 	httpHandler := mcp.NewStreamableHTTPHandler(getServer, &mcp.StreamableHTTPOptions{
 		Stateless: true,
 	})
-	s.echo.Any(httpPath, echo.WrapHandler(httpHandler))
-	s.echo.Any(httpPath+"/", echo.WrapHandler(httpHandler))
-
 	// SSE endpoint (for ACP agents like claude-code-acp that only support SSE)
 	ssePath := fmt.Sprintf("/api/v1/floors/%s/sse/%s", floorID, name)
 	sseHandler := mcp.NewSSEHandler(getServer, nil)
-	s.echo.Any(ssePath, echo.WrapHandler(sseHandler))
-	s.echo.Any(ssePath+"/", echo.WrapHandler(sseHandler))
+
+	s.routesMu.Lock()
+	defer s.routesMu.Unlock()
+	for path, h := range map[string]http.Handler{httpPath: httpHandler, ssePath: sseHandler} {
+		for _, p := range []string{path, path + "/"} {
+			s.echo.Any(p, echo.WrapHandler(h))
+			s.furnitureRoutes[p] = name
+		}
+	}
 }
 
 // ServeStaticWeb serves the web UI as static files with SPA fallback.
@@ -233,6 +258,7 @@ func (s *Server) BaseURL() string {
 // RegisterFloorAPI adds the session, agent and furniture endpoints for
 // the floor. Session routes look the session up per request.
 func (s *Server) RegisterFloorAPI(f *floor.Floor) {
+	s.agentMayUse = f.AgentMayUse
 	s.echo.GET("/api/v1/sessions", handleListSessions(f))
 	s.echo.POST("/api/v1/sessions", handleCreateSession(f))
 	s.echo.POST("/api/v1/sessions/:id/messages", withSession(f, handlePostMessage))

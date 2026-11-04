@@ -170,7 +170,7 @@ Launch with `ofc run --web` to open a browser-based interface:
 - **Inline images** — agents write standard markdown (`![chart](chart.png)`) and images render directly in chat
 - **Responsive design** — works on desktop and mobile
 - **Sessions** — each tab works in its own session (`?session=<id>`); `?sessions` lists and switches them
-- **Auth** — a Bearer token: `--token` if set (stable across restarts), otherwise random; the printed URL carries it as `?token=`
+- **Auth** — a Bearer token: `--token` if set (stable across restarts), otherwise random; the printed URL carries it as `?token=`. It opens the whole API, including every furniture's MCP endpoint (`/api/v1/floors/<floor>/mcp/<furniture>/`); each ACP agent gets its own token that opens only the MCP endpoints of the furniture it lists
 
 Other ofc processes can work in the server's sessions with `--remote`, e.g. a scheduled prompt whose session you open in the browser later:
 

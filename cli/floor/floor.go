@@ -4,6 +4,9 @@ package floor
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"io/fs"
@@ -62,6 +65,10 @@ type Floor struct {
 	// sandboxes holds the containers of the floor's sandbox furniture, by
 	// furniture name. Guarded by mu.
 	sandboxes map[string]*sandbox.Sandbox
+
+	// agentTokens holds each agent's token for furniture MCP endpoints,
+	// by agent ID. Guarded by mu.
+	agentTokens map[string]string
 
 	APIServer APIServer // interface; concrete impl in the top-level api/ package. Caller assigns before Start.
 
@@ -216,6 +223,45 @@ func (f *Floor) agentFurniture(agentID, name string) (furniture.Furniture, bool)
 	defer f.mu.Unlock()
 	fur, ok := f.Furniture[name]
 	return fur, ok
+}
+
+// AgentToken returns the token agentID presents to furniture MCP
+// endpoints, creating it on first use. It grants the furniture the agent
+// lists, and nothing else.
+func (f *Floor) AgentToken(agentID string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if tok, ok := f.agentTokens[agentID]; ok {
+		return tok
+	}
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		panic("generate agent token: " + err.Error())
+	}
+	if f.agentTokens == nil {
+		f.agentTokens = map[string]string{}
+	}
+	tok := hex.EncodeToString(b)
+	f.agentTokens[agentID] = tok
+	return tok
+}
+
+// AgentMayUse reports whether token is the token of an agent that lists
+// the furniture called name.
+func (f *Floor) AgentMayUse(token, name string) bool {
+	f.mu.Lock()
+	var agentID string
+	for id, tok := range f.agentTokens {
+		if subtle.ConstantTimeCompare([]byte(tok), []byte(token)) == 1 {
+			agentID = id
+		}
+	}
+	f.mu.Unlock()
+	if agentID == "" {
+		return false
+	}
+	spec, ok := f.agentSpec(agentID)
+	return ok && slices.Contains(spec.Furniture, name)
 }
 
 // sandbox returns the container of the sandbox furniture called name.
@@ -469,6 +515,7 @@ func (f *Floor) RemoveAgent(id string) error {
 	f.closeACPSubprocesses(func(k acpKey) bool { return k.agent == id })
 
 	f.agents = append(f.agents[:idx], f.agents[idx+1:]...)
+	delete(f.agentTokens, id)
 	for _, sess := range f.Sessions {
 		sess.RemoveAgentContext(id)
 	}
