@@ -1,0 +1,14 @@
+name: live-opencode-furniture
+description: "Live ACP check: opencode uses furniture over MCP with its own token"
+furniture:
+  - name: tasks
+    type: taskboard
+agents:
+  - id: "@oc"
+    type: acp
+    command: mf
+    args: ["run", "opencode", "${OFC_LIVE_MODEL}", "--", "acp"]
+    activation: always
+    furniture: [tasks]
+    prompt: |
+      You are @oc. Use the tasks MCP tools when asked. Answer in one short sentence.

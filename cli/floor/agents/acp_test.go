@@ -1,6 +1,7 @@
 package agents_test
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -262,5 +263,48 @@ func TestACPReplyHasStreamedText(t *testing.T) {
 		if !strings.HasPrefix(reply, "pid=") {
 			t.Fatalf("turn %d: reply = %q, want the agent's text", i, reply)
 		}
+	}
+}
+
+// An ACP agent reaches the furniture it lists over MCP, with its own
+// token, and is refused at the address of furniture it doesn't list.
+func TestACPAgentUsesOnlyItsFurniture(t *testing.T) {
+	bp := &blueprint.Blueprint{
+		Name: "acp-furniture",
+		Furniture: []blueprint.FurnitureDef{
+			{Name: "tasks", Type: "taskboard"},
+			{Name: "secret", Type: "taskboard"},
+		},
+		Agents: []blueprint.Agent{{
+			ID: "@fake", Type: "acp", Command: fakeAgent(t), Activation: "always",
+			Prompt: "You are @fake.", Furniture: []string{"tasks"},
+		}},
+	}
+	f := floor.NewFloor(bp)
+	f.Store = floor.NewMemoryStore()
+	f.AgentFactory = agents.New
+	f.APIServer = api.New()
+	f.StderrWriter = os.Stderr
+	if err := f.Start(func(string) {}); err != nil {
+		t.Fatalf("start floor: %v", err)
+	}
+	t.Cleanup(f.Stop)
+
+	sess, err := f.CreateSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply := ask(t, sess, sess.Subscribe(),
+		`mcp=tasks.add_task{"title":"from-acp"} mcp=secret.add_task{"title":"sneaky"}`)
+	t.Logf("reply: %s", reply)
+
+	if !strings.Contains(reply, `mcp tasks.add_task -> {"id":1,"title":"from-acp"`) {
+		t.Errorf("reply = %q, want the task added on tasks", reply)
+	}
+	if !strings.Contains(reply, "mcp secret.add_task -> error:") || !strings.Contains(reply, "Unauthorized") {
+		t.Errorf("reply = %q, want the call to secret refused as unauthorized", reply)
+	}
+	if tasks, _ := f.Furniture["secret"].Call("list_tasks", map[string]interface{}{}); strings.Contains(fmt.Sprint(tasks), "sneaky") {
+		t.Errorf("secret got the task: %v", tasks)
 	}
 }
