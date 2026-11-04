@@ -117,7 +117,8 @@ ofc version             Print version info
 
 | Flag | Description |
 |------|-------------|
-| `--file`, `-f` | Blueprint file path (default: `blueprint.yaml`) |
+| `--blueprint`, `-f` | Blueprint file path (default: `blueprint.yaml`) |
+| `--config <file>` | Env file of settings and blueprint variables (see [Settings](#settings)) |
 | `--session <uuid>` | Resume a session by UUID (default: generate a new one) |
 | `--debug` | Enable debug output |
 | `--log <file>` | Log output to file (plain text, no colors) |
@@ -125,11 +126,32 @@ ofc version             Print version info
 | `--json` | Output events as JSONL to stdout |
 | `--web` | Web UI with chat, furniture panels, inline images |
 | `--port` | Web UI port (default: `8080`) |
+| `--bind <addr>` | Address the web UI listens on (default: `127.0.0.1`; `0.0.0.0` for all interfaces) |
 | `--hostname <url>` | External URL for the printed web link (e.g. `https://ofc.example.com`) |
-| `--db <dsn>` | Postgres DSN for session storage (overrides JSONL; falls back to `OFC_DATABASE_URL`) |
-| `--remote <url>` | Run against a session on an `ofc run --web` server instead of a local floor (CLI or `--json`). The URL may carry `?token=` and `?session=`; otherwise the token comes from `OFC_TOKEN` and the session from `--session`, or a new one is started |
+| `--token <token>` | API token for `--web` (default: a random one) and for `--remote` |
+| `--db <dsn>` | Postgres DSN for session storage (default: JSONL files) |
+| `--sessions-dir <dir>` | Directory of JSONL session files (default: `~/.ofc/sessions`) |
+| `--acp-idle-timeout <d>` | Close an ACP agent's subprocess after it is idle this long (e.g. `15m`); its next turn resumes the session. `0` keeps it until the session closes |
+| `--oauth-dir`, `--oauth-callback`, `--oauth-callback-port` | OAuth furniture: token directory and consent callback (see `ofc auth --help`) |
+| `--remote <url>` | Run against a session on an `ofc run --web` server instead of a local floor (CLI or `--json`). The URL may carry `?token=` and `?session=`; otherwise the token comes from `--token` and the session from `--session`, or a new one is started |
 
-Most of these have blueprint-level defaults — see the `config:` section in [BLUEPRINT.md](BLUEPRINT.md#config). A CLI flag wins when explicitly passed; otherwise the blueprint's `config:` value is used.
+### Settings
+
+Every flag of every command is also an environment variable: `--foo-bar` is `OFC_FOO_BAR`. A config file (`--config prod.env`, or `OFC_CONFIG`) holds them as an env file, one `KEY=VALUE` per line; `#` starts a comment line, and the value is everything after the first `=`, taken literally.
+
+```sh
+# prod.env
+OFC_BLUEPRINT=/srv/floors/shop/blueprint.yaml
+OFC_WEB=true
+OFC_PORT=8080
+OFC_HOSTNAME=https://ofc.example.com
+OFC_DB=postgres://ofc@localhost/ofc
+DEPLOY_ENVIRONMENT=prod
+```
+
+A setting comes from, in order: the flag when passed, the environment, the config file, the flag's default. When the environment overrides a different value from the config file, ofc prints a warning naming the variable.
+
+The config file's variables join the environment, so the same file works as a systemd `EnvironmentFile=` or a `docker --env-file`. Variables other than `OFC_*` are available to the blueprint as `${VAR}` and to its subprocesses. An `OFC_*` variable in the file must be a setting, and `OFC_CONFIG` cannot appear in it.
 
 ### Commands during a conversation
 
@@ -149,7 +171,7 @@ Launch with `ofc run --web` to open a browser-based interface:
 - **Inline images** — agents write standard markdown (`![chart](chart.png)`) and images render directly in chat
 - **Responsive design** — works on desktop and mobile
 - **Sessions** — each tab works in its own session (`?session=<id>`); `?sessions` lists and switches them
-- **Auth** — a Bearer token: `OFC_TOKEN` if set (stable across restarts), otherwise random; the printed URL carries it as `?token=`
+- **Auth** — a Bearer token: `--token` if set (stable across restarts), otherwise random; the printed URL carries it as `?token=`
 
 Other ofc processes can work in the server's sessions with `--remote`, e.g. a scheduled prompt whose session you open in the browser later:
 

@@ -6,10 +6,12 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -26,13 +28,13 @@ import (
 )
 
 // attachAPIServer constructs and attaches an api.Server to the floor.
-// In web mode it requires a Bearer token: $OFC_TOKEN if set (stable
-// across restarts, for clients like `ofc run --remote`), otherwise a
-// random one. Called before f.Start.
+// In web mode it requires a Bearer token: --token if set (stable across
+// restarts, for clients like `ofc run --remote`), otherwise a random
+// one. Called before f.Start.
 func attachAPIServer(f *floor.Floor) {
 	srv := api.New()
 	if useWeb {
-		token := os.Getenv("OFC_TOKEN")
+		token := apiToken
 		if token == "" {
 			token = api.GenerateToken()
 		}
@@ -42,17 +44,20 @@ func attachAPIServer(f *floor.Floor) {
 }
 
 var (
-	blueprintFile string
-	debug         bool
-	logFile       string
-	useTUI        bool
-	useWeb        bool
-	webPort       int
-	webHostname   string
-	useJSON       bool
-	sessionID     string
-	remoteURL     string
-	dbDSN         string
+	blueprintFile  string
+	debug          bool
+	logFile        string
+	useTUI         bool
+	useWeb         bool
+	webPort        int
+	bindAddr       string
+	webHostname    string
+	useJSON        bool
+	sessionID      string
+	remoteURL      string
+	dbDSN          string
+	apiToken       string
+	acpIdleTimeout time.Duration
 
 	// resolvedSessionID is the actual UUID used by this invocation —
 	// either passed via --session, or freshly generated. Captured here
@@ -93,11 +98,6 @@ var runCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		// Apply blueprint config to flag globals where the flag wasn't
-		// explicitly passed. CLI flag wins over Config; Config wins over
-		// the cobra-registered default.
-		applyBlueprintConfig(cmd, &bp.Config)
-
 		var initialPrompt string
 		if len(args) > 0 {
 			initialPrompt = args[0]
@@ -117,46 +117,6 @@ var runCmd = &cobra.Command{
 			runCLI(bp, initialPrompt)
 		}
 	},
-}
-
-// applyBlueprintConfig copies non-empty values from bp.Config into the
-// flag globals — but only when the corresponding flag wasn't explicitly
-// passed on the command line. Frontend selection ("cli"/"tui"/"json")
-// is translated into the boolean flag globals the runCmd dispatch
-// reads. cobra's Changed() lets us tell "user didn't pass --debug" from
-// "user passed --debug=false".
-func applyBlueprintConfig(cmd *cobra.Command, cfg *blueprint.Config) {
-	fs := cmd.Flags()
-	if !fs.Changed("debug") && cfg.Debug {
-		debug = true
-	}
-	if !fs.Changed("log") && cfg.Log != "" {
-		logFile = cfg.Log
-	}
-	if !fs.Changed("web") && cfg.Web.Enabled {
-		useWeb = true
-	}
-	if !fs.Changed("port") && cfg.Web.Port != 0 {
-		webPort = cfg.Web.Port
-	}
-	if !fs.Changed("hostname") && cfg.Web.Hostname != "" {
-		webHostname = cfg.Web.Hostname
-	}
-	if !fs.Changed("db") && cfg.Store.Type == "postgres" && cfg.Store.DSN != "" {
-		dbDSN = cfg.Store.DSN
-	}
-	switch cfg.Frontend {
-	case "tui":
-		if !fs.Changed("tui") {
-			useTUI = true
-		}
-	case "json":
-		if !fs.Changed("json") {
-			useJSON = true
-		}
-	case "cli", "":
-		// default — nothing to do
-	}
 }
 
 func runCLI(bp *blueprint.Blueprint, initialPrompt string) {
@@ -208,7 +168,7 @@ func runRemote(initialPrompt string) {
 
 // openRemoteSession connects to the server named by --remote. The URL
 // may carry ?token= and ?session= (as printed by `ofc run --web`); the
-// token otherwise comes from $OFC_TOKEN, the session from --session.
+// token otherwise comes from --token, the session from --session.
 // Without a session, a new one is started.
 func openRemoteSession() (frontend.SessionClient, error) {
 	u, err := url.Parse(remoteURL)
@@ -218,7 +178,7 @@ func openRemoteSession() (frontend.SessionClient, error) {
 	q := u.Query()
 	token := q.Get("token")
 	if token == "" {
-		token = os.Getenv("OFC_TOKEN")
+		token = apiToken
 	}
 	sid := q.Get("session")
 	if sid == "" {
@@ -257,7 +217,7 @@ func runWeb(bp *blueprint.Blueprint) {
 	if debug {
 		f.DebugFunc = func(msg string) { fmt.Fprintf(os.Stderr, "[debug] %s\n", msg) }
 	}
-	f.ListenAddr = fmt.Sprintf(":%d", webPort)
+	f.ListenAddr = net.JoinHostPort(bindAddr, strconv.Itoa(webPort))
 	f.WebMode = true
 	f.WebUI = webui.FS()
 	f.ExternalURL = webHostname
@@ -356,17 +316,22 @@ func runJSON(bp *blueprint.Blueprint, initialPrompt string) {
 }
 
 func init() {
-	runCmd.Flags().StringVarP(&blueprintFile, "file", "f", "blueprint.yaml", "Blueprint file")
-	runCmd.Flags().BoolVar(&debug, "debug", false, "Enable debug output")
-	runCmd.Flags().StringVar(&logFile, "log", "", "Log output to file (plain text, no colors)")
-	runCmd.Flags().BoolVar(&useTUI, "tui", false, "Use terminal UI with split layout")
-	runCmd.Flags().BoolVar(&useWeb, "web", false, "Enable web UI (served on --port)")
-	runCmd.Flags().IntVar(&webPort, "port", 8080, "Port for web UI (used with --web)")
-	runCmd.Flags().StringVar(&webHostname, "hostname", "", "External URL for web UI (e.g. https://myhost.dev), overrides localhost in printed URL")
-	runCmd.Flags().BoolVar(&useJSON, "json", false, "Output events as JSONL to stdout")
-	runCmd.Flags().StringVar(&sessionID, "session", "", "Session UUID to resume (default: generate a new one)")
-	runCmd.Flags().StringVar(&remoteURL, "remote", "", "Use a session on a running `ofc run --web` server at this URL (token from ?token= or $OFC_TOKEN) instead of a local floor")
-	runCmd.Flags().StringVar(&dbDSN, "db", "", "Postgres DSN for session storage (overrides JSONL; falls back to OFC_DATABASE_URL)")
+	fs := runCmd.Flags()
+	addBlueprintFlag(fs, &blueprintFile)
+	fs.BoolVar(&debug, "debug", false, "Enable debug output")
+	fs.StringVar(&logFile, "log", "", "Log output to file (plain text, no colors)")
+	fs.BoolVar(&useTUI, "tui", false, "Use terminal UI with split layout")
+	fs.BoolVar(&useWeb, "web", false, "Enable web UI (served on --bind:--port)")
+	fs.IntVar(&webPort, "port", 8080, "Port for web UI (used with --web)")
+	fs.StringVar(&bindAddr, "bind", "127.0.0.1", "Address the web UI listens on (0.0.0.0 for all interfaces)")
+	fs.StringVar(&webHostname, "hostname", "", "External URL for web UI (e.g. https://myhost.dev), overrides localhost in printed URL")
+	fs.BoolVar(&useJSON, "json", false, "Output events as JSONL to stdout")
+	fs.StringVar(&sessionID, "session", "", "Session UUID to resume (default: generate a new one)")
+	fs.StringVar(&remoteURL, "remote", "", "Use a session on a running \"ofc run --web\" server at this URL (token from ?token= or --token) instead of a local floor")
+	fs.StringVar(&apiToken, "token", "", "API token for --web (default: a random one) and for --remote")
+	fs.DurationVar(&acpIdleTimeout, "acp-idle-timeout", 0, "Close an ACP agent's subprocess after it is idle this long (e.g. 15m); 0 keeps it until its session closes")
+	addStoreFlags(fs)
+	addOAuthFlags(fs)
 }
 
 // resolveSessionID picks the floor's session UUID for this invocation:
@@ -386,13 +351,14 @@ func resolveSessionID() (sid string, resuming bool) {
 
 // newFloorWithStore resolves the session UUID, constructs the Floor
 // with that UUID as its default session, and attaches the configured
-// session store (Postgres if --db / OFC_DATABASE_URL, else JSONL). On
-// error it prints to stderr and exits — every caller (runCLI, runTUI,
-// runJSON) handles failure the same way.
+// session store (Postgres if --db, else JSONL). On error it prints to
+// stderr and exits — every caller (runCLI, runTUI, runJSON) handles
+// failure the same way.
 func newFloorWithStore(bp *blueprint.Blueprint) (f *floor.Floor, resuming bool) {
 	sid, resuming := resolveSessionID()
 	f = floor.NewFloorWithSession(bp, sid)
 	f.AgentFactory = agents.New
+	f.ACPIdleTimeout = acpIdleTimeout
 	oauthDir, err := defaultOAuthDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -416,7 +382,7 @@ func newFloorWithStore(bp *blueprint.Blueprint) (f *floor.Floor, resuming bool) 
 }
 
 // applySessionStore picks the session-store backend for this
-// invocation. --db (or OFC_DATABASE_URL) selects Postgres; otherwise
+// invocation. --db selects Postgres; otherwise
 // JSONL. Either way SessionMeta is written on fresh sessions and
 // checked on resume. The session UUID is f.DefaultSessionID() —
 // shared across both backends.

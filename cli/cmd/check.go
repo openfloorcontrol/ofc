@@ -23,7 +23,7 @@ var checkCmd = &cobra.Command{
 	Short: "Check LLM endpoint / agent configuration",
 	Long: `Diagnostic commands for OpenAI-compatible endpoints.
 
-Targets are either flag-driven (--endpoint / --key / --model) or an
+Targets are either flag-driven (--endpoint / --api-key / --model) or an
 @agent from the current blueprint (loaded from -f, default blueprint.yaml).
 With no target, ping/models iterate every agent in the blueprint.`,
 }
@@ -158,7 +158,7 @@ type target struct {
 // resolveTargets picks the target set for a check command.
 //
 //   - agentRef == "@id":      that agent from the blueprint
-//   - agentRef == "" + flags: single target from --endpoint/--key/--model
+//   - agentRef == "" + flags: single target from --endpoint/--api-key/--model
 //   - agentRef == "":         every agent in the blueprint
 //
 // The blueprint is loaded lazily so ad-hoc --endpoint checks work in a
@@ -269,9 +269,9 @@ func fatal(err error) {
 }
 
 func init() {
-	checkCmd.PersistentFlags().StringVarP(&checkFile, "file", "f", "blueprint.yaml", "Blueprint file (for @agent lookups)")
+	addBlueprintFlag(checkCmd.PersistentFlags(), &checkFile)
 	checkCmd.PersistentFlags().StringVar(&checkEndpoint, "endpoint", "", "OpenAI-compatible base URL (overrides blueprint)")
-	checkCmd.PersistentFlags().StringVar(&checkKey, "key", "", "API key (overrides blueprint)")
+	checkCmd.PersistentFlags().StringVar(&checkKey, "api-key", "", "API key (overrides blueprint)")
 	checkCmd.PersistentFlags().StringVar(&checkModel, "model", "", "Model name (overrides blueprint)")
 
 	checkCmd.AddCommand(checkPingCmd)

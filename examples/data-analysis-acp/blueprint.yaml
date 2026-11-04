@@ -19,7 +19,6 @@ agents:
   - id: "@data"
     name: "Data Analyst"
     activation: always
-    can_use_tools: false
     temperature: 0.7
     furniture: [fs]
     prompt: |

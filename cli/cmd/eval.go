@@ -23,7 +23,7 @@ var evalCmd = &cobra.Command{
 	Short: "Evaluate stdin with an LLM",
 	Long: `Read text from stdin and evaluate it with an LLM using the given prompt.
 
-The LLM configuration comes from the project's blueprint (same -f flag as run).
+The LLM configuration comes from the project's blueprint (-f/--blueprint, as for run).
 Use --agent to pick a specific agent's config, or defaults to the first LLM agent.
 
 For standalone use without a blueprint, pass --endpoint and --model directly.`,
@@ -119,6 +119,5 @@ func init() {
 	evalCmd.Flags().StringVar(&evalEndpoint, "endpoint", "", "LLM endpoint (standalone mode, skips blueprint)")
 	evalCmd.Flags().StringVar(&evalModel, "model", "", "LLM model (standalone mode, skips blueprint)")
 	evalCmd.Flags().StringVar(&evalAPIKey, "api-key", "", "API key (standalone mode)")
-	// Reuse the -f flag from run for blueprint file path
-	evalCmd.Flags().StringVarP(&blueprintFile, "file", "f", "blueprint.yaml", "Blueprint file")
+	addBlueprintFlag(evalCmd.Flags(), &blueprintFile)
 }

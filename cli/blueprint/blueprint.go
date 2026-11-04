@@ -4,12 +4,12 @@ package blueprint
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"text/template"
-	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -177,61 +177,12 @@ type OAuthConfig struct {
 	Scopes []string `yaml:"scopes,omitempty"`
 }
 
-// Config holds runtime/deployment knobs — things that historically came
-// from CLI flags or env vars. Lives inside the blueprint so each project
-// can carry its own "how to run this" defaults. Per-invocation knobs
-// (--file, --session, the initial prompt) are intentionally NOT here.
-//
-// Future: profiles (dev/prod overlays) and ~/.ofc/defaults.yaml will
-// layer above and below this, respectively. Not implemented yet — when
-// they land, precedence will be:
-//
-//	CLI flag (if explicitly set) > env > profile > config > defaults.yaml > built-in
-//
-// Today there is one layer of precedence: a CLI flag wins when
-// explicitly set (cobra Changed()); otherwise Config provides the value.
-type Config struct {
-	// Frontend selects the terminal frontend: "cli" (default), "tui",
-	// or "json".
-	Frontend string `yaml:"frontend,omitempty"`
-
-	Web   WebConfig   `yaml:"web,omitempty"`
-	Store StoreConfig `yaml:"store,omitempty"`
-
-	// Debug toggles per-component debug output.
-	Debug bool `yaml:"debug,omitempty"`
-
-	// Log is an output log path. Empty means no log file.
-	Log string `yaml:"log,omitempty"`
-
-	// ACPIdleTimeout closes an ACP agent's subprocess after it has been
-	// idle this long (e.g. "15m"); its next turn resumes the session in a
-	// new process. Zero keeps subprocesses until their session closes.
-	ACPIdleTimeout time.Duration `yaml:"acp_idle_timeout,omitempty"`
-}
-
-// WebConfig groups web-UI settings.
-type WebConfig struct {
-	Enabled  bool   `yaml:"enabled,omitempty"`
-	Port     int    `yaml:"port,omitempty"`
-	Hostname string `yaml:"hostname,omitempty"` // external URL for printed link
-}
-
-// StoreConfig selects the session-store backend.
-type StoreConfig struct {
-	// Type is "jsonl" (default) or "postgres".
-	Type string `yaml:"type,omitempty"`
-	// DSN is the Postgres connection string when Type is "postgres".
-	// Supports ${VAR} env expansion so secrets stay out of the blueprint.
-	DSN string `yaml:"dsn,omitempty"`
-}
-
-// Blueprint is a complete floor configuration
+// Blueprint is a complete floor configuration: what the floor is. How a
+// floor is run (frontend, ports, session store) is set by ofc's flags.
 type Blueprint struct {
 	Name         string         `yaml:"name"`
 	Description  string         `yaml:"description"`
 	Defaults     Defaults       `yaml:"defaults"`
-	Config       Config         `yaml:"config,omitempty"`
 	Agents       []Agent        `yaml:"agents"`
 	Workstations []Workstation  `yaml:"workstations"`
 	Furniture    []FurnitureDef `yaml:"furniture,omitempty"`
@@ -264,6 +215,17 @@ func validateOAuth(fd FurnitureDef) error {
 	return nil
 }
 
+// decodeStrict decodes YAML into v; a key without a matching field is an
+// error. An empty document decodes to the zero value.
+func decodeStrict(data []byte, v any) error {
+	d := yaml.NewDecoder(bytes.NewReader(data))
+	d.KnownFields(true)
+	if err := d.Decode(v); err != nil && err != io.EOF {
+		return err
+	}
+	return nil
+}
+
 // Load reads a blueprint from a YAML file
 func Load(path string) (*Blueprint, error) {
 	data, err := os.ReadFile(path)
@@ -272,7 +234,7 @@ func Load(path string) (*Blueprint, error) {
 	}
 
 	var bp Blueprint
-	if err := yaml.Unmarshal(data, &bp); err != nil {
+	if err := decodeStrict(data, &bp); err != nil {
 		return nil, err
 	}
 
@@ -317,7 +279,7 @@ func Load(path string) (*Blueprint, error) {
 			return nil, fmt.Errorf("agent[%d]: reading ref %q: %w", i, bp.Agents[i].Ref, err)
 		}
 		var a Agent
-		if err := yaml.Unmarshal(data, &a); err != nil {
+		if err := decodeStrict(data, &a); err != nil {
 			return nil, fmt.Errorf("agent[%d]: parsing ref %q: %w", i, bp.Agents[i].Ref, err)
 		}
 		if a.Ref != "" {

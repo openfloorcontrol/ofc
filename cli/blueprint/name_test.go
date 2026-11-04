@@ -4,20 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 )
-
-func TestLoadParsesACPIdleTimeout(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "blueprint.yaml")
-	os.WriteFile(path, []byte("name: t\nconfig:\n  acp_idle_timeout: 15m\n"), 0o644)
-	bp, err := Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bp.Config.ACPIdleTimeout != 15*time.Minute {
-		t.Errorf("ACPIdleTimeout = %v, want 15m", bp.Config.ACPIdleTimeout)
-	}
-}
 
 func TestLoadValidatesOAuth(t *testing.T) {
 	const head = "name: t\nfurniture:\n  - name: kb\n    type: mcp\n"

@@ -24,17 +24,17 @@ var authCmd = &cobra.Command{
 there is no stored session, or the server rejects it (e.g. a deleted client
 or revoked token), it asks for consent: open the printed URL and approve.
 --force asks anyway, e.g. after changing the scopes. The token is stored in
-~/.ofc/oauth/<floor>/<furniture>.json (or $OFC_OAUTH_DIR) and refreshed by
+~/.ofc/oauth/<floor>/<furniture>.json (or --oauth-dir) and refreshed by
 every ofc run that uses the furniture, including ones already running.
 
 After consent the browser is sent to a callback on a free loopback port of
 this machine. If the browser runs elsewhere, that page won't load: paste
 its address into ofc auth, which delivers it.
 
-Alternatively set $OFC_OAUTH_CALLBACK to a URL that reaches this machine
+Alternatively set --oauth-callback to a URL that reaches this machine
 and that the authorization server accepts. ofc listens on plain http:
 on that URL's port, or — for an https URL served by a proxy such as Caddy —
-on 127.0.0.1:$OFC_OAUTH_CALLBACK_PORT, where the proxy forwards to.`,
+on 127.0.0.1:<--oauth-callback-port>, where the proxy forwards to.`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		if err := authorize(args[0]); err != nil {
@@ -47,8 +47,9 @@ on 127.0.0.1:$OFC_OAUTH_CALLBACK_PORT, where the proxy forwards to.`,
 var authForce bool
 
 func init() {
-	authCmd.Flags().StringVarP(&blueprintFile, "file", "f", "blueprint.yaml", "Blueprint file")
+	addBlueprintFlag(authCmd.Flags(), &blueprintFile)
 	authCmd.Flags().BoolVar(&authForce, "force", false, "Ask for consent even if the stored session works")
+	addOAuthFlags(authCmd.Flags())
 	rootCmd.AddCommand(authCmd)
 }
 

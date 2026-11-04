@@ -20,6 +20,8 @@ var rootCmd = &cobra.Command{
 	Use:   "ofc",
 	Short: "OFC - Open Floor Control",
 	Long:  `Compose and run multi-agent teams.`,
+	// main prints the error.
+	SilenceErrors: true,
 }
 
 func Execute() error {
@@ -45,7 +47,7 @@ ofc ` + Version + ` (commit ` + Commit + `)
 	sessionsCmd.AddCommand(sessionsRmCmd)
 	sessionsCmd.AddCommand(sessionsShowCmd)
 	sessionsRmCmd.Flags().BoolVarP(&rmForce, "force", "f", false, "Skip confirmation prompt")
-	sessionsCmd.PersistentFlags().StringVar(&dbDSN, "db", "", "Postgres DSN for session storage (falls back to OFC_DATABASE_URL)")
+	addStoreFlags(sessionsCmd.PersistentFlags())
 	rootCmd.AddCommand(sessionsCmd)
 }
 

@@ -5,22 +5,42 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 
 	"github.com/openfloorcontrol/ofc/floor"
 	"github.com/openfloorcontrol/ofc/floor/sessionstore"
+	"github.com/spf13/pflag"
 )
 
-// defaultSessionsDir returns the directory where session JSONL files live
-// by default. Resolution order:
-//  1. $OFC_SESSIONS_DIR if set
-//  2. $HOME/.ofc/sessions
-//
-// Once config files land (step 6), this will also honor `storage.dir` in
-// ~/.ofc/config.yaml and ./ofc.yaml.
+var (
+	sessionsDir       string
+	oauthDir          string
+	oauthCallback     string
+	oauthCallbackPort int
+)
+
+// addBlueprintFlag registers -f/--blueprint, the blueprint file.
+func addBlueprintFlag(fs *pflag.FlagSet, p *string) {
+	fs.StringVarP(p, "blueprint", "f", "blueprint.yaml", "Blueprint file")
+}
+
+// addStoreFlags registers the flags that select the session store.
+func addStoreFlags(fs *pflag.FlagSet) {
+	fs.StringVar(&dbDSN, "db", "", "Postgres DSN for session storage (default: JSONL files in --sessions-dir)")
+	fs.StringVar(&sessionsDir, "sessions-dir", "", "Directory of JSONL session files (default: ~/.ofc/sessions)")
+}
+
+// addOAuthFlags registers the flags for OAuth furniture.
+func addOAuthFlags(fs *pflag.FlagSet) {
+	fs.StringVar(&oauthDir, "oauth-dir", "", "Directory of stored OAuth tokens (default: ~/.ofc/oauth)")
+	fs.StringVar(&oauthCallback, "oauth-callback", "", "Consent callback URL registered with authorization servers (default: a free loopback port)")
+	fs.IntVar(&oauthCallbackPort, "oauth-callback-port", 0, "127.0.0.1 port to listen on for --oauth-callback, behind a proxy serving that URL")
+}
+
+// defaultSessionsDir returns the directory where session JSONL files
+// live: --sessions-dir if set, else $HOME/.ofc/sessions.
 func defaultSessionsDir() (string, error) {
-	if d := os.Getenv("OFC_SESSIONS_DIR"); d != "" {
-		return d, nil
+	if sessionsDir != "" {
+		return sessionsDir, nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -30,10 +50,10 @@ func defaultSessionsDir() (string, error) {
 }
 
 // defaultOAuthDir returns where OAuth tokens for furniture live:
-// $OFC_OAUTH_DIR if set, else $HOME/.ofc/oauth.
+// --oauth-dir if set, else $HOME/.ofc/oauth.
 func defaultOAuthDir() (string, error) {
-	if d := os.Getenv("OFC_OAUTH_DIR"); d != "" {
-		return d, nil
+	if oauthDir != "" {
+		return oauthDir, nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -43,20 +63,19 @@ func defaultOAuthDir() (string, error) {
 }
 
 // applyOAuthCallback sets the floor's consent callback from
-// $OFC_OAUTH_CALLBACK (the URL registered with authorization servers) and
-// $OFC_OAUTH_CALLBACK_PORT (the 127.0.0.1 port ofc listens on, behind a
+// --oauth-callback (the URL registered with authorization servers) and
+// --oauth-callback-port (the 127.0.0.1 port ofc listens on, behind a
 // proxy serving that URL).
 func applyOAuthCallback(f *floor.Floor) error {
-	f.OAuthCallbackURL = os.Getenv("OFC_OAUTH_CALLBACK")
-	if p := os.Getenv("OFC_OAUTH_CALLBACK_PORT"); p != "" {
-		port, err := strconv.Atoi(p)
-		if err != nil || port <= 0 || port > 65535 {
-			return fmt.Errorf("OFC_OAUTH_CALLBACK_PORT=%q: want a port number", p)
+	f.OAuthCallbackURL = oauthCallback
+	if oauthCallbackPort != 0 {
+		if oauthCallbackPort < 0 || oauthCallbackPort > 65535 {
+			return fmt.Errorf("--oauth-callback-port %d: want a port number", oauthCallbackPort)
 		}
 		if f.OAuthCallbackURL == "" {
-			return fmt.Errorf("OFC_OAUTH_CALLBACK_PORT needs OFC_OAUTH_CALLBACK, the URL that reaches it")
+			return fmt.Errorf("--oauth-callback-port needs --oauth-callback, the URL that reaches it")
 		}
-		f.OAuthCallbackPort = port
+		f.OAuthCallbackPort = oauthCallbackPort
 	}
 	return nil
 }
@@ -79,16 +98,12 @@ type sessionStore interface {
 	Close() error
 }
 
-// openSessionStore opens the configured backend: Postgres if --db or
-// $OFC_DATABASE_URL is set, otherwise the JSONL sessions directory.
-// Returns a short label for the backend, for display.
+// openSessionStore opens the configured backend: Postgres if --db is
+// set, otherwise the JSONL sessions directory. Returns a short label for
+// the backend, for display.
 func openSessionStore() (sessionStore, string, error) {
-	dsn := dbDSN
-	if dsn == "" {
-		dsn = os.Getenv("OFC_DATABASE_URL")
-	}
-	if dsn != "" {
-		pg, err := sessionstore.OpenPostgres(context.Background(), dsn)
+	if dbDSN != "" {
+		pg, err := sessionstore.OpenPostgres(context.Background(), dbDSN)
 		if err != nil {
 			return nil, "", fmt.Errorf("session store: %w", err)
 		}

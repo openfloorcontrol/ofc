@@ -6,8 +6,16 @@ import (
 	"testing"
 )
 
-func TestDefaultSessionsDirEnvOverride(t *testing.T) {
-	t.Setenv("OFC_SESSIONS_DIR", "/tmp/custom-sessions")
+// withStoreFlags sets the session-store flags for the test.
+func withStoreFlags(t *testing.T, dir, dsn string) {
+	t.Helper()
+	prevDir, prevDSN := sessionsDir, dbDSN
+	sessionsDir, dbDSN = dir, dsn
+	t.Cleanup(func() { sessionsDir, dbDSN = prevDir, prevDSN })
+}
+
+func TestDefaultSessionsDirFlag(t *testing.T) {
+	withStoreFlags(t, "/tmp/custom-sessions", "")
 	got, err := defaultSessionsDir()
 	if err != nil {
 		t.Fatalf("defaultSessionsDir: %v", err)
@@ -18,7 +26,7 @@ func TestDefaultSessionsDirEnvOverride(t *testing.T) {
 }
 
 func TestDefaultSessionsDirFallback(t *testing.T) {
-	t.Setenv("OFC_SESSIONS_DIR", "")
+	withStoreFlags(t, "", "")
 	got, err := defaultSessionsDir()
 	if err != nil {
 		t.Fatalf("defaultSessionsDir: %v", err)
@@ -32,8 +40,7 @@ func TestDefaultSessionsDirFallback(t *testing.T) {
 
 func TestOpenSessionStoreDefaultsToJSONLDir(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "sessions")
-	t.Setenv("OFC_SESSIONS_DIR", dir)
-	t.Setenv("OFC_DATABASE_URL", "")
+	withStoreFlags(t, dir, "")
 
 	store, label, err := openSessionStore()
 	if err != nil {
