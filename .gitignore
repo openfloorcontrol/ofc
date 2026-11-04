@@ -56,3 +56,5 @@ dev.yaml
 # demo needs are tracked; add a new one with git add -f.
 examples/*/workspace
 cli/workspace
+
+scratch/
