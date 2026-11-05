@@ -13,6 +13,8 @@
 #                   don't see each other's conversation
 #   3. resume     — a second `ofc run --session` continues the agent's
 #                   session in a new process
+#   4. furniture  — the agent adds a task on the task board over MCP,
+#                   authenticated with its own token
 set -euo pipefail
 
 MODEL=${1:-@ofc-test}
@@ -24,6 +26,7 @@ if ! mf get "$MODEL" model >/dev/null 2>&1; then
 fi
 PORT=${PORT:-18199}
 BP="$(cd "$(dirname "$0")" && pwd)/blueprint.yaml"
+BP_FURNITURE="$(cd "$(dirname "$0")" && pwd)/furniture.yaml"
 WORK=$(mktemp -d -t ofc-live-opencode.XXXXXX)
 export OFC_LIVE_MODEL=$MODEL
 
@@ -86,6 +89,14 @@ r=$("$OFC" run -f "$BP" --json --session "$sid" "What was the secret word? Answe
 [[ $r == *KIWI* ]] && pass "resumed session recalled: $r" || fail "resumed session answered: '$r'"
 acp=$(grep -o '"acp_session_id":"[^"]*"' "$OFC_SESSIONS_DIR/$sid.jsonl" | sort -u | wc -l)
 [[ $acp == 1 ]] && pass "one ACP session across both runs" || fail "$acp different ACP session ids recorded"
+
+echo "4. furniture"
+export OFC_SESSIONS_DIR=$WORK/furniture
+"$OFC" run -f "$BP_FURNITURE" --json "Call the MCP tool tasks_add_task with title live-check. Then reply with: done." \
+  >"$WORK/furniture.jsonl" 2>"$WORK/furniture.err" || true
+grep '"type":"tool_call_result"' "$WORK/furniture.jsonl" | grep -q 'live-check' \
+  && pass "added a task over MCP" \
+  || fail "no task added (see $WORK/furniture.jsonl, $WORK/furniture.err)"
 
 echo
 if [[ $failures == 0 ]]; then echo "all live checks passed"; else echo "$failures live check(s) failed"; exit 1; fi

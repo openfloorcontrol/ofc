@@ -10,6 +10,13 @@
 // A prompt containing "sleep=<ms>" delays the reply by that long, for
 // tests of long-running turns.
 //
+// A prompt containing mcp=<server>.<tool>, optionally followed by JSON
+// arguments (mcp=tasks.add_task{"title":"x"}), calls that tool on the
+// session's MCP server of that name; the reply gets one
+// " | mcp <server>.<tool> -> <result>" per call. A server the session was
+// not given is tried at a given server's address with the name swapped
+// in, with that server's headers — as an agent guessing addresses would.
+//
 // It supports session/resume: each ACP session's prompt count is kept in
 // $FAKE_ACP_STATE_DIR/<session id>, so a new process can resume it.
 // Without FAKE_ACP_STATE_DIR, sessions live only in memory and resume
@@ -38,6 +45,7 @@ type fakeAgent struct {
 
 	mu      sync.Mutex
 	prompts map[acp.SessionId]int
+	servers map[acp.SessionId][]acp.McpServer
 	created int
 }
 
@@ -51,12 +59,13 @@ func (a *fakeAgent) Initialize(ctx context.Context, _ acp.InitializeRequest) (ac
 	}, nil
 }
 
-func (a *fakeAgent) NewSession(ctx context.Context, _ acp.NewSessionRequest) (acp.NewSessionResponse, error) {
+func (a *fakeAgent) NewSession(ctx context.Context, params acp.NewSessionRequest) (acp.NewSessionResponse, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.created++
 	id := acp.SessionId(fmt.Sprintf("fake-%d-%d", os.Getpid(), a.created))
 	a.prompts[id] = 0
+	a.servers[id] = params.McpServers
 	if err := a.save(id); err != nil {
 		return acp.NewSessionResponse{}, err
 	}
@@ -78,6 +87,7 @@ func (a *fakeAgent) ResumeSession(ctx context.Context, params acp.ResumeSessionR
 		return acp.ResumeSessionResponse{}, fmt.Errorf("corrupt state for session %s: %w", params.SessionId, err)
 	}
 	a.prompts[params.SessionId] = n
+	a.servers[params.SessionId] = params.McpServers
 	return acp.ResumeSessionResponse{}, nil
 }
 
@@ -97,6 +107,7 @@ func (a *fakeAgent) Prompt(ctx context.Context, params acp.PromptRequest) (acp.P
 	}
 	n++
 	a.prompts[params.SessionId] = n
+	servers := a.servers[params.SessionId]
 	err := a.save(params.SessionId)
 	a.mu.Unlock()
 	if err != nil {
@@ -110,6 +121,9 @@ func (a *fakeAgent) Prompt(ctx context.Context, params acp.PromptRequest) (acp.P
 	}
 
 	reply := fmt.Sprintf("pid=%d prompts=%d | %s", os.Getpid(), n, text)
+	for _, call := range mcpCalls(ctx, text, servers) {
+		reply += " | " + call
+	}
 	err = a.conn.SessionUpdate(ctx, acp.SessionNotification{
 		SessionId: params.SessionId,
 		Update:    acp.UpdateAgentMessageText(reply),
@@ -159,6 +173,7 @@ func main() {
 	ag := &fakeAgent{
 		stateDir: os.Getenv("FAKE_ACP_STATE_DIR"),
 		prompts:  make(map[acp.SessionId]int),
+		servers:  make(map[acp.SessionId][]acp.McpServer),
 	}
 	ag.conn = acp.NewAgentSideConnection(ag, os.Stdout, os.Stdin)
 	<-ag.conn.Done()
