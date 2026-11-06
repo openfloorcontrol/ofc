@@ -101,15 +101,18 @@ type Agent struct {
 	// (api_key, endpoint) belong in defaults.
 	Ref string `yaml:"ref,omitempty"`
 
-	ID       string            `yaml:"id"`
-	Name     string            `yaml:"name"`
-	Type     string            `yaml:"type"` // "llm" (default) or "acp"
-	Model    string            `yaml:"model"`
-	Endpoint string            `yaml:"endpoint"`
-	APIKey   string            `yaml:"api_key,omitempty"`
-	Command  string            `yaml:"command"` // ACP: command to launch agent
-	Args     []string          `yaml:"args"`    // ACP: args for the command
-	Env      map[string]string `yaml:"env"`     // ACP: env vars for agent process
+	ID       string `yaml:"id"`
+	Name     string `yaml:"name"`
+	Type     string `yaml:"type"` // "llm" (default) or "acp"
+	Model    string `yaml:"model"`
+	Endpoint string `yaml:"endpoint"`
+	APIKey   string `yaml:"api_key,omitempty"`
+	// MF is an mf address (alias, endpoint/model or @tag) that sets
+	// Endpoint, Model and APIKey from mf's registry.
+	MF      string            `yaml:"mf,omitempty"`
+	Command string            `yaml:"command"` // ACP: command to launch agent
+	Args    []string          `yaml:"args"`    // ACP: args for the command
+	Env     map[string]string `yaml:"env"`     // ACP: env vars for agent process
 	// Prompt is the agent's system prompt. It may be a <% %> template, which
 	// is parsed at load and rendered on every turn — see RenderPrompt.
 	Prompt     string `yaml:"prompt"`
@@ -139,6 +142,8 @@ type Defaults struct {
 	Endpoint string `yaml:"endpoint"`
 	Model    string `yaml:"model"`
 	APIKey   string `yaml:"api_key,omitempty"` // supports ${VAR} env expansion
+	// MF is an mf address that sets Endpoint, Model and APIKey.
+	MF       string `yaml:"mf,omitempty"`
 	Thinking string `yaml:"thinking,omitempty"`
 }
 
@@ -329,6 +334,10 @@ func Load(path string) (*Blueprint, error) {
 		if fd.Workspace != "" && !filepath.IsAbs(fd.Workspace) {
 			fd.Workspace = filepath.Join(bpDir, fd.Workspace)
 		}
+	}
+
+	if err := resolveMF(&bp); err != nil {
+		return nil, err
 	}
 
 	// Apply defaults
