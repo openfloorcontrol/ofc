@@ -401,3 +401,20 @@ func TestFurnitureTextResultIsPlain(t *testing.T) {
 		t.Errorf("tool result = %+v, want the text unquoted", tools)
 	}
 }
+
+// Every message from someone else starts with its speaker, so a model
+// that never sees the name field still knows who said what.
+func TestOthersMessagesStartWithTheSpeaker(t *testing.T) {
+	h := newHarness(t, nil, llmtest.Response{Content: "Noted."})
+	h.sess.MainRoom.Post(floor.ChatMessage{From: "@b", Content: "The D750 is in stock."})
+	h.turn(t, "Is that right?")
+
+	var got []string
+	for _, m := range byRole(h.mock.Requests()[0].Messages, "user") {
+		got = append(got, m.Content)
+	}
+	want := []string{"@b: The D750 is in stock.", "@user: Is that right?"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("user messages = %q, want %q", got, want)
+	}
+}

@@ -206,8 +206,11 @@ func (a *LLMAgent) buildContext(turn floor.AgentTurn) ([]llmsdk.Message, error) 
 				})
 			}
 		} else {
-			// Other participants: role = "user", apply tool_context filtering
-			content := msg.Content
+			// Other participants: role = "user", apply tool_context filtering.
+			// The text starts with the speaker ("@hiro: "), as for ACP
+			// agents; Name carries it too, but providers that don't support
+			// it drop it on the way to the model.
+			content := msg.From + ": " + msg.Content
 			if len(msg.ToolInteractions) > 0 {
 				toolSummary := floor.FormatToolInteractions(msg.ToolInteractions, a.agent.ToolContext)
 				if toolSummary != "" {
