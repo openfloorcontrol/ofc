@@ -276,16 +276,30 @@ func runTUI(bp *blueprint.Blueprint, initialPrompt string) {
 	)
 	fe.SetProgram(p)
 
-	// Start the event loop (background goroutine)
-	if err := fe.RunLoop(f, initialPrompt); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
+	// The floor starts alongside the program: RunLoop reports progress
+	// through p.Send, which waits for the program to run. If the floor
+	// can't start, the program quits and the error is printed after it.
+	startErr := make(chan error, 1)
+	go func() {
+		err := fe.RunLoop(f, initialPrompt)
+		startErr <- err
+		if err != nil {
+			p.Quit()
+		}
+	}()
 
 	// Bubble Tea owns the main thread
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
 		os.Exit(1)
+	}
+	select {
+	case err := <-startErr:
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	default:
 	}
 }
 

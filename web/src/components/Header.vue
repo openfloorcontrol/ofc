@@ -54,12 +54,14 @@ function borderForAgent(index) {
 
 <template>
   <header class="border-b border-slate-700 px-4 py-3 flex-shrink-0">
-    <div class="flex items-center justify-between">
-      <div class="flex items-center gap-3">
+    <div class="flex items-center justify-between gap-3">
+      <!-- min-w-0 lets this side shrink, so the floor name and description
+           stay one line each and end in "…" on narrow screens. -->
+      <div class="flex items-center gap-3 min-w-0">
         <!-- Sidebar toggle (mobile only) -->
         <button
           v-if="hasFurniture"
-          class="md:hidden text-slate-400 hover:text-slate-200 transition-colors -ml-1 p-1"
+          class="md:hidden text-slate-400 hover:text-slate-200 transition-colors -ml-1 p-1 flex-shrink-0"
           @click="$emit('toggle-sidebar')"
           :title="sidebarOpen ? 'Close sidebar' : 'Open sidebar'"
         >
@@ -70,14 +72,14 @@ function borderForAgent(index) {
             <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
           </svg>
         </button>
-        <span class="text-xl font-bold tracking-tight text-slate-100">ofc<span class="ml-1">🎤</span></span>
-        <span class="text-slate-600">|</span>
-        <div>
-          <h1 class="text-sm font-semibold text-slate-300">{{ floorName }}</h1>
-          <p v-if="description" class="text-xs text-slate-500">{{ description }}</p>
+        <span class="text-xl font-bold tracking-tight text-slate-100 flex-shrink-0">ofc<span class="ml-1">🎤</span></span>
+        <span class="text-slate-600 flex-shrink-0">|</span>
+        <div class="min-w-0">
+          <h1 class="text-sm font-semibold text-slate-300 truncate" :title="floorName">{{ floorName }}</h1>
+          <p v-if="description" class="text-xs text-slate-500 truncate" :title="description">{{ description }}</p>
         </div>
       </div>
-      <div class="flex items-center gap-2">
+      <div class="flex items-center gap-2 flex-shrink-0">
         <a
           v-if="sessionsHref"
           :href="sessionsHref"

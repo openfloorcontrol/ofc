@@ -25,8 +25,15 @@ import (
 
 // ToolInteraction stores one tool call and its result.
 type ToolInteraction struct {
-	Command string
+	Command string // what frontends show, e.g. "tasks.add_task"
 	Output  string
+
+	// The call as an LLM agent made it — its ID, tool name and JSON
+	// arguments — so the agent's later turns replay it exactly. Empty for
+	// calls made by ACP agents.
+	CallID    string `json:",omitempty"`
+	Tool      string `json:",omitempty"`
+	Arguments string `json:",omitempty"`
 }
 
 // Frame represents one level in the delegation chain.

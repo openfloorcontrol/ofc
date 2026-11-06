@@ -35,7 +35,7 @@ furniture:
 |-------|----------|-------------|
 | `name` | yes | Floor name, shown in the header |
 | `description` | no | Short description of the floor |
-| `defaults` | no | Default `endpoint`, `model`, `api_key` and `thinking` for all agents |
+| `defaults` | no | Default `endpoint`, `model`, `api_key` (or `mf`) and `thinking` for all agents |
 | `agents` | yes | List of agents on this floor |
 | `furniture` | no | List of shared furniture (task boards, MCP servers, sandboxes) |
 
@@ -124,6 +124,30 @@ Set `api_key` under `defaults:` to share one key across agents; a per-agent valu
 overrides it. Keep the secret in the environment rather than the file — see
 [Environment variables](#environment-variables). With no key at all the header is
 omitted entirely, which is what lets local endpoints like Ollama work.
+
+### Models from mf
+
+With [mf](https://github.com/mikiobraun/mf), an agent names a model from mf's
+registry instead of setting `endpoint`, `model` and `api_key`:
+
+```yaml
+defaults:
+  mf: "@coding"          # the first mf model tagged coding
+
+agents:
+  - id: "@planner"       # uses defaults.mf
+  - id: "@coder"
+    mf: fast             # an mf alias; endpoint/model works too
+```
+
+`mf` takes any mf address — an alias, `endpoint/model`, or `@tag` — and sets
+`endpoint`, `model` and `api_key` from it, with the key from `MF_KEY_<ENDPOINT>`
+or mf's secrets. On an agent it sets the agent's own fields; under `defaults:`
+it sets the defaults, which an agent can override field by field like any
+default. `mf` and any of the three fields it sets cannot appear together, and
+`mf` is for LLM agents only. ofc reads the registry in `$MF_CONFIG_DIR`, else
+`~/.config/mf`, when the blueprint loads; an address mf can't resolve stops the
+floor from starting.
 
 ### Thinking
 
@@ -259,11 +283,30 @@ Worth knowing if you rely on prompt caching: a template whose output is
 identical each turn keeps the prefix stable and stays cacheable. One that
 varies invalidates it.
 
+### Disabling an agent or furniture
+
+`enabled: false` on an agent or furniture entry removes it from the floor
+without deleting it:
+
+```yaml
+agents:
+  - id: "@reviewer"
+    enabled: false
+  - ref: ./critic.agent.yaml
+    enabled: false        # the file is not read
+```
+
+The blueprint loads as if the entry weren't there: its `${VAR}`s, its model
+and its furniture are not looked at. A referenced agent file can say
+`enabled: false` itself. An agent that lists disabled furniture fails to load,
+as for any furniture that isn't on the floor.
+
 ### Agent fields
 
 | Field | Default | Description |
 |-------|---------|-------------|
 | `id` | *required* | Unique ID, must start with `@` (e.g. `"@data"`) |
+| `enabled` | `true` | `false` removes the agent from the floor — see [Disabling](#disabling-an-agent-or-furniture) |
 | `name` | | Human-readable name |
 | `type` | `"llm"` | `"llm"` for OpenAI-compatible API, `"acp"` for Agent Client Protocol |
 | `prompt` | | System prompt defining the agent's role and behavior |
@@ -280,6 +323,7 @@ varies invalidates it.
 | `model` | `defaults.model` | LLM model name |
 | `endpoint` | `defaults.endpoint` | OpenAI-compatible API URL |
 | `api_key` | `defaults.api_key` | Bearer token for `endpoint`. Omitted from the request when empty. |
+| `mf` | | mf address that sets `endpoint`, `model` and `api_key` — see [Models from mf](#models-from-mf) |
 | `thinking` | `defaults.thinking`, else `auto` | How reasoning is separated: `auto`, `field`, `tags`, `none` — see [Thinking](#thinking) |
 | `thinking_tags` | `["<think>", "</think>"]` | Inline tag pair to scan for |
 
@@ -367,6 +411,7 @@ With the default `authorization_code` grant, a person consents once: run `ofc au
 |-------|---------|-------------|
 | `name` | *required* | Identifier used in agent `furniture` lists |
 | `type` | *required* | `"taskboard"` (built-in), `"mcp"` (external MCP server) or `"sandbox"` (Docker container) |
+| `enabled` | `true` | `false` removes the furniture from the floor — see [Disabling](#disabling-an-agent-or-furniture) |
 | `command` | | Command to launch the MCP server (stdio transport) |
 | `args` | `[]` | Arguments for the command |
 | `url` | | URL of an already-running MCP server (HTTP transport) |
