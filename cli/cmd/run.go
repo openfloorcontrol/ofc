@@ -120,7 +120,7 @@ var runCmd = &cobra.Command{
 }
 
 func runCLI(bp *blueprint.Blueprint, initialPrompt string) {
-	fe := frontend.NewCLI(logFile, debug, frontend.BuildColorMap(agentIDs(bp)))
+	fe := frontend.NewCLI(logFile, debug, frontend.BuildColorMap(agentIDs(bp)), historyFile())
 
 	f, _ := newFloorWithStore(bp)
 	if debug {
@@ -157,7 +157,7 @@ func runRemote(initialPrompt string) {
 		err = frontend.NewJSON(logFile, debug).RunLoop(client, initialPrompt)
 	} else {
 		fmt.Fprintf(os.Stderr, "Session: %s (remote)\n", client.ID())
-		fe := frontend.NewCLI(logFile, debug, frontend.BuildColorMap(client.Info().Agents))
+		fe := frontend.NewCLI(logFile, debug, frontend.BuildColorMap(client.Info().Agents), historyFile())
 		err = fe.RunLoop(client, initialPrompt)
 	}
 	if err != nil {

@@ -62,6 +62,20 @@ func defaultOAuthDir() (string, error) {
 	return filepath.Join(home, ".ofc", "oauth"), nil
 }
 
+// historyFile is where the CLI keeps the lines typed at its prompt:
+// $HOME/.ofc/history, or "" (no history) without a home directory.
+func historyFile() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Join(home, ".ofc")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return ""
+	}
+	return filepath.Join(dir, "history")
+}
+
 // applyOAuthCallback sets the floor's consent callback from
 // --oauth-callback (the URL registered with authorization servers) and
 // --oauth-callback-port (the 127.0.0.1 port ofc listens on, behind a
