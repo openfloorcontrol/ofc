@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"text/template"
 
@@ -101,15 +102,22 @@ type Agent struct {
 	// (api_key, endpoint) belong in defaults.
 	Ref string `yaml:"ref,omitempty"`
 
-	ID       string            `yaml:"id"`
-	Name     string            `yaml:"name"`
-	Type     string            `yaml:"type"` // "llm" (default) or "acp"
-	Model    string            `yaml:"model"`
-	Endpoint string            `yaml:"endpoint"`
-	APIKey   string            `yaml:"api_key,omitempty"`
-	Command  string            `yaml:"command"` // ACP: command to launch agent
-	Args     []string          `yaml:"args"`    // ACP: args for the command
-	Env      map[string]string `yaml:"env"`     // ACP: env vars for agent process
+	// Enabled: false drops the agent when the blueprint loads, as if the
+	// entry were not there. Omitted means enabled.
+	Enabled *bool `yaml:"enabled,omitempty"`
+
+	ID       string `yaml:"id"`
+	Name     string `yaml:"name"`
+	Type     string `yaml:"type"` // "llm" (default) or "acp"
+	Model    string `yaml:"model"`
+	Endpoint string `yaml:"endpoint"`
+	APIKey   string `yaml:"api_key,omitempty"`
+	// MF is an mf address (alias, endpoint/model or @tag) that sets
+	// Endpoint, Model and APIKey from mf's registry.
+	MF      string            `yaml:"mf,omitempty"`
+	Command string            `yaml:"command"` // ACP: command to launch agent
+	Args    []string          `yaml:"args"`    // ACP: args for the command
+	Env     map[string]string `yaml:"env"`     // ACP: env vars for agent process
 	// Prompt is the agent's system prompt. It may be a <% %> template, which
 	// is parsed at load and rendered on every turn — see RenderPrompt.
 	Prompt     string `yaml:"prompt"`
@@ -139,11 +147,17 @@ type Defaults struct {
 	Endpoint string `yaml:"endpoint"`
 	Model    string `yaml:"model"`
 	APIKey   string `yaml:"api_key,omitempty"` // supports ${VAR} env expansion
+	// MF is an mf address that sets Endpoint, Model and APIKey.
+	MF       string `yaml:"mf,omitempty"`
 	Thinking string `yaml:"thinking,omitempty"`
 }
 
 // FurnitureDef configures a piece of furniture on the floor.
 type FurnitureDef struct {
+	// Enabled: false drops the furniture when the blueprint loads, as if
+	// the entry were not there. Omitted means enabled.
+	Enabled *bool `yaml:"enabled,omitempty"`
+
 	Name    string            `yaml:"name"`              // identifier (e.g. "tasks")
 	Type    string            `yaml:"type"`              // "taskboard", "mcp", etc.
 	Command string            `yaml:"command,omitempty"` // executable for external MCP servers (stdio)
@@ -216,6 +230,9 @@ func validateOAuth(fd FurnitureDef) error {
 	return nil
 }
 
+// disabled reports whether an entry's enabled field is set to false.
+func disabled(enabled *bool) bool { return enabled != nil && !*enabled }
+
 // decodeStrict decodes YAML into v; a key without a matching field is an
 // error. An empty document decodes to the zero value.
 func decodeStrict(data []byte, v any) error {
@@ -238,6 +255,10 @@ func Load(path string) (*Blueprint, error) {
 	if err := decodeStrict(data, &bp); err != nil {
 		return nil, err
 	}
+
+	// Drop disabled entries first, so nothing below looks at them.
+	bp.Agents = slices.DeleteFunc(bp.Agents, func(a Agent) bool { return disabled(a.Enabled) })
+	bp.Furniture = slices.DeleteFunc(bp.Furniture, func(fd FurnitureDef) bool { return disabled(fd.Enabled) })
 
 	// Expand ${VAR} references across the whole blueprint, before anything
 	// else looks at a value. Runs here so it only ever sees inline YAML —
@@ -291,6 +312,8 @@ func Load(path string) (*Blueprint, error) {
 		}
 		bp.Agents[i] = a
 	}
+	// A referenced file can disable its agent too.
+	bp.Agents = slices.DeleteFunc(bp.Agents, func(a Agent) bool { return disabled(a.Enabled) })
 
 	for i := range bp.Agents {
 		if bp.Agents[i].PromptFile != "" {
@@ -329,6 +352,10 @@ func Load(path string) (*Blueprint, error) {
 		if fd.Workspace != "" && !filepath.IsAbs(fd.Workspace) {
 			fd.Workspace = filepath.Join(bpDir, fd.Workspace)
 		}
+	}
+
+	if err := resolveMF(&bp); err != nil {
+		return nil, err
 	}
 
 	// Apply defaults
