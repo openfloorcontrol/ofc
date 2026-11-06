@@ -401,3 +401,38 @@ func TestFurnitureTextResultIsPlain(t *testing.T) {
 		t.Errorf("tool result = %+v, want the text unquoted", tools)
 	}
 }
+
+// A later turn replays the agent's earlier tool calls as it made them:
+// same call ID, tool name and arguments, with the result under that ID.
+func TestLaterTurnReplaysToolCallsAsMade(t *testing.T) {
+	h := newHarness(t, nil,
+		llmtest.Response{ToolCalls: []llmtest.Call{{Name: "tasks__add_task", Args: `{"title":"first"}`}}},
+		llmtest.Response{Content: "Added it."},
+		llmtest.Response{Content: "Still there."},
+	)
+	h.turn(t, "add a task")
+	h.turn(t, "is it still there?")
+
+	reqs := h.mock.Requests()
+	if len(reqs) != 3 {
+		t.Fatalf("got %d requests, want 3", len(reqs))
+	}
+	made := byRole(reqs[1].Messages, "assistant")[0].ToolCalls[0]
+
+	var replayed *llmtest.Call
+	for _, m := range byRole(reqs[2].Messages, "assistant") {
+		if len(m.ToolCalls) > 0 {
+			replayed = &m.ToolCalls[0]
+		}
+	}
+	if replayed == nil {
+		t.Fatalf("turn 2 replays no tool call: %+v", reqs[2].Messages)
+	}
+	if replayed.ID != made.ID || replayed.Name != "tasks__add_task" || replayed.Args != `{"title":"first"}` {
+		t.Errorf("replayed call = %+v, want %+v", *replayed, made)
+	}
+	tools := byRole(reqs[2].Messages, "tool")
+	if len(tools) != 1 || tools[0].ToolCallID != made.ID || !strings.Contains(tools[0].Content, "first") {
+		t.Errorf("replayed result = %+v, want the add_task output under %s", tools, made.ID)
+	}
+}

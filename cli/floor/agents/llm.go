@@ -99,8 +99,11 @@ func (a *LLMAgent) Run(ctx context.Context, turn floor.AgentTurn) error {
 			turn.Stream(floor.ToolCallResult{AgentID: a.agent.ID, ID: ex.Call.ID, Title: ex.Title, Output: ex.Output})
 
 			interactions = append(interactions, floor.ToolInteraction{
-				Command: ex.Title,
-				Output:  ex.Output,
+				Command:   ex.Title,
+				Output:    ex.Output,
+				CallID:    ex.Call.ID,
+				Tool:      ex.Call.Function.Name,
+				Arguments: ex.Call.Function.Arguments,
 			})
 
 			messages = append(messages, llmsdk.Message{
@@ -161,35 +164,34 @@ func (a *LLMAgent) buildContext(turn floor.AgentTurn) ([]llmsdk.Message, error) 
 				Content: msg.Content,
 			})
 		} else if msg.From == a.agent.ID {
-			// Own messages: role = "assistant", full tool context
-			if len(msg.ToolInteractions) > 0 {
+			// Own messages: role = "assistant", with the tool calls exactly
+			// as the agent made them. Interactions stored without the call
+			// (CallID empty) are not replayed.
+			var replayed []floor.ToolInteraction
+			for _, ti := range msg.ToolInteractions {
+				if ti.CallID != "" {
+					replayed = append(replayed, ti)
+				}
+			}
+			if len(replayed) > 0 {
 				// Batch all tool calls into one assistant message
 				var calls []llmsdk.ToolCall
-				for i, ti := range msg.ToolInteractions {
-					callID := fmt.Sprintf("call_%d", i)
-					calls = append(calls, llmsdk.ToolCall{
-						ID:   callID,
-						Type: "function",
-						Function: struct {
-							Name      string `json:"name"`
-							Arguments string `json:"arguments"`
-						}{
-							Name:      "bash",
-							Arguments: fmt.Sprintf(`{"cmd":%q}`, ti.Command),
-						},
-					})
+				for _, ti := range replayed {
+					call := llmsdk.ToolCall{ID: ti.CallID, Type: "function"}
+					call.Function.Name = ti.Tool
+					call.Function.Arguments = ti.Arguments
+					calls = append(calls, call)
 				}
 				messages = append(messages, llmsdk.Message{
 					Role:      "assistant",
 					ToolCalls: calls,
 				})
 				// Tool results
-				for i, ti := range msg.ToolInteractions {
-					callID := fmt.Sprintf("call_%d", i)
+				for _, ti := range replayed {
 					messages = append(messages, llmsdk.Message{
 						Role:       "tool",
 						Content:    ti.Output,
-						ToolCallID: callID,
+						ToolCallID: ti.CallID,
 					})
 				}
 				// Final response after tool use
