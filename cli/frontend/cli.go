@@ -122,6 +122,13 @@ func (f *CLIFrontend) RunLoop(client SessionClient, initialPrompt string) error 
 			f.clearThinking()
 			f.out.Print("\n") // newline after streaming
 
+		case floor.MessagePosted:
+			// An agent's streamed answer is complete: end its line, so
+			// what follows starts after an empty line.
+			if from := e.Message.From; from != "@user" && from != "@system" {
+				f.out.Print("\n")
+			}
+
 		case floor.AgentPassedEvent:
 			f.out.Terminal("\r\033[K")
 			label := e.AgentID
