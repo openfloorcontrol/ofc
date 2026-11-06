@@ -5,10 +5,14 @@
 name: everything-demo
 description: "Testing external MCP server integration"
 
+models:
+  openai:
+    endpoint: ${OPENAI_BASE_URL}
+    model: ${OPENAI_MODEL}
+    api_key: ${OPENAI_API_KEY}
+
 defaults:
-  endpoint: ${OPENAI_BASE_URL}
-  model: ${OPENAI_MODEL}
-  api_key: ${OPENAI_API_KEY}
+  model: openai
 
 furniture:
   - name: everything

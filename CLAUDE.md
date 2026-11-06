@@ -157,9 +157,12 @@ ACP agents: get MCP server URLs in session, connect themselves
 ```yaml
 name: my-floor
 description: "..."
+models:                                # the blueprint's own models
+  local:
+    endpoint: http://localhost:11434/v1
+    model: some-model
 defaults:
-  endpoint: http://localhost:11434/v1
-  model: some-model
+  model: local                         # a name from models:, else an mf address
 furniture:
   - name: tasks
     type: taskboard                    # built-in

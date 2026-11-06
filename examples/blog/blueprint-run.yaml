@@ -1,9 +1,13 @@
 name: blog-coder
 description: "Single coder agent for blog post experiments"
 
+models:
+  glm:
+    endpoint: http://localhost:11434/v1
+    model: glm-4.7:cloud
+
 defaults:
-  endpoint: http://localhost:11434/v1
-  model: glm-4.7:cloud
+  model: glm
 
 agents:
   - id: "@code"

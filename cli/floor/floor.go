@@ -358,6 +358,11 @@ func (f *Floor) Start(renderInfo func(string)) error {
 		renderInfo(fmt.Sprintf("Furniture ready: %s (%s)", fd.Name, fd.Type))
 	}
 	for _, a := range f.Blueprint.Agents {
+		if a.ModelSource != "" {
+			renderInfo(fmt.Sprintf("Model of %s: %s", a.ID, a.ModelSource))
+		}
+	}
+	for _, a := range f.Blueprint.Agents {
 		if a.Type != "acp" {
 			continue
 		}

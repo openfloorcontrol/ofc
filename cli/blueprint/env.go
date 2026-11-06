@@ -144,15 +144,14 @@ func expandEnvVars(v reflect.Value, location string, missing *[]missingVar) {
 		}
 
 	case reflect.Map:
-		// Map values aren't addressable, so each one is expanded into a
-		// temporary and written back through SetMapIndex.
-		if v.Type().Elem().Kind() != reflect.String {
-			return // no nested structs in blueprint maps today
-		}
+		// Map values aren't addressable, so each one is expanded in an
+		// addressable copy and written back through SetMapIndex.
 		for _, k := range v.MapKeys() {
 			loc := fmt.Sprintf("%s[%v]", location, k.Interface())
-			expanded := expandString(v.MapIndex(k).String(), loc, missing)
-			v.SetMapIndex(k, reflect.ValueOf(expanded))
+			tmp := reflect.New(v.Type().Elem()).Elem()
+			tmp.Set(v.MapIndex(k))
+			expandEnvVars(tmp, loc, missing)
+			v.SetMapIndex(k, tmp)
 		}
 
 	case reflect.Ptr, reflect.Interface:

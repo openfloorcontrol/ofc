@@ -98,23 +98,29 @@ type Agent struct {
 	// entry is replaced by the contents of that file at load time; other
 	// fields on the entry are ignored. Path resolves relative to the
 	// blueprint directory. Referenced files are read as-is — ${VAR}
-	// expansion runs on the blueprint only, so env-coupled fields
-	// (api_key, endpoint) belong in defaults.
+	// expansion runs on the blueprint only, so env-coupled values (a
+	// model's endpoint and api_key) belong in the blueprint's models.
 	Ref string `yaml:"ref,omitempty"`
 
 	// Enabled: false drops the agent when the blueprint loads, as if the
 	// entry were not there. Omitted means enabled.
 	Enabled *bool `yaml:"enabled,omitempty"`
 
-	ID       string `yaml:"id"`
-	Name     string `yaml:"name"`
-	Type     string `yaml:"type"` // "llm" (default) or "acp"
-	Model    string `yaml:"model"`
-	Endpoint string `yaml:"endpoint"`
-	APIKey   string `yaml:"api_key,omitempty"`
-	// MF is an mf address (alias, endpoint/model or @tag) that sets
-	// Endpoint, Model and APIKey from mf's registry.
-	MF      string            `yaml:"mf,omitempty"`
+	ID   string `yaml:"id"`
+	Name string `yaml:"name"`
+	Type string `yaml:"type"` // "llm" (default) or "acp"
+
+	// ModelRef names an LLM agent's model: a name from the blueprint's
+	// models section, else an mf address. Empty means defaults.model.
+	ModelRef string `yaml:"model,omitempty"`
+	// Endpoint, Model (the provider's model ID) and APIKey are the
+	// resolved model, and ModelSource says where it came from. Load
+	// sets them from ModelRef.
+	Endpoint    string `yaml:"-"`
+	Model       string `yaml:"-"`
+	APIKey      string `yaml:"-"`
+	ModelSource string `yaml:"-"`
+
 	Command string            `yaml:"command"` // ACP: command to launch agent
 	Args    []string          `yaml:"args"`    // ACP: args for the command
 	Env     map[string]string `yaml:"env"`     // ACP: env vars for agent process
@@ -144,12 +150,17 @@ type Agent struct {
 
 // Defaults for the blueprint
 type Defaults struct {
-	Endpoint string `yaml:"endpoint"`
-	Model    string `yaml:"model"`
-	APIKey   string `yaml:"api_key,omitempty"` // supports ${VAR} env expansion
-	// MF is an mf address that sets Endpoint, Model and APIKey.
-	MF       string `yaml:"mf,omitempty"`
+	// Model is the model of every LLM agent that names none: a name from
+	// the models section, else an mf address.
+	Model    string `yaml:"model,omitempty"`
 	Thinking string `yaml:"thinking,omitempty"`
+}
+
+// ModelDef is a model the blueprint defines itself, in its models section.
+type ModelDef struct {
+	Endpoint string `yaml:"endpoint"`          // OpenAI-compatible API base URL
+	Model    string `yaml:"model"`             // the provider's model ID
+	APIKey   string `yaml:"api_key,omitempty"` // supports ${VAR} env expansion
 }
 
 // FurnitureDef configures a piece of furniture on the floor.
@@ -196,11 +207,14 @@ type OAuthConfig struct {
 // Blueprint is a complete floor configuration: what the floor is. How a
 // floor is run (frontend, ports, session store) is set by ofc's flags.
 type Blueprint struct {
-	Name        string         `yaml:"name"`
-	Description string         `yaml:"description"`
-	Defaults    Defaults       `yaml:"defaults"`
-	Agents      []Agent        `yaml:"agents"`
-	Furniture   []FurnitureDef `yaml:"furniture,omitempty"`
+	Name        string   `yaml:"name"`
+	Description string   `yaml:"description"`
+	Defaults    Defaults `yaml:"defaults"`
+	// Models are the blueprint's own models, by the name agents refer to
+	// them with; a name not here is looked up in mf.
+	Models    map[string]ModelDef `yaml:"models,omitempty"`
+	Agents    []Agent             `yaml:"agents"`
+	Furniture []FurnitureDef      `yaml:"furniture,omitempty"`
 
 	// Dir is the absolute directory containing the blueprint file.
 	// Used as the cwd for subprocesses (MCP servers, ACP agents) so that
@@ -354,21 +368,8 @@ func Load(path string) (*Blueprint, error) {
 		}
 	}
 
-	if err := resolveMF(&bp); err != nil {
-		return nil, err
-	}
-
 	// Apply defaults
 	for i := range bp.Agents {
-		if bp.Agents[i].Endpoint == "" {
-			bp.Agents[i].Endpoint = bp.Defaults.Endpoint
-		}
-		if bp.Agents[i].Model == "" {
-			bp.Agents[i].Model = bp.Defaults.Model
-		}
-		if bp.Agents[i].APIKey == "" {
-			bp.Agents[i].APIKey = bp.Defaults.APIKey
-		}
 		if bp.Agents[i].Thinking == "" {
 			bp.Agents[i].Thinking = bp.Defaults.Thinking
 		}
@@ -386,6 +387,9 @@ func Load(path string) (*Blueprint, error) {
 		}
 	}
 
+	if err := resolveModels(&bp); err != nil {
+		return nil, err
+	}
 	if err := validateAgentFurniture(&bp); err != nil {
 		return nil, err
 	}

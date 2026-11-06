@@ -29,9 +29,13 @@ var initCmd = &cobra.Command{
 name: %s
 description: "Describe your floor here"
 
+models:
+  local:
+    endpoint: http://localhost:11434/v1
+    model: llama3
+
 defaults:
-  endpoint: http://localhost:11434/v1
-  model: llama3
+  model: local
 
 agents:
   - id: "@assistant"

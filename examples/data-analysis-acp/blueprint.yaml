@@ -5,9 +5,13 @@
 name: data-analysis-acp
 description: "Data analysis team: analyst with file access, Claude Code coder"
 
+models:
+  glm:
+    endpoint: http://localhost:11434/v1
+    model: glm-4.7:cloud
+
 defaults:
-  endpoint: http://localhost:11434/v1
-  model: glm-4.7:cloud
+  model: glm
 
 furniture:
   - name: fs
