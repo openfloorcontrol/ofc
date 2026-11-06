@@ -1,10 +1,8 @@
 package frontend
 
 import (
-	"bufio"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"time"
 
@@ -15,7 +13,7 @@ import (
 type CLIFrontend struct {
 	out      *Output
 	colorMap map[string]string
-	reader   *bufio.Reader
+	lines    lineReader
 
 	// Reasoning is collapsed into a single line that is rewritten in place
 	// and cleared once the answer starts, so it never fills the transcript.
@@ -24,12 +22,14 @@ type CLIFrontend struct {
 	thinkingSince time.Time
 }
 
-// NewCLI creates a CLI frontend with terminal output and optional log file.
-func NewCLI(logPath string, debug bool, colorMap map[string]string) *CLIFrontend {
+// NewCLI creates a CLI frontend with terminal output and optional log
+// file. On a terminal, input lines can be edited and are kept in
+// historyFile ("" for no history).
+func NewCLI(logPath string, debug bool, colorMap map[string]string, historyFile string) *CLIFrontend {
 	return &CLIFrontend{
 		out:      NewOutput(logPath, debug),
 		colorMap: colorMap,
-		reader:   bufio.NewReader(os.Stdin),
+		lines:    newLineReader(historyFile),
 	}
 }
 
@@ -45,8 +45,9 @@ func (f *CLIFrontend) LogWriter() io.Writer {
 	return f.out.LogWriter()
 }
 
-// Close closes the log file.
+// Close closes the input and the log file.
 func (f *CLIFrontend) Close() {
+	f.lines.Close()
 	f.out.Close()
 }
 
@@ -173,9 +174,10 @@ func (f *CLIFrontend) RunLoop(client SessionClient, initialPrompt string) error 
 func (f *CLIFrontend) readStdinLoop(client SessionClient, readyForInput chan struct{}, stdinDone chan<- struct{}) {
 	for range readyForInput {
 		f.out.Print("\n")
-		f.out.AgentLabel("@user", f.agentColor("@user"))
+		prompt := fmt.Sprintf("%s%s[%s]:%s ", Bold, f.agentColor("@user"), "@user", Reset)
+		f.out.Log("%s", prompt)
 
-		input, err := f.reader.ReadString('\n')
+		input, err := f.lines.ReadLine(prompt)
 		if err != nil {
 			f.out.Print("%s[Interrupted]%s\n", Dim, Reset)
 			close(stdinDone)
