@@ -183,8 +183,10 @@ prompt: |
 
 	bpPath := filepath.Join(dir, "blueprint.yaml")
 	bpYAML := `name: test
-defaults:
-  endpoint: http://localhost:11434/v1
+models:
+  sonnet46:
+    endpoint: http://localhost:11434/v1
+    model: claude-sonnet-4-6
 furniture:
   - name: filesystem
     type: taskboard
@@ -206,11 +208,11 @@ agents:
 	if a.ID != "@datascientist" {
 		t.Errorf("ID = %q, want @datascientist", a.ID)
 	}
-	if a.Model != "sonnet46" {
-		t.Errorf("Model = %q, want sonnet46", a.Model)
+	if a.Model != "claude-sonnet-4-6" {
+		t.Errorf("Model = %q, want the ID of the blueprint model sonnet46", a.Model)
 	}
 	if a.Endpoint != "http://localhost:11434/v1" {
-		t.Errorf("Endpoint = %q, want defaults-inherited value", a.Endpoint)
+		t.Errorf("Endpoint = %q, want the blueprint model's endpoint", a.Endpoint)
 	}
 	if len(a.Furniture) != 1 || a.Furniture[0] != "filesystem" {
 		t.Errorf("Furniture = %v, want [filesystem]", a.Furniture)
@@ -224,13 +226,13 @@ agents:
 }
 
 // Ref'd files are read as-is: ${VAR} in them is not expanded, so env-coupled
-// values belong in the referring blueprint's defaults.
+// values belong in the referring blueprint (e.g. its models).
 func TestLoad_AgentRefNoEnvExpansion(t *testing.T) {
 	t.Setenv("OFC_REF_TEST_KEY", "secret-value")
 	dir := t.TempDir()
 	agentPath := filepath.Join(dir, "foo.agent.yaml")
 	if err := os.WriteFile(agentPath, []byte(`id: "@foo"
-api_key: ${OFC_REF_TEST_KEY}
+prompt: "key ${OFC_REF_TEST_KEY}"
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -246,8 +248,8 @@ agents:
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if bp.Agents[0].APIKey != "${OFC_REF_TEST_KEY}" {
-		t.Errorf("APIKey = %q, want literal ${OFC_REF_TEST_KEY} — refs must not env-expand", bp.Agents[0].APIKey)
+	if bp.Agents[0].Prompt != "key ${OFC_REF_TEST_KEY}" {
+		t.Errorf("Prompt = %q, want literal ${OFC_REF_TEST_KEY} — refs must not env-expand", bp.Agents[0].Prompt)
 	}
 }
 

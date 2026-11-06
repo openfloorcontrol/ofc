@@ -4,10 +4,14 @@
 name: data-analysis
 description: "Data analysis team with analyst and coder"
 
+models:
+  glm:
+    endpoint: http://localhost:11434/v1
+    model: glm-4.7:cloud
+
 # Default settings
 defaults:
-  endpoint: http://localhost:11434/v1
-  model: glm-4.7:cloud
+  model: glm
 
 # Agents on this floor
 agents:

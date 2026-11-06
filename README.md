@@ -60,9 +60,13 @@ The core abstraction is `blueprint.yaml` — like `docker-compose.yaml` for AI t
 name: data-analysis
 description: "Data analysis team with analyst and coder"
 
+models:
+  local:
+    endpoint: http://localhost:11434/v1
+    model: llama3
+
 defaults:
-  endpoint: http://localhost:11434/v1
-  model: llama3
+  model: local       # a name from models:, else an mf address
 
 agents:
   - id: "@data"

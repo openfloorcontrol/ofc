@@ -4,9 +4,13 @@
 name: acp-test
 description: "Test ACP integration with Claude Code"
 
+models:
+  glm:
+    endpoint: http://localhost:11434/v1
+    model: glm-4.7:cloud
+
 defaults:
-  endpoint: http://localhost:11434/v1
-  model: glm-4.7:cloud
+  model: glm
 
 agents:
   - id: "@code"

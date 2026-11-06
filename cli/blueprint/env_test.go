@@ -73,7 +73,7 @@ func TestExpandBlueprintEnv_ReachesEveryField(t *testing.T) {
 	t.Setenv("OFC_TEST_BIN", "/usr/bin/agent")
 
 	bp := &Blueprint{
-		Defaults: Defaults{APIKey: "${OFC_TEST_KEY}"},
+		Models: map[string]ModelDef{"gw": {APIKey: "${OFC_TEST_KEY}"}},
 		Agents: []Agent{{
 			ID:      "@claude",
 			Command: "${OFC_TEST_BIN}",
@@ -91,14 +91,14 @@ func TestExpandBlueprintEnv_ReachesEveryField(t *testing.T) {
 	}
 
 	checks := map[string]string{
-		"defaults.api_key": bp.Defaults.APIKey,
+		"model api_key":    bp.Models["gw"].APIKey,
 		"agent command":    bp.Agents[0].Command,
 		"agent args":       bp.Agents[0].Args[1],
 		"agent env":        bp.Agents[0].Env["ANTHROPIC_API_KEY"],
 		"furniture header": bp.Furniture[0].Headers["Authorization"],
 	}
 	want := map[string]string{
-		"defaults.api_key": "sk-123",
+		"model api_key":    "sk-123",
 		"agent command":    "/usr/bin/agent",
 		"agent args":       "sk-123",
 		"agent env":        "sk-123",
@@ -116,12 +116,12 @@ func TestExpandBlueprintEnv_ReachesEveryField(t *testing.T) {
 func TestExpandBlueprintEnv_DollarInValueSurvives(t *testing.T) {
 	t.Setenv("OFC_TRICKY_KEY", "sk-ab$cd-ef")
 
-	bp := &Blueprint{Defaults: Defaults{APIKey: "${OFC_TRICKY_KEY}"}}
+	bp := &Blueprint{Models: map[string]ModelDef{"gw": {APIKey: "${OFC_TRICKY_KEY}"}}}
 	if err := expandBlueprintEnv(bp); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if bp.Defaults.APIKey != "sk-ab$cd-ef" {
-		t.Errorf("api_key = %q, want the value intact", bp.Defaults.APIKey)
+	if got := bp.Models["gw"].APIKey; got != "sk-ab$cd-ef" {
+		t.Errorf("api_key = %q, want the value intact", got)
 	}
 }
 
@@ -142,7 +142,7 @@ func TestExpandBlueprintEnv_ReachesPrompts(t *testing.T) {
 // All missing variables are reported at once, with their locations.
 func TestExpandBlueprintEnv_ReportsAllMissing(t *testing.T) {
 	bp := &Blueprint{
-		Defaults: Defaults{APIKey: "${OFC_MISSING_ONE}"},
+		Models: map[string]ModelDef{"gw": {APIKey: "${OFC_MISSING_ONE}"}},
 		Agents: []Agent{{
 			ID:  "@a",
 			Env: map[string]string{"TOKEN": "${OFC_MISSING_TWO}"},
@@ -163,7 +163,7 @@ func TestExpandBlueprintEnv_ReportsAllMissing(t *testing.T) {
 	}
 
 	msg := err.Error()
-	for _, want := range []string{"OFC_MISSING_ONE", "OFC_MISSING_TWO", "defaults.api_key", "agents[0].env[TOKEN]"} {
+	for _, want := range []string{"OFC_MISSING_ONE", "OFC_MISSING_TWO", "models[gw].api_key", "agents[0].env[TOKEN]"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("error message missing %q:\n%s", want, msg)
 		}
@@ -174,8 +174,11 @@ func TestLoad_MissingEnvIsAnError(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "blueprint.yaml")
 	yaml := `name: test
-defaults:
-  api_key: ${OFC_DEFINITELY_NOT_SET}
+models:
+  gw:
+    endpoint: http://localhost:11434/v1
+    model: m
+    api_key: ${OFC_DEFINITELY_NOT_SET}
 agents:
   - id: "@a"
 `
@@ -191,15 +194,19 @@ agents:
 }
 
 func TestLoad_EnvDefaultKeepsLoadWorking(t *testing.T) {
-	// OFC_ENDPOINT is commonly set in dev shells — clear it so the ${VAR:-…}
-	// default is what gets tested, not whatever the developer exported.
-	t.Setenv("OFC_ENDPOINT", "")
+	// Clear the variable so the ${VAR:-…} default is what gets tested,
+	// not whatever the developer exported.
+	t.Setenv("OFC_TEST_ENDPOINT", "")
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "blueprint.yaml")
 	yaml := `name: test
+models:
+  local:
+    endpoint: ${OFC_TEST_ENDPOINT:-http://localhost:11434/v1}
+    model: m
 defaults:
-  endpoint: ${OFC_ENDPOINT:-http://localhost:11434/v1}
+  model: local
 agents:
   - id: "@a"
 `
@@ -211,8 +218,8 @@ agents:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if bp.Defaults.Endpoint != "http://localhost:11434/v1" {
-		t.Errorf("endpoint = %q, want the default", bp.Defaults.Endpoint)
+	if bp.Agents[0].Endpoint != "http://localhost:11434/v1" {
+		t.Errorf("endpoint = %q, want the default", bp.Agents[0].Endpoint)
 	}
 }
 

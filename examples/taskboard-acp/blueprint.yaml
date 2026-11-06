@@ -5,9 +5,13 @@
 name: taskboard-acp
 description: "Shared task board between planner and Claude Code coder"
 
+models:
+  glm:
+    endpoint: http://localhost:11434/v1
+    model: glm-4.7:cloud
+
 defaults:
-  endpoint: http://localhost:11434/v1
-  model: glm-4.7:cloud
+  model: glm
 
 furniture:
   - name: tasks

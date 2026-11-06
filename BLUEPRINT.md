@@ -16,9 +16,13 @@ ofc run "Do the thing"  # runs with an initial prompt
 name: my-floor
 description: "What this floor does"
 
+models:
+  local:
+    endpoint: http://localhost:11434/v1
+    model: llama3
+
 defaults:
-  endpoint: http://localhost:11434/v1
-  model: llama3
+  model: local
 
 agents:
   - id: "@assistant"
@@ -35,7 +39,8 @@ furniture:
 |-------|----------|-------------|
 | `name` | yes | Floor name, shown in the header |
 | `description` | no | Short description of the floor |
-| `defaults` | no | Default `endpoint`, `model`, `api_key` (or `mf`) and `thinking` for all agents |
+| `models` | no | The blueprint's own models, by name — see [Models](#models) |
+| `defaults` | no | Default `model` and `thinking` for all agents |
 | `agents` | yes | List of agents on this floor |
 | `furniture` | no | List of shared furniture (task boards, MCP servers, sandboxes) |
 
@@ -56,9 +61,11 @@ prices and shell snippets survive intact. The syntax follows bash:
 | `${VAR:-default}` | `default` | `default` |
 
 ```yaml
-defaults:
-  endpoint: ${OPENAI_BASE_URL:-http://localhost:11434/v1}   # optional
-  api_key: ${OPENAI_API_KEY}                                # required
+models:
+  openai:
+    endpoint: ${OPENAI_BASE_URL:-https://api.openai.com/v1}   # optional
+    model: gpt-5
+    api_key: ${OPENAI_API_KEY}                                # required
 ```
 
 A bare `${VAR}` that isn't set is a hard error, and every missing variable is
@@ -66,7 +73,7 @@ listed at once:
 
 ```
 Error loading blueprint: unset environment variables:
-  defaults.api_key: ${OPENAI_API_KEY}
+  models[openai].api_key: ${OPENAI_API_KEY}
   furniture[0].headers[Authorization]: ${MCP_TOKEN}
 ```
 
@@ -110,44 +117,53 @@ agents:
       If you have nothing to add, respond with exactly: [PASS]
 ```
 
-Hosted endpoints need an `api_key`, sent as `Authorization: Bearer <key>`:
+### Models
+
+An LLM agent's `model:` names a model; `defaults.model` names it for every
+agent that doesn't. The name is looked up in the blueprint's own `models:`
+first, and otherwise in [mf](https://github.com/mikiobraun/mf)'s registry:
 
 ```yaml
-agents:
-  - id: "@data"
+models:
+  local:
+    endpoint: http://localhost:11434/v1
+    model: qwen3:8b                       # the provider's model ID
+  openai:
     endpoint: https://api.openai.com/v1
-    model: gpt-4o
+    model: gpt-5
     api_key: ${OPENAI_API_KEY}
-```
 
-Set `api_key` under `defaults:` to share one key across agents; a per-agent value
-overrides it. Keep the secret in the environment rather than the file — see
-[Environment variables](#environment-variables). With no key at all the header is
-omitted entirely, which is what lets local endpoints like Ollama work.
-
-### Models from mf
-
-With [mf](https://github.com/mikiobraun/mf), an agent names a model from mf's
-registry instead of setting `endpoint`, `model` and `api_key`:
-
-```yaml
 defaults:
-  mf: "@coding"          # the first mf model tagged coding
+  model: local
 
 agents:
-  - id: "@planner"       # uses defaults.mf
+  - id: "@planner"                        # local, from defaults
   - id: "@coder"
-    mf: fast             # an mf alias; endpoint/model works too
+    model: openai                         # from models:
+  - id: "@critic"
+    model: "@coding"                      # not in models: → mf
 ```
 
-`mf` takes any mf address — an alias, `endpoint/model`, or `@tag` — and sets
-`endpoint`, `model` and `api_key` from it, with the key from `MF_KEY_<ENDPOINT>`
-or mf's secrets. On an agent it sets the agent's own fields; under `defaults:`
-it sets the defaults, which an agent can override field by field like any
-default. `mf` and any of the three fields it sets cannot appear together, and
-`mf` is for LLM agents only. ofc reads the registry in `$MF_CONFIG_DIR`, else
-`~/.config/mf`, when the blueprint loads; an address mf can't resolve stops the
-floor from starting.
+A blueprint model has an `endpoint` (an OpenAI-compatible API base URL), the
+provider's `model` ID and, for hosted endpoints, an `api_key`, sent as
+`Authorization: Bearer <key>`. Keep the key in the environment — see
+[Environment variables](#environment-variables). With no key the header is
+omitted, which is what lets local endpoints like Ollama work.
+
+A name that isn't in `models:` is an mf address — an alias, `endpoint/model`,
+or `@tag` — resolved in mf's registry (`$MF_CONFIG_DIR`, else `~/.config/mf`),
+with the key from `MF_KEY_<ENDPOINT>` or mf's secrets. ofc reads the registry
+only when a blueprint uses it, so a blueprint with its own models needs no mf.
+A name that resolves nowhere stops the floor from starting.
+
+When the floor starts it prints where each agent's model came from:
+
+```
+[System]: Model of @planner: local (blueprint) → qwen3:8b
+[System]: Model of @critic: @coding (mf) → gw/anthropic/claude-haiku-5-5
+```
+
+`model` is for LLM agents; an ACP agent chooses its own model.
 
 ### Thinking
 
@@ -301,10 +317,7 @@ varies invalidates it.
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `model` | `defaults.model` | LLM model name |
-| `endpoint` | `defaults.endpoint` | OpenAI-compatible API URL |
-| `api_key` | `defaults.api_key` | Bearer token for `endpoint`. Omitted from the request when empty. |
-| `mf` | | mf address that sets `endpoint`, `model` and `api_key` — see [Models from mf](#models-from-mf) |
+| `model` | `defaults.model` | A model from the blueprint's `models:`, else an mf address — see [Models](#models) |
 | `thinking` | `defaults.thinking`, else `auto` | How reasoning is separated: `auto`, `field`, `tags`, `none` — see [Thinking](#thinking) |
 | `thinking_tags` | `["<think>", "</think>"]` | Inline tag pair to scan for |
 
@@ -468,9 +481,13 @@ When all agents in a room are done (no more agents to trigger), the room auto-cl
 name: data-analysis
 description: "Data analysis team with analyst and coder"
 
+models:
+  glm:
+    endpoint: http://localhost:11434/v1
+    model: glm-4.7:cloud
+
 defaults:
-  endpoint: http://localhost:11434/v1
-  model: glm-4.7:cloud
+  model: glm
 
 agents:
   - id: "@data"
