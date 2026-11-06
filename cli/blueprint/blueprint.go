@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"text/template"
 
@@ -101,6 +102,10 @@ type Agent struct {
 	// (api_key, endpoint) belong in defaults.
 	Ref string `yaml:"ref,omitempty"`
 
+	// Enabled: false drops the agent when the blueprint loads, as if the
+	// entry were not there. Omitted means enabled.
+	Enabled *bool `yaml:"enabled,omitempty"`
+
 	ID       string `yaml:"id"`
 	Name     string `yaml:"name"`
 	Type     string `yaml:"type"` // "llm" (default) or "acp"
@@ -149,6 +154,10 @@ type Defaults struct {
 
 // FurnitureDef configures a piece of furniture on the floor.
 type FurnitureDef struct {
+	// Enabled: false drops the furniture when the blueprint loads, as if
+	// the entry were not there. Omitted means enabled.
+	Enabled *bool `yaml:"enabled,omitempty"`
+
 	Name    string            `yaml:"name"`              // identifier (e.g. "tasks")
 	Type    string            `yaml:"type"`              // "taskboard", "mcp", etc.
 	Command string            `yaml:"command,omitempty"` // executable for external MCP servers (stdio)
@@ -221,6 +230,9 @@ func validateOAuth(fd FurnitureDef) error {
 	return nil
 }
 
+// disabled reports whether an entry's enabled field is set to false.
+func disabled(enabled *bool) bool { return enabled != nil && !*enabled }
+
 // decodeStrict decodes YAML into v; a key without a matching field is an
 // error. An empty document decodes to the zero value.
 func decodeStrict(data []byte, v any) error {
@@ -243,6 +255,10 @@ func Load(path string) (*Blueprint, error) {
 	if err := decodeStrict(data, &bp); err != nil {
 		return nil, err
 	}
+
+	// Drop disabled entries first, so nothing below looks at them.
+	bp.Agents = slices.DeleteFunc(bp.Agents, func(a Agent) bool { return disabled(a.Enabled) })
+	bp.Furniture = slices.DeleteFunc(bp.Furniture, func(fd FurnitureDef) bool { return disabled(fd.Enabled) })
 
 	// Expand ${VAR} references across the whole blueprint, before anything
 	// else looks at a value. Runs here so it only ever sees inline YAML —
@@ -296,6 +312,8 @@ func Load(path string) (*Blueprint, error) {
 		}
 		bp.Agents[i] = a
 	}
+	// A referenced file can disable its agent too.
+	bp.Agents = slices.DeleteFunc(bp.Agents, func(a Agent) bool { return disabled(a.Enabled) })
 
 	for i := range bp.Agents {
 		if bp.Agents[i].PromptFile != "" {

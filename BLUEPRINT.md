@@ -283,11 +283,30 @@ Worth knowing if you rely on prompt caching: a template whose output is
 identical each turn keeps the prefix stable and stays cacheable. One that
 varies invalidates it.
 
+### Disabling an agent or furniture
+
+`enabled: false` on an agent or furniture entry removes it from the floor
+without deleting it:
+
+```yaml
+agents:
+  - id: "@reviewer"
+    enabled: false
+  - ref: ./critic.agent.yaml
+    enabled: false        # the file is not read
+```
+
+The blueprint loads as if the entry weren't there: its `${VAR}`s, its model
+and its furniture are not looked at. A referenced agent file can say
+`enabled: false` itself. An agent that lists disabled furniture fails to load,
+as for any furniture that isn't on the floor.
+
 ### Agent fields
 
 | Field | Default | Description |
 |-------|---------|-------------|
 | `id` | *required* | Unique ID, must start with `@` (e.g. `"@data"`) |
+| `enabled` | `true` | `false` removes the agent from the floor — see [Disabling](#disabling-an-agent-or-furniture) |
 | `name` | | Human-readable name |
 | `type` | `"llm"` | `"llm"` for OpenAI-compatible API, `"acp"` for Agent Client Protocol |
 | `prompt` | | System prompt defining the agent's role and behavior |
@@ -392,6 +411,7 @@ With the default `authorization_code` grant, a person consents once: run `ofc au
 |-------|---------|-------------|
 | `name` | *required* | Identifier used in agent `furniture` lists |
 | `type` | *required* | `"taskboard"` (built-in), `"mcp"` (external MCP server) or `"sandbox"` (Docker container) |
+| `enabled` | `true` | `false` removes the furniture from the floor — see [Disabling](#disabling-an-agent-or-furniture) |
 | `command` | | Command to launch the MCP server (stdio transport) |
 | `args` | `[]` | Arguments for the command |
 | `url` | | URL of an already-running MCP server (HTTP transport) |
