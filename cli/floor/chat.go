@@ -50,6 +50,14 @@ type UserCommandEvent struct {
 	Command string
 }
 
+// AddressDecided carries the floor's Addresser's answer for decision Seq
+// of the room it is posted to; the session loop turns it into who speaks
+// next.
+type AddressDecided struct {
+	Seq     uint64
+	Address Address
+}
+
 // --- Emitted by the session loop to subscribers (never posted to a room) ---
 
 // AgentStarted is emitted when the session loop dispatches an agent.
@@ -78,6 +86,7 @@ func (AgentFinished) chatEventMarker()    {}
 func (AgentPassedEvent) chatEventMarker() {}
 func (AgentErrorEvent) chatEventMarker()  {}
 func (UserCommandEvent) chatEventMarker() {}
+func (AddressDecided) chatEventMarker()   {}
 func (AgentStarted) chatEventMarker()     {}
 func (AwaitingInput) chatEventMarker()    {}
 func (InfoEvent) chatEventMarker()        {}

@@ -1,6 +1,7 @@
 package floor
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"strings"
@@ -19,6 +20,11 @@ type Decision struct {
 // It receives events, updates state, and returns actions.
 // It has NO I/O, NO goroutines, NO channels.
 //
+// A decision takes three steps: Observe updates the turn state for an
+// event, an Addresser decides whom the room's last message addresses
+// (given Request), and Next turns that address into who speaks next,
+// keeping the call stack. Decide runs all three with a MentionAddresser.
+//
 // The Controller reads the agent set through its registry — Floor satisfies
 // AgentRegistry, but tests can pass any implementation. Room-scoped
 // controllers additionally filter by AllowedIDs.
@@ -26,6 +32,7 @@ type Controller struct {
 	registry     AgentRegistry
 	AllowedIDs   map[string]bool // nil = all agents; non-nil = subset (room scope)
 	CallStack    []Frame
+	seq          uint64 // the latest decision Observe made necessary
 	passedAgents map[string]bool
 	RoomBound    map[string]bool // agents currently in rooms — skip on main floor
 	DebugFunc    func(string)    // injected for debug logging; no-op in tests
@@ -80,140 +87,132 @@ func (c *Controller) agents() []blueprint.Agent {
 // Decide processes a ChatEvent and returns what to do next.
 // It reads messages from the Chat rather than storing them internally.
 func (c *Controller) Decide(chat *Room, ev ChatEvent) Decision {
+	if !c.Observe(ev) {
+		return Decision{Action: "wait"}
+	}
+	addr := MentionAddresser{}.Address(context.Background(), c.Request(chat))
+	return c.Next(chat, addr)
+}
+
+// Observe updates the turn state for an event that ends or starts a turn
+// — a posted message, a pass or an error — and reports whether a
+// decision on who speaks next is needed.
+//
+// A user message clears the call stack; any posted message clears the
+// passes. An agent that passed or errored is retired: its frame is popped
+// and it can't get the floor until the next message, so a failing agent
+// can't be woken in a loop.
+func (c *Controller) Observe(ev ChatEvent) bool {
 	switch e := ev.(type) {
 	case MessagePosted:
 		if e.Message.From == "@user" {
-			// User message resets the turn state
 			c.CallStack = nil
-			c.passedAgents = make(map[string]bool)
-		} else {
-			// Agent finished (message posted) — reset passed agents
-			c.passedAgents = make(map[string]bool)
 		}
-		return c.decideNext(chat)
-
+		c.passedAgents = make(map[string]bool)
 	case AgentPassedEvent:
-		return c.endTurn(chat, e.AgentID)
-
+		c.retire(e.AgentID)
 	case AgentErrorEvent:
-		return c.endTurn(chat, e.AgentID)
-
+		c.retire(e.AgentID)
 	default:
-		return Decision{Action: "wait"}
+		return false
 	}
+	c.seq++
+	return true
 }
 
-// endTurn retires an agent that finished without posting a message — it
-// either passed or errored. The agent's frame is popped and it is excluded
-// from the next poll, so a repeatedly failing agent cannot be woken in a
-// loop. The error itself reaches the user through AgentErrorEvent; as far as
-// turn-taking is concerned, control simply moves on.
-func (c *Controller) endTurn(chat *Room, agentID string) Decision {
+func (c *Controller) retire(agentID string) {
 	if len(c.CallStack) > 0 && c.CallStack[len(c.CallStack)-1].Callee == agentID {
 		c.CallStack = c.CallStack[:len(c.CallStack)-1]
 	}
 	c.passedAgents[agentID] = true
-	return c.decideNext(chat)
 }
 
-// decideNext uses the turn-taking algorithm to pick the next agent.
-func (c *Controller) decideNext(chat *Room) Decision {
+// Request describes the decision the last Observe made necessary: the
+// room's messages, the agents that may get the floor (not passed, not in
+// another room, activation other than "never") and the call stack.
+func (c *Controller) Request(chat *Room) AddressRequest {
+	var agents []blueprint.Agent
+	for _, a := range c.agents() {
+		if c.passedAgents[a.ID] || c.RoomBound[a.ID] || a.Activation == "never" {
+			continue
+		}
+		agents = append(agents, a)
+	}
+	return AddressRequest{
+		Seq:       c.seq,
+		History:   chat.History(),
+		Agents:    agents,
+		CallStack: append([]Frame(nil), c.CallStack...),
+	}
+}
+
+// Current reports whether seq identifies the latest decision, so an
+// address that arrives after a newer event can be dropped.
+func (c *Controller) Current(seq uint64) bool { return seq == c.seq }
+
+// Next decides who speaks next, given whom the room's last message
+// addresses:
+//
+//  1. A call to the user hands the floor to the user.
+//  2. A call to an agent that may speak pushes a frame (caller → agent)
+//     and gives it the floor.
+//  3. Otherwise, if someone is waiting for an answer, the call stack is
+//     popped and the floor returns to the caller.
+//  4. Otherwise a chiming agent that may speak gets the floor.
+//  5. Otherwise the floor goes to the user.
+func (c *Controller) Next(chat *Room, addr Address) Decision {
 	messages := chat.History()
 	if len(messages) == 0 {
 		return Decision{Action: "wait"}
 	}
+	last := messages[len(messages)-1]
+	c.debug("address: %s %s (%s) — from=%s, passed=%v, stack=%d",
+		addr.Kind, addr.AgentID, addr.Reason, last.From, c.passedAgents, len(c.CallStack))
 
-	lastMsg := messages[len(messages)-1]
-	next := c.nextRecipient(lastMsg, c.passedAgents)
-	if next == nil {
-		return Decision{Action: "wait"}
-	}
-	return Decision{Action: "trigger", AgentID: next.ID}
-}
-
-// nextRecipient is the turn-taking algorithm.
-// It examines the last message for mentions, manages the call stack,
-// and polls agents for activation.
-func (c *Controller) nextRecipient(lastMsg ChatMessage, excluded map[string]bool) *blueprint.Agent {
-	mentions := extractMentions(lastMsg.Content)
-	c.debug("next_recipient: from=%s, mentions=%v, exclude=%v, stack=%d", lastMsg.From, mentions, excluded, len(c.CallStack))
-
-	// 0. If mentions @user (and not from @user), pause for user
-	if lastMsg.From != "@user" {
-		for _, m := range mentions {
-			if m == "@user" {
-				c.debug("→ pausing for @user")
-				return nil
-			}
+	if addr.Kind == AddressCall {
+		if addr.AgentID == "@user" {
+			c.debug("→ called @user")
+			return Decision{Action: "wait"}
 		}
+		if c.mayGetFloor(addr.AgentID, last.From) {
+			c.CallStack = append(c.CallStack, Frame{Caller: last.From, Callee: addr.AgentID})
+			c.debug("→ called: %s (pushed frame, stack=%d)", addr.AgentID, len(c.CallStack))
+			return Decision{Action: "trigger", AgentID: addr.AgentID}
+		}
+		c.debug("→ %s can't take the floor", addr.AgentID)
 	}
 
-	// 1. Explicit @mentions? → push frame, wake mentioned agent
-	agents := c.agents()
-	for i := range agents {
-		agent := agents[i]
-		if excluded[agent.ID] || c.RoomBound[agent.ID] {
-			continue
-		}
-		if agent.Activation == "never" {
-			continue
-		}
-		for _, m := range mentions {
-			if m == agent.ID && m != lastMsg.From {
-				c.CallStack = append(c.CallStack, Frame{
-					Caller: lastMsg.From,
-					Callee: agent.ID,
-				})
-				c.debug("→ mentioned: %s (pushed frame, stack=%d)", agent.ID, len(c.CallStack))
-				return &agent
-			}
-		}
-	}
-
-	// 2. No mentions → pop call stack (return to caller)
 	if len(c.CallStack) > 0 {
 		frame := c.CallStack[len(c.CallStack)-1]
 		c.CallStack = c.CallStack[:len(c.CallStack)-1]
 		c.debug("→ pop stack: caller=%s, callee=%s (stack=%d)", frame.Caller, frame.Callee, len(c.CallStack))
-
 		if frame.Caller == "@user" {
 			c.debug("→ caller is @user, back to user")
-			return nil
+			return Decision{Action: "wait"}
 		}
-
-		caller := c.getAgent(frame.Caller)
-		if caller != nil && !excluded[caller.ID] {
-			return caller
+		if caller := c.getAgent(frame.Caller); caller != nil && !c.passedAgents[caller.ID] {
+			return Decision{Action: "trigger", AgentID: caller.ID}
 		}
 	}
 
-	// 3. Poll shouldWake
-	for i := range agents {
-		agent := agents[i]
-		if excluded[agent.ID] || c.RoomBound[agent.ID] {
-			c.debug("should_wake(%s): skipped (passed or in room)", agent.ID)
-			continue
-		}
-		wake := c.shouldWake(&agent, &lastMsg)
-		c.debug("should_wake(%s): %v", agent.ID, wake)
-		if wake {
-			return &agent
-		}
+	if addr.Kind == AddressChime && c.mayGetFloor(addr.AgentID, last.From) {
+		c.debug("→ chimes in: %s", addr.AgentID)
+		return Decision{Action: "trigger", AgentID: addr.AgentID}
 	}
 
 	c.debug("→ back to user")
-	return nil
+	return Decision{Action: "wait"}
 }
 
-// shouldWake determines if an agent should respond to a message.
-func (c *Controller) shouldWake(agent *blueprint.Agent, lastMsg *ChatMessage) bool {
-	if lastMsg.From == agent.ID {
+// mayGetFloor reports whether agentID is an agent of this controller that
+// hasn't passed, isn't in another room, isn't activation "never", and
+// didn't write the last message.
+func (c *Controller) mayGetFloor(agentID, lastFrom string) bool {
+	if agentID == lastFrom || c.passedAgents[agentID] || c.RoomBound[agentID] {
 		return false
 	}
-	if agent.Activation == "always" {
-		return true
-	}
-	return false
+	a := c.getAgent(agentID)
+	return a != nil && a.Activation != "never"
 }
 
 // getAgent looks up an agent by ID within the controller's scope.

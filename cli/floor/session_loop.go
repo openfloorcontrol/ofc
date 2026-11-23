@@ -116,7 +116,22 @@ func (s *Session) handle(tagged TaggedEvent) {
 
 	switch e := tagged.Event.(type) {
 	case MessagePosted, AgentPassedEvent, AgentErrorEvent:
-		d := ctrl.Decide(view.MainRoom, e)
+		if !ctrl.Observe(e) {
+			return
+		}
+		// Addressing may ask a model, so it runs beside the loop; its
+		// answer comes back to the room as an AddressDecided.
+		req := ctrl.Request(view.MainRoom)
+		addresser, room := s.Floor.addresser(), view.MainRoom
+		go func() {
+			room.PostEvent(AddressDecided{Seq: req.Seq, Address: addresser.Address(context.Background(), req)})
+		}()
+
+	case AddressDecided:
+		if !ctrl.Current(e.Seq) {
+			return
+		}
+		d := ctrl.Next(view.MainRoom, e.Address)
 		if info := TryAutoCloseRoom(tagged.RoomID, d, s, s.Controller); info != "" {
 			s.emit("", InfoEvent{Text: info})
 		}

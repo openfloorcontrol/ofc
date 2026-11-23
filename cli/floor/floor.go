@@ -84,6 +84,10 @@ type Floor struct {
 	// Assigned by the caller (implementations live in floor/agents).
 	AgentFactory func(spec *blueprint.Agent) Agent
 
+	// Addresser decides whom each room's last message addresses. Nil
+	// means a MentionAddresser.
+	Addresser Addresser
+
 	// Store persists session events (messages with per-agent visibility refs).
 	// Defaults to NewMemoryStore() in NewFloor; can be overridden before
 	// Start() for backed implementations (JSONL, SQL, etc.).
@@ -218,6 +222,14 @@ func (f *Floor) WorkspacePaths() []string {
 		}
 	}
 	return dirs
+}
+
+// addresser returns the floor's Addresser, a MentionAddresser if none is set.
+func (f *Floor) addresser() Addresser {
+	if f.Addresser == nil {
+		return MentionAddresser{}
+	}
+	return f.Addresser
 }
 
 // agentFurniture returns the named furniture if agentID lists it.

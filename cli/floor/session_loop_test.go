@@ -65,7 +65,10 @@ func TestSessionLoopRunsMentionedAgent(t *testing.T) {
 	sess.MainRoom.PostUserInput("@echo? ping")
 
 	got := eventTypes(collectUntil[floor.AwaitingInput](t, events))
-	want := []string{"floor.MessagePosted", "floor.AgentStarted", "floor.MessagePosted", "floor.AwaitingInput"}
+	want := []string{
+		"floor.MessagePosted", "floor.AddressDecided", "floor.AgentStarted",
+		"floor.MessagePosted", "floor.AddressDecided", "floor.AwaitingInput",
+	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("events = %v, want %v", got, want)
 	}
