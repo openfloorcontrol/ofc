@@ -99,6 +99,42 @@ func TestDefaultAgentAnswersTheUser(t *testing.T) {
 	requireDecision(t, ctrl.Next(room, nobody), "wait", "")
 }
 
+// An agent's message that hands the floor back to the user goes to the
+// follow-up agent first — not its own message, not a question to the
+// user, and not after it passed.
+func TestFollowupAgentAddsToAnswers(t *testing.T) {
+	nobody := Address{Kind: AddressNobody}
+	ctrl, room := addressingFloor(t)
+	post(ctrl, room, "@user", "Maya, is the adapter hurting sharpness?")
+	requireDecision(t, ctrl.Next(room, Address{Kind: AddressCall, AgentID: "@maya"}), "trigger", "@maya")
+	post(ctrl, room, "@maya", "No, it has no glass.")
+	requireDecision(t, ctrl.Next(room, nobody), "wait", "") // no follow-up agent
+
+	ctrl, room = addressingFloor(t)
+	ctrl.FollowupAgent = "@hiro"
+	post(ctrl, room, "@user", "Maya, is the adapter hurting sharpness?")
+	requireDecision(t, ctrl.Next(room, Address{Kind: AddressCall, AgentID: "@maya"}), "trigger", "@maya")
+	post(ctrl, room, "@maya", "No, it has no glass.")
+	requireDecision(t, ctrl.Next(room, nobody), "trigger", "@hiro") // answer to a call
+	if len(ctrl.CallStack) != 0 {
+		t.Errorf("stack = %v", ctrl.CallStack)
+	}
+	post(ctrl, room, "@hiro", "Sold a dozen of those.")
+	requireDecision(t, ctrl.Next(room, nobody), "wait", "") // its own message
+
+	post(ctrl, room, "@user", "Nice.")
+	requireDecision(t, ctrl.Next(room, Address{Kind: AddressChime, AgentID: "@maya"}), "trigger", "@maya")
+	post(ctrl, room, "@maya", "Enjoy it.")
+	requireDecision(t, ctrl.Next(room, nobody), "trigger", "@hiro") // answer to a chime
+
+	post(ctrl, room, "@maya", "Canon or Nikon?")
+	requireDecision(t, ctrl.Next(room, Address{Kind: AddressCall, AgentID: "@user"}), "wait", "") // a question to the user
+
+	post(ctrl, room, "@maya", "Anyway.")
+	ctrl.Observe(AgentPassedEvent{AgentID: "@hiro"})
+	requireDecision(t, ctrl.Next(room, nobody), "wait", "") // it passed
+}
+
 // Two "always" agents keep answering each other; max_agent_turns ends it
 // and the next user message starts a new count.
 func TestMaxAgentTurnsEndsPingPong(t *testing.T) {

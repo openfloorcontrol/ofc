@@ -228,6 +228,9 @@ type FloorControl struct {
 	// DefaultAgent gets the floor when a user message addresses nobody;
 	// empty: the floor stays with the user.
 	DefaultAgent string `yaml:"default_agent,omitempty"`
+	// FollowupAgent gets the floor when another agent's message hands it
+	// back to the user, and may add to it or pass; empty: the user gets it.
+	FollowupAgent string `yaml:"followup_agent,omitempty"`
 
 	// Endpoint, Model, APIKey and ModelSource are the resolved model; Load
 	// sets them from ModelRef.
@@ -432,9 +435,13 @@ func Load(path string) (*Blueprint, error) {
 	if bp.FloorControl.History == 0 {
 		bp.FloorControl.History = DefaultFloorControlHistory
 	}
-	if id := bp.FloorControl.DefaultAgent; id != "" &&
-		!slices.ContainsFunc(bp.Agents, func(a Agent) bool { return a.ID == id }) {
-		return nil, fmt.Errorf("floor_control: default_agent %s is not an agent of this blueprint", id)
+	for _, f := range []struct{ field, id string }{
+		{"default_agent", bp.FloorControl.DefaultAgent},
+		{"followup_agent", bp.FloorControl.FollowupAgent},
+	} {
+		if f.id != "" && !slices.ContainsFunc(bp.Agents, func(a Agent) bool { return a.ID == f.id }) {
+			return nil, fmt.Errorf("floor_control: %s %s is not an agent of this blueprint", f.field, f.id)
+		}
 	}
 	if err := resolveModels(&bp); err != nil {
 		return nil, err

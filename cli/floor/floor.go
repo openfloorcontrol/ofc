@@ -231,6 +231,7 @@ func (f *Floor) configure(c *Controller) {
 	}
 	c.MaxAgentTurns = f.Blueprint.FloorControl.MaxAgentTurns
 	c.DefaultAgent = f.Blueprint.FloorControl.DefaultAgent
+	c.FollowupAgent = f.Blueprint.FloorControl.FollowupAgent
 }
 
 // addresser returns the floor's Addresser, a MentionAddresser if none is set.

@@ -480,6 +480,7 @@ floor_control:
   retries: 1              # ask again this often on an invalid answer
   max_agent_turns: 6      # agent turns after a user message before the user gets the floor back
   default_agent: "@hiro"  # answers a user message that addresses nobody
+  followup_agent: "@hiro" # may add to another agent's answer before the user gets the floor
   # prompt: …             # replaces the general instructions
 
 agents:
@@ -488,6 +489,8 @@ agents:
 ```
 
 The model sees the messages with their speakers but without tool output, and it answers with one of the offered options (`call @maya`, `chime @danny`, `nobody`, …) and a short reason. An answer that isn't one of them is asked again `retries` times; after that, and if the model can't be reached, the message addresses nobody. An agent that gets the floor can still answer `[PASS]`; it is then left out of the next decision. With `--debug`, every decision is printed with its reason.
+
+`followup_agent` gets the floor whenever another agent's message would hand it back to the user (not after a question to the user, not after its own message, not after it passed). It decides itself whether to add something or to `[PASS]`, so its prompt should say when to stay quiet. It makes a floor livelier and slower — one more turn after each answer — so it suits conversational floors more than coding ones.
 
 `default_agent` also works with or without a model. It applies only to user messages, so agents don't answer each other through it, and the floor control model is told about it, so it answers `nobody` and leaves the user's small talk to the default agent.
 

@@ -38,10 +38,13 @@ type Controller struct {
 	MaxAgentTurns int
 	// DefaultAgent gets the floor when a user message addresses nobody.
 	DefaultAgent string
-	agentTurns   int // agent turns since the last user message
-	passedAgents map[string]bool
-	RoomBound    map[string]bool // agents currently in rooms — skip on main floor
-	DebugFunc    func(string)    // injected for debug logging; no-op in tests
+	// FollowupAgent gets the floor when another agent's message hands it
+	// back to the user.
+	FollowupAgent string
+	agentTurns    int // agent turns since the last user message
+	passedAgents  map[string]bool
+	RoomBound     map[string]bool // agents currently in rooms — skip on main floor
+	DebugFunc     func(string)    // injected for debug logging; no-op in tests
 }
 
 // NewController creates a controller for the given registry's full agent set.
@@ -169,7 +172,8 @@ func (c *Controller) Current(seq uint64) bool { return seq == c.seq }
 //     popped and the floor returns to the caller.
 //  4. Otherwise a chiming agent that may speak gets the floor.
 //  5. Otherwise, after a user message, the DefaultAgent gets the floor.
-//  6. Otherwise the floor goes to the user.
+//  6. Otherwise the floor goes to the user — after another agent's
+//     message, the FollowupAgent gets it first.
 //
 // Once MaxAgentTurns agents have had the floor since the last user
 // message, it goes to the user instead, with an Info saying so.
@@ -204,8 +208,7 @@ func (c *Controller) NextAfter(last ChatMessage, addr Address) Decision {
 		c.CallStack = c.CallStack[:len(c.CallStack)-1]
 		c.debug("→ pop stack: caller=%s, callee=%s (stack=%d)", frame.Caller, frame.Callee, len(c.CallStack))
 		if frame.Caller == "@user" {
-			c.debug("→ caller is @user, back to user")
-			return Decision{Action: "wait"}
+			return c.backToUser(last)
 		}
 		if caller := c.getAgent(frame.Caller); caller != nil && !c.passedAgents[caller.ID] {
 			return c.trigger(caller.ID)
@@ -222,6 +225,16 @@ func (c *Controller) NextAfter(last ChatMessage, addr Address) Decision {
 		return c.trigger(c.DefaultAgent)
 	}
 
+	return c.backToUser(last)
+}
+
+// backToUser hands the floor to the user, unless last is an agent's
+// message and the FollowupAgent, who didn't write it, may add to it first.
+func (c *Controller) backToUser(last ChatMessage) Decision {
+	if last.From != "@user" && c.FollowupAgent != "" && c.mayGetFloor(c.FollowupAgent, last.From) {
+		c.debug("→ follow-up agent: %s", c.FollowupAgent)
+		return c.trigger(c.FollowupAgent)
+	}
 	c.debug("→ back to user")
 	return Decision{Action: "wait"}
 }

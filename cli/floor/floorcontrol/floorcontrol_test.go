@@ -70,11 +70,12 @@ func TestPromptNamesTheDefaultAgent(t *testing.T) {
 	req.Agents = req.Agents[1:] // @hiro passed
 	a.Decide(req)
 
-	if s := mock.Requests()[0].Messages[0].Content; !strings.Contains(s, "addresses nobody, @hiro answers it") {
-		t.Errorf("system prompt lacks the default agent:\n%s", s)
+	first, second := mock.Requests()[0].Messages[0].Content, mock.Requests()[1].Messages[0].Content
+	if !strings.Contains(first, "answer nobody: @hiro then answers it") {
+		t.Errorf("system prompt lacks the default agent:\n%s", first)
 	}
-	if s := mock.Requests()[1].Messages[0].Content; strings.Contains(s, "addresses nobody,") {
-		t.Errorf("system prompt names a default agent that passed:\n%s", s)
+	if strings.Contains(second, "then answers it") {
+		t.Errorf("system prompt names a default agent that passed:\n%s", second)
 	}
 }
 
@@ -118,7 +119,7 @@ func TestPromptContents(t *testing.T) {
 	if strings.Contains(system, "call @hiro") {
 		t.Errorf("the last speaker is offered:\n%s", system)
 	}
-	if strings.Contains(system, "addresses nobody,") {
+	if strings.Contains(system, "then answers it") {
 		t.Errorf("mentions a default agent without one:\n%s", system)
 	}
 	if strings.Contains(user, "first message") || !strings.Contains(user, "@hiro: Just the D750.") ||

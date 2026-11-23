@@ -16,11 +16,11 @@ import (
 // participants, their turn prompts and the answer format follow it.
 const DefaultPrompt = `You run the floor of a conversation between several participants: you decide who speaks next after the last message.
 
-- call @x: the last message asks @x something or asks for their view, by name or with "@x?". @user is the human; an agent asking the human something calls @user.
+- call @x: the last message asks @x something or asks for their view (by name, by their role, or with "@x?"). When @user replies to something an agent said or asked, call that agent. @user is the human; an agent asking the human something calls @user.
 - chime @x: nobody in particular was asked, but @x would want to react to the last message.
-- nobody: the last message addresses no one new. Whoever is waiting for an answer gets the floor back, otherwise the human does.
+- nobody: the last message asks nobody. An answer to the open call ("Waiting for an answer" below) is nobody: the one who asked gets the floor back by itself. But an answer that ends by asking someone something is a call to them.
 
-Prefer nobody over chime unless a participant clearly has something to add.`
+Prefer nobody over chime unless a participant clearly has something to add or their turn prompt says they react to such a message.`
 
 // Addresser asks a model whom a message addresses.
 type Addresser struct {
@@ -138,7 +138,7 @@ func (a *Addresser) systemPrompt(req floor.AddressRequest, opts []string) string
 	}
 	for _, ag := range req.Agents {
 		if ag.ID == req.DefaultAgent {
-			b.WriteString("\nWhen a message of @user addresses nobody, " + ag.ID + " answers it; nobody is then the right answer.\n")
+			b.WriteString("\nWhen a message of @user asks nobody and fits no one's turn prompt, answer nobody: " + ag.ID + " then answers it.\n")
 		}
 	}
 	b.WriteString("\nAnswer with exactly one of these on the first line:\n")

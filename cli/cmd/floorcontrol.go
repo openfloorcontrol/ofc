@@ -233,6 +233,7 @@ func (c fcCase) floorAfter(bp *blueprint.Blueprint, req floor.AddressRequest, ad
 	}
 	ctrl.CallStack = append([]floor.Frame(nil), req.CallStack...)
 	ctrl.DefaultAgent = req.DefaultAgent
+	ctrl.FollowupAgent = bp.FloorControl.FollowupAgent
 	d := ctrl.NextAfter(req.History[len(req.History)-1], addr)
 	if d.Action == "trigger" {
 		return d.AgentID
