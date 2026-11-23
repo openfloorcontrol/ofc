@@ -93,10 +93,11 @@ func GenerateToken() string {
 //     an agent that lists the furniture.
 //   - Any other /api route needs the access token when one is set.
 //
-// Non-API routes (the web UI's static files) need no token.
+// Non-API routes (the web UI's static files) and /api/health need no token.
 func (s *Server) authMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
-		if !strings.HasPrefix(c.Request().URL.Path, "/api/") {
+		path := c.Request().URL.Path
+		if !strings.HasPrefix(path, "/api/") || path == HealthPath {
 			return next(c)
 		}
 		token := requestToken(c)
@@ -253,6 +254,26 @@ func (s *Server) BaseURL() string {
 		host = "127.0.0.1"
 	}
 	return fmt.Sprintf("http://%s", net.JoinHostPort(host, strconv.Itoa(addr.Port)))
+}
+
+// HealthPath reports liveness and versions. It needs no token, so a deploy
+// script on the host can check which build is running.
+const HealthPath = "/api/health"
+
+// Health is the body of GET /api/health.
+type Health struct {
+	// Version is the deployment's version (--deploy-version), e.g. the
+	// commit of the deployed blueprint; empty when not set.
+	Version string `json:"version"`
+	// OFC is the ofc binary's version.
+	OFC string `json:"ofc"`
+}
+
+// RegisterHealth adds GET /api/health, answering with h.
+func (s *Server) RegisterHealth(h Health) {
+	s.echo.GET(HealthPath, func(c echo.Context) error {
+		return c.JSON(http.StatusOK, h)
+	})
 }
 
 // RegisterFloorAPI adds the session, agent and furniture endpoints for
