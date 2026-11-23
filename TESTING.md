@@ -202,7 +202,7 @@ ofc floor-control eval cases.yaml -f blueprint.yaml               # the blueprin
 ofc floor-control eval cases.yaml --model gemini-3.8-flash --runs 3
 ```
 
-Each run prints ✓ or ✗ with the model's answer and reason, and at the end the hits, how many answers were invalid, how many needed a retry, and how many calls failed (model unreachable, API errors). It exits non-zero on a miss. The agents, their `turn_prompt`s and `floor_control` come from the blueprint; `--model` takes any model reference, which makes comparing models one loop over `--model`. These are prompt checks, not `go test`: they call a real model.
+A run hits when the model's answer gives the floor to the same participant as one of the wanted answers would, under the floor's rules: after Hiro answered the user's question, `nobody` and `call @user` both give the user the floor, and with `default_agent: "@hiro"` a user's `nobody` and `chime @hiro` both give it to Hiro. A wanted answer must name `@user` or an agent of the blueprint. Each run prints ✓ or ✗ with the model's answer, who gets the floor, and the reason, and at the end the hits, how many answers were invalid, how many needed a retry, and how many calls failed (model unreachable, API errors). It exits non-zero on a miss. The agents, their `turn_prompt`s and `floor_control` come from the blueprint; `--model` takes any model reference, which makes comparing models one loop over `--model`. These are prompt checks, not `go test`: they call a real model.
 
 ## Choosing an approach
 

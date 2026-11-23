@@ -178,7 +178,11 @@ func (c *Controller) Next(chat *Room, addr Address) Decision {
 	if len(messages) == 0 {
 		return Decision{Action: "wait"}
 	}
-	last := messages[len(messages)-1]
+	return c.NextAfter(messages[len(messages)-1], addr)
+}
+
+// NextAfter is Next for a room whose last message is last.
+func (c *Controller) NextAfter(last ChatMessage, addr Address) Decision {
 	c.debug("address: %s %s (%s) — from=%s, passed=%v, stack=%d",
 		addr.Kind, addr.AgentID, addr.Reason, last.From, c.passedAgents, len(c.CallStack))
 

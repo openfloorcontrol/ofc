@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/openfloorcontrol/ofc/blueprint"
@@ -28,9 +29,11 @@ var (
 var floorControlEvalCmd = &cobra.Command{
 	Use:   "eval <cases.yaml>",
 	Short: "Run floor control cases against a model",
-	Long: `Run each case of a cases file through the blueprint's floor control model and
-compare the answer with the expected one. The blueprint gives the agents,
-their turn_prompt and floor_control; --model tries another model.
+	Long: `Run each case of a cases file through the blueprint's floor control model. A
+case hits when the model's answer gives the floor to the same participant as
+one of the wanted answers would, under the floor's rules (call stack, passes,
+default_agent). The blueprint gives the agents, their turn_prompt and
+floor_control; --model tries another model.
 
 A cases file:
 
@@ -124,10 +127,15 @@ func evalFloorControl(cmd *cobra.Command, casesPath string) error {
 		if err != nil {
 			return fmt.Errorf("case %q: %w", c.Name, err)
 		}
+		wantFloor, err := c.wantedFloor(bp, req)
+		if err != nil {
+			return fmt.Errorf("case %q: %w", c.Name, err)
+		}
 		for i := 0; i < fcRuns; i++ {
 			res := addresser.Decide(req)
 			got := strings.TrimSpace(string(res.Address.Kind) + " " + res.Address.AgentID)
-			ok := matches(got, c.Want)
+			gotFloor := c.floorAfter(bp, req, res.Address)
+			ok := slices.Contains(wantFloor, gotFloor)
 			runs++
 			if ok {
 				hits++
@@ -144,12 +152,12 @@ func evalFloorControl(cmd *cobra.Command, casesPath string) error {
 
 			mark, note := "✓", ""
 			if !ok {
-				mark, note = "✗", "  (want "+strings.Join(c.Want, " | ")+")"
+				mark, note = "✗", fmt.Sprintf("  (want %s → %s)", strings.Join(c.Want, " | "), strings.Join(wantFloor, " | "))
 			}
 			if len(res.Answers) > 1 {
 				note += fmt.Sprintf("  [%d attempts]", len(res.Answers))
 			}
-			fmt.Fprintf(out, "%s %s: %s%s\n", mark, c.Name, got, note)
+			fmt.Fprintf(out, "%s %s: %s → %s%s\n", mark, c.Name, got, gotFloor, note)
 			if res.Address.Reason != "" {
 				fmt.Fprintf(out, "    %s\n", res.Address.Reason)
 			}
@@ -206,7 +214,7 @@ func (c fcCase) request(bp *blueprint.Blueprint) (floor.AddressRequest, error) {
 		req.CallStack = append(req.CallStack, floor.Frame{Caller: m[1], Callee: m[2]})
 	}
 	for _, a := range bp.Agents {
-		if a.Activation == "never" || contains(c.Passed, a.ID) {
+		if a.Activation == "never" || slices.Contains(c.Passed, a.ID) {
 			continue
 		}
 		req.Agents = append(req.Agents, a)
@@ -214,22 +222,48 @@ func (c fcCase) request(bp *blueprint.Blueprint) (floor.AddressRequest, error) {
 	return req, nil
 }
 
-// matches reports whether got is one of the wanted answers, ignoring case
-// and extra spaces.
-func matches(got string, want answers) bool {
-	for _, w := range want {
-		if strings.EqualFold(strings.Join(strings.Fields(w), " "), got) {
-			return true
-		}
+// floorAfter is who gets the floor when the case's last message
+// addresses addr: what the floor's controller decides, given the case's
+// agents, passes, call stack and default agent. max_agent_turns doesn't
+// apply, a case doesn't count turns.
+func (c fcCase) floorAfter(bp *blueprint.Blueprint, req floor.AddressRequest, addr floor.Address) string {
+	ctrl := floor.NewController(agentList(bp.Agents))
+	for _, id := range c.Passed {
+		ctrl.Observe(floor.AgentPassedEvent{AgentID: id})
 	}
-	return false
+	ctrl.CallStack = append([]floor.Frame(nil), req.CallStack...)
+	ctrl.DefaultAgent = req.DefaultAgent
+	d := ctrl.NextAfter(req.History[len(req.History)-1], addr)
+	if d.Action == "trigger" {
+		return d.AgentID
+	}
+	return "@user"
 }
 
-func contains(list []string, s string) bool {
-	for _, x := range list {
-		if x == s {
-			return true
+// wantedFloor is who gets the floor for each wanted answer. An answer must
+// be "nobody", or "call"/"chime" and @user or an agent of the blueprint.
+func (c fcCase) wantedFloor(bp *blueprint.Blueprint, req floor.AddressRequest) ([]string, error) {
+	var floors []string
+	for _, w := range c.Want {
+		fields := strings.Fields(w)
+		var addr floor.Address
+		switch {
+		case len(fields) == 1 && fields[0] == "nobody":
+			addr = floor.Address{Kind: floor.AddressNobody}
+		case len(fields) == 2 && (fields[0] == "call" || fields[0] == "chime") &&
+			(fields[1] == "@user" || slices.ContainsFunc(bp.Agents, func(a blueprint.Agent) bool { return a.ID == fields[1] })):
+			addr = floor.Address{Kind: floor.AddressKind(fields[0]), AgentID: fields[1]}
+		default:
+			return nil, fmt.Errorf("want %q: not nobody, call @x or chime @x with @user or an agent of the blueprint", w)
+		}
+		if f := c.floorAfter(bp, req, addr); !slices.Contains(floors, f) {
+			floors = append(floors, f)
 		}
 	}
-	return false
+	return floors, nil
 }
+
+// agentList is a fixed floor.AgentRegistry.
+type agentList []blueprint.Agent
+
+func (l agentList) Agents() []blueprint.Agent { return l }
