@@ -129,6 +129,9 @@ type Agent struct {
 	Prompt     string `yaml:"prompt"`
 	PromptFile string `yaml:"prompt_file"`
 	Activation string `yaml:"activation"`
+	// TurnPrompt tells the floor control model when this agent should
+	// get the floor, e.g. "stays out while Hiro talks to the customer".
+	TurnPrompt string `yaml:"turn_prompt,omitempty"`
 	// Sandbox names a furniture of type sandbox in which an ACP agent's
 	// file and terminal requests run. Empty runs them on the host.
 	Sandbox string `yaml:"sandbox,omitempty"`
@@ -204,6 +207,43 @@ type OAuthConfig struct {
 	Scopes []string `yaml:"scopes,omitempty"`
 }
 
+// FloorControl configures how the floor decides who speaks next.
+type FloorControl struct {
+	// ModelRef names a model (a blueprint model, else an mf address) that
+	// decides whom each message addresses. Empty: explicit "@name?"
+	// mentions and activation "always" decide.
+	ModelRef string `yaml:"model,omitempty"`
+	// History is how many of the latest messages the model sees; 0
+	// means DefaultFloorControlHistory.
+	History int `yaml:"history,omitempty"`
+	// Retries is how often an invalid answer is asked again before it
+	// counts as addressing nobody.
+	Retries int `yaml:"retries,omitempty"`
+	// Prompt replaces the general instructions the model gets; the
+	// participants, their turn prompts and the answer format follow it.
+	Prompt string `yaml:"prompt,omitempty"`
+	// MaxAgentTurns is how many agent turns may follow one user message
+	// before the floor goes back to the user; 0 means no limit.
+	MaxAgentTurns int `yaml:"max_agent_turns,omitempty"`
+	// DefaultAgent gets the floor when a user message addresses nobody;
+	// empty: the floor stays with the user.
+	DefaultAgent string `yaml:"default_agent,omitempty"`
+	// FollowupAgent gets the floor when another agent's message hands it
+	// back to the user, and may add to it or pass; empty: the user gets it.
+	FollowupAgent string `yaml:"followup_agent,omitempty"`
+
+	// Endpoint, Model, APIKey and ModelSource are the resolved model; Load
+	// sets them from ModelRef.
+	Endpoint    string `yaml:"-"`
+	Model       string `yaml:"-"`
+	APIKey      string `yaml:"-"`
+	ModelSource string `yaml:"-"`
+}
+
+// DefaultFloorControlHistory is how many messages the floor control
+// model sees when floor_control.history is unset.
+const DefaultFloorControlHistory = 3
+
 // Blueprint is a complete floor configuration: what the floor is. How a
 // floor is run (frontend, ports, session store) is set by ofc's flags.
 type Blueprint struct {
@@ -215,6 +255,8 @@ type Blueprint struct {
 	Models    map[string]ModelDef `yaml:"models,omitempty"`
 	Agents    []Agent             `yaml:"agents"`
 	Furniture []FurnitureDef      `yaml:"furniture,omitempty"`
+	// FloorControl configures how the floor decides who speaks next.
+	FloorControl FloorControl `yaml:"floor_control,omitempty"`
 
 	// Dir is the absolute directory containing the blueprint file.
 	// Used as the cwd for subprocesses (MCP servers, ACP agents) so that
@@ -387,6 +429,20 @@ func Load(path string) (*Blueprint, error) {
 		}
 	}
 
+	if fc := &bp.FloorControl; fc.MaxAgentTurns < 0 || fc.History < 0 || fc.Retries < 0 {
+		return nil, fmt.Errorf("floor_control: history, retries and max_agent_turns must be 0 or more")
+	}
+	if bp.FloorControl.History == 0 {
+		bp.FloorControl.History = DefaultFloorControlHistory
+	}
+	for _, f := range []struct{ field, id string }{
+		{"default_agent", bp.FloorControl.DefaultAgent},
+		{"followup_agent", bp.FloorControl.FollowupAgent},
+	} {
+		if f.id != "" && !slices.ContainsFunc(bp.Agents, func(a Agent) bool { return a.ID == f.id }) {
+			return nil, fmt.Errorf("floor_control: %s %s is not an agent of this blueprint", f.field, f.id)
+		}
+	}
 	if err := resolveModels(&bp); err != nil {
 		return nil, err
 	}

@@ -103,6 +103,13 @@ func EventJSON(ev ChatEvent) map[string]interface{} {
 		return map[string]interface{}{"type": "session_cleared"}
 	case SessionStopped:
 		return map[string]interface{}{"type": "session_stopped"}
+	case AddressDecided:
+		return map[string]interface{}{
+			"type":     "address_decided",
+			"kind":     string(e.Address.Kind),
+			"agent_id": e.Address.AgentID,
+			"reason":   e.Address.Reason,
+		}
 	default:
 		return nil
 	}
@@ -127,6 +134,8 @@ type eventJSON struct {
 	Name    string `json:"name"`
 	Error   string `json:"error"`
 	Text    string `json:"text"`
+	Kind    string `json:"kind"`
+	Reason  string `json:"reason"`
 }
 
 // ParseEventJSON is the inverse of EventJSON: it decodes one serialized
@@ -180,6 +189,8 @@ func ParseEventJSON(data []byte) (TaggedEvent, error) {
 		ev = SessionCleared{}
 	case "session_stopped":
 		ev = SessionStopped{}
+	case "address_decided":
+		ev = AddressDecided{Address: Address{Kind: AddressKind(j.Kind), AgentID: j.AgentID, Reason: j.Reason}}
 	default:
 		return TaggedEvent{}, fmt.Errorf("unknown event type %q", j.Type)
 	}

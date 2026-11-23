@@ -84,6 +84,10 @@ type Floor struct {
 	// Assigned by the caller (implementations live in floor/agents).
 	AgentFactory func(spec *blueprint.Agent) Agent
 
+	// Addresser decides whom each room's last message addresses. Nil
+	// means a MentionAddresser.
+	Addresser Addresser
+
 	// Store persists session events (messages with per-agent visibility refs).
 	// Defaults to NewMemoryStore() in NewFloor; can be overridden before
 	// Start() for backed implementations (JSONL, SQL, etc.).
@@ -218,6 +222,24 @@ func (f *Floor) WorkspacePaths() []string {
 		}
 	}
 	return dirs
+}
+
+// configure sets a controller's rules from the blueprint's floor_control.
+func (f *Floor) configure(c *Controller) {
+	if f.Blueprint == nil {
+		return
+	}
+	c.MaxAgentTurns = f.Blueprint.FloorControl.MaxAgentTurns
+	c.DefaultAgent = f.Blueprint.FloorControl.DefaultAgent
+	c.FollowupAgent = f.Blueprint.FloorControl.FollowupAgent
+}
+
+// addresser returns the floor's Addresser, a MentionAddresser if none is set.
+func (f *Floor) addresser() Addresser {
+	if f.Addresser == nil {
+		return MentionAddresser{}
+	}
+	return f.Addresser
 }
 
 // agentFurniture returns the named furniture if agentID lists it.
@@ -361,6 +383,9 @@ func (f *Floor) Start(renderInfo func(string)) error {
 		if a.ModelSource != "" {
 			renderInfo(fmt.Sprintf("Model of %s: %s", a.ID, a.ModelSource))
 		}
+	}
+	if src := f.Blueprint.FloorControl.ModelSource; src != "" {
+		renderInfo(fmt.Sprintf("Model of floor control: %s", src))
 	}
 	for _, a := range f.Blueprint.Agents {
 		if a.Type != "acp" {

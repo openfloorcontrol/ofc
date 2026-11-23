@@ -43,6 +43,7 @@ furniture:
 | `defaults` | no | Default `model` and `thinking` for all agents |
 | `agents` | yes | List of agents on this floor |
 | `furniture` | no | List of shared furniture (task boards, MCP servers, sandboxes) |
+| `floor_control` | no | How the floor decides who speaks next — see [Floor control](#floor-control) |
 
 A key that isn't a field of the blueprint, an agent or a furniture is an error.
 
@@ -327,7 +328,8 @@ as for any furniture that isn't on the floor.
 | `type` | `"llm"` | `"llm"` for OpenAI-compatible API, `"acp"` for Agent Client Protocol |
 | `prompt` | | System prompt defining the agent's role and behavior |
 | `prompt_file` | | Path to a file containing the system prompt (relative to blueprint dir). Cannot be used together with `prompt`. |
-| `activation` | `"mention"` | When the agent wakes up: `"mention"` (only on `@id?`) or `"always"` (listens to everything) |
+| `activation` | `"mention"` | When the agent wakes up: `"mention"` (only on `@id?`), `"always"` (listens to everything) or `"never"`. With a floor control model, only `"never"` applies |
+| `turn_prompt` | | When this agent should get the floor, for the floor control model — see [Floor control](#floor-control) |
 | `tool_context` | `"full"` | How much of other agents' tool output to include: `"full"`, `"summary"`, or `"none"` |
 | `furniture` | `[]` | The furniture this agent can use (e.g. `[tasks, fs]`) — see [Agent access](#agent-access) |
 | `temperature` | `0.7` | LLM temperature |
@@ -460,6 +462,39 @@ Agents interact through conversation:
 - **`activation: mention`** — agent only responds when explicitly mentioned with `@id?`.
 
 Delegation chains work like a call stack: if `@user` asks `@data?`, and `@data` asks `@code?`, then `@code`'s response goes back to `@data`, and `@data`'s response goes back to `@user`.
+
+### Floor control
+
+After each message, the floor decides whom it addresses, as one of:
+
+- **call `@x`** — the message asks `@x` something. `@x` speaks next, and its answer goes back to whoever asked (the call stack above). A call to `@user` hands the floor to the user.
+- **chime `@x`** — nobody was asked, but `@x` would react. `@x` speaks next only if nobody is waiting for an answer.
+- **nobody** — whoever is waiting for an answer gets the floor back. Otherwise, after a user message, `floor_control.default_agent` answers (if set and it hasn't passed); else the user has the floor.
+
+Without a `floor_control` model, `@x?` is a call and an agent with `activation: always` chimes in. With one, a small model decides from the latest messages, each agent's `turn_prompt` and the call stack:
+
+```yaml
+floor_control:
+  model: fast             # a model reference, like an agent's model:
+  history: 3              # how many of the latest messages it sees (default 3)
+  retries: 1              # ask again this often on an invalid answer
+  max_agent_turns: 6      # agent turns after a user message before the user gets the floor back
+  default_agent: "@hiro"  # answers a user message that addresses nobody
+  followup_agent: "@hiro" # may add to another agent's answer before the user gets the floor
+  # prompt: …             # replaces the general instructions
+
+agents:
+  - id: "@maya"
+    turn_prompt: "Stays out while Hiro talks to the customer, unless asked."
+```
+
+The model sees the messages with their speakers but without tool output, and it answers with one of the offered options (`call @maya`, `chime @danny`, `nobody`, …) and a short reason. An answer that isn't one of them is asked again `retries` times; after that, and if the model can't be reached, the message addresses nobody. An agent that gets the floor can still answer `[PASS]`; it is then left out of the next decision. With `--debug`, every decision is printed with its reason.
+
+`followup_agent` gets the floor whenever another agent's message would hand it back to the user (not after a question to the user, not after its own message, not after it passed). It decides itself whether to add something or to `[PASS]`, so its prompt should say when to stay quiet. It makes a floor livelier and slower — one more turn after each answer — so it suits conversational floors more than coding ones.
+
+`default_agent` also works with or without a model. It applies only to user messages, so agents don't answer each other through it, and the floor control model is told about it, so it answers `nobody` and leaves the user's small talk to the default agent.
+
+`max_agent_turns` works with or without a model: once that many agents have had the floor since the user's last message, the floor goes back to the user, which ends agents answering each other in circles.
 
 ## Rooms
 

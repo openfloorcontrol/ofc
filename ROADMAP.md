@@ -34,6 +34,7 @@ Multi-agent coordination is working end-to-end with LLM (OpenAI-compatible) and 
 
 - [ ] Blueprint rooms — permanent rooms defined in YAML (agents assigned at startup)
 - [ ] Test edge cases in delegation/return flow (nested mentions, multi-agent chains)
+- [ ] The circle: track who is in the conversation, next to the call stack (who waits for whom). Speaking or being called joins it; `[LEAVE]` ("not my topic, I step out") or N messages of silence leaves it, while `[PASS]` only means "nothing to say right now". Members may follow up on answers; floor control sees the circle as context. `followup_agent` would become "always in the circle". Open: how several members get offered a turn without piling up — one at a time, and how one agent interrupts another (random order, or a protocol where agents sign up to interrupt)
 
 ### Furniture Expansion
 

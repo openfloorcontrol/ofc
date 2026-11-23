@@ -26,6 +26,7 @@ func TestParseEventJSONRoundTrip(t *testing.T) {
 		InfoEvent{Text: "room closed"},
 		SessionCleared{},
 		SessionStopped{},
+		AddressDecided{Address: Address{Kind: AddressCall, AgentID: "@a", Reason: "asked by name"}},
 	}
 	for _, ev := range events {
 		payload := EventJSON(ev)

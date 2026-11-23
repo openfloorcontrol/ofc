@@ -27,7 +27,10 @@ type Room struct {
 	ID      string
 	session SessionView // nil for standalone rooms (tests)
 
-	// Runtime event distribution (NOT persistence).
+	// Runtime event distribution (NOT persistence). sendMu orders sends on
+	// eventCh before Close; sends after Close are dropped.
+	sendMu      sync.RWMutex
+	sendClosed  bool
 	eventCh     chan ChatEvent
 	subMu       sync.Mutex
 	subscribers []chan ChatEvent
@@ -84,7 +87,17 @@ func (r *Room) setSession(s SessionView) { r.session = s }
 func (r *Room) Post(msg ChatMessage) {
 	seq := r.appendToStore(msg)
 
-	ev := MessagePosted{Message: msg, Seq: seq}
+	r.send(MessagePosted{Message: msg, Seq: seq})
+}
+
+// send emits ev to the session loop and the subscribers, unless the room
+// is closed.
+func (r *Room) send(ev ChatEvent) {
+	r.sendMu.RLock()
+	defer r.sendMu.RUnlock()
+	if r.sendClosed {
+		return
+	}
 	r.eventCh <- ev
 	r.fanOut(ev)
 }
@@ -110,16 +123,13 @@ func (r *Room) appendToStore(msg ChatMessage) uint64 {
 // PostStream emits a streaming event without storing it. Used for
 // tokens, tool call progress, thinking indicators.
 func (r *Room) PostStream(ev Event) {
-	se := StreamEvent{Event: ev}
-	r.eventCh <- se
-	r.fanOut(se)
+	r.send(StreamEvent{Event: ev})
 }
 
 // PostEvent emits a chat event directly (AgentFinished, AgentPassed, etc.).
 // Not stored — these are runtime decisions, not conversation history.
 func (r *Room) PostEvent(ev ChatEvent) {
-	r.eventCh <- ev
-	r.fanOut(ev)
+	r.send(ev)
 }
 
 // PostUserInput routes user input: slash commands become UserCommandEvents,
@@ -185,7 +195,14 @@ func (r *Room) Clear() {
 }
 
 // Close closes the event channel. Call when shutting down.
-func (r *Room) Close() { close(r.eventCh) }
+func (r *Room) Close() {
+	r.sendMu.Lock()
+	defer r.sendMu.Unlock()
+	if !r.sendClosed {
+		r.sendClosed = true
+		close(r.eventCh)
+	}
+}
 
 // fanOut sends an event to all subscribers (non-blocking).
 func (r *Room) fanOut(ev ChatEvent) {
