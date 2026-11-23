@@ -177,6 +177,33 @@ tests/live/opencode/run.sh [mf-model]    # default: @ofc-test; OFC=path/to/ofc t
 
 It runs opencode through `mf run opencode <model> -- acp` and checks a one-shot turn, that two web sessions get separate opencode processes and conversations, and that `ofc run --session` resumes the agent's session in a new process. Work files stay in a temp dir printed at the start.
 
+## 5. Floor control cases (`ofc floor-control eval`)
+
+A blueprint's [floor control](BLUEPRINT.md#floor-control) model decides, after each message, whom it addresses. Its prompt — the general part, the agents' `turn_prompt`s — is tuned against a file of cases, each a short conversation and the answer you expect:
+
+```yaml
+cases:
+  - name: customer asks Maya by name without a question mark
+    history:                    # oldest first, "@speaker: text"
+      - "@hiro: The D750 came out in 2014."
+      - "@user: What do you think about the D750, Maya"
+    want: call @maya            # or a list of acceptable answers
+  - name: Maya answers Hiro's question, back to Hiro
+    history:
+      - "@hiro: @maya? is the sensor still competitive?"
+      - "@maya: Yes, still very good."
+    stack: ["@user -> @hiro", "@hiro -> @maya"]   # optional, outermost first
+    passed: ["@danny"]                            # optional
+    want: nobody
+```
+
+```bash
+ofc floor-control eval cases.yaml -f blueprint.yaml               # the blueprint's floor_control.model
+ofc floor-control eval cases.yaml --model gemini-3.8-flash --runs 3
+```
+
+Each run prints ✓ or ✗ with the model's answer and reason, and at the end the hits, how many answers were invalid, how many needed a retry, and how many calls failed (model unreachable, API errors). It exits non-zero on a miss. The agents, their `turn_prompt`s and `floor_control` come from the blueprint; `--model` takes any model reference, which makes comparing models one loop over `--model`. These are prompt checks, not `go test`: they call a real model.
+
 ## Choosing an approach
 
 | Approach | Best for | Requires |
@@ -184,6 +211,7 @@ It runs opencode through `mf run opencode <model> -- acp` and checks a one-shot 
 | `--json` + `jq` | Quick ad-hoc checks, CI smoke tests | `jq` |
 | `ofc eval` | Evaluating output quality, prompt iteration | LLM endpoint |
 | `ofctest` | Automated test suites, regression testing | Go, LLM endpoint |
+| `ofc floor-control eval` | Tuning who-speaks-next prompts, comparing models | LLM endpoint |
 
 All three approaches compose: `ofctest` uses the same floor machinery as `ofc run --json`, and `Eval()` calls the same code as `ofc eval`.
 

@@ -25,7 +25,8 @@ cli/                          # Go module (github.com/openfloorcontrol/ofc)
     session_loop.go           # Session.Start: turn-taking loop (Decide → dispatch); Subscribe for frontends
     floor_sessions.go         # CreateSession / Session(id) (resumes from store) / ListSessions; floor ID = blueprint name
     room.go                   # Room: messages + event channel + subscribers; #main + sub-rooms
-    controller.go             # Controller: pure-logic turn-taking (Decide → Decision, no I/O)
+    controller.go             # Controller: pure-logic turn-taking (Observe → Request → Next, no I/O; Decide = all three with mentions)
+    addressing.go             # Address (call/chime/nobody), Addresser interface, MentionAddresser (the @name? rules)
     agent.go                  # Agent interface (Run(ctx, AgentTurn) error)
     agent_iface.go            # AgentTurn, AgentRegistry, SessionView interfaces (DI seams)
     turn.go                   # agentTurn impl — one constructed per dispatch
@@ -43,6 +44,7 @@ cli/                          # Go module (github.com/openfloorcontrol/ofc)
     jsonl.go                  # JSONLStore: directory of <sessionID>.jsonl files + in-memory mirror, crash-recovery
     postgres.go               # PostgresStore (+ postgres_migrations/)
   floor/agents/               # LLMAgent + ACPAgent — implement floor.Agent through floor.AgentTurn; agents.New = Floor.AgentFactory
+  floor/floorcontrol/         # LLM Addresser: a small model decides whom a message addresses (blueprint floor_control:); Floor.Addresser
   frontend/                   # CLI / TUI / JSON frontends (composition layer)
     cli.go                    # CLIFrontend: stdin/stdout, renders Session.Subscribe events
     tui.go                    # TUIFrontend: Bubble Tea
@@ -135,13 +137,16 @@ ACP agents: get MCP server URLs in session, connect themselves
 
 ## Turn-Taking Protocol
 
-1. Extract `@mentions?` from last message
-2. If `@user` mentioned → pause for user input
-3. If `@agent?` mentioned → push Frame(caller, callee) on CallStack, wake callee
-4. No mentions → pop CallStack (return to caller)
-5. Poll remaining agents with `shouldWake()` (respects activation mode + exclusion)
-6. `[PASS]` → agent excluded from next poll cycle
-7. Nobody wakes → back to user
+After each message, `Controller.Observe` updates state, `Request` builds an `AddressRequest`, the `Floor.Addresser` (async, in a goroutine; result posted back as `AddressDecided`, stale ones dropped) answers with an `Address`, and `Next` turns it into a Decision:
+
+1. `call @user` → pause for user input
+2. `call @agent` → push Frame(caller, callee) on CallStack, wake callee
+3. `nobody` → pop CallStack (return to caller), else back to user
+4. `chime @agent` → wake it only if the CallStack is empty
+5. `[PASS]` → agent excluded from the next decision
+6. `floor_control.max_agent_turns` agent turns since the last user message → back to user
+
+`MentionAddresser` (default): `@x?` is a call, `activation: always` agents chime. `floorcontrol.Addresser` (with `floor_control.model`): a small LLM decides; tune with `ofc floor-control eval`.
 
 ## Key Dependencies
 
