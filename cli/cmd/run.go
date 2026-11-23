@@ -21,6 +21,7 @@ import (
 	"github.com/openfloorcontrol/ofc/blueprint"
 	"github.com/openfloorcontrol/ofc/floor"
 	"github.com/openfloorcontrol/ofc/floor/agents"
+	"github.com/openfloorcontrol/ofc/floor/floorcontrol"
 	"github.com/openfloorcontrol/ofc/api"
 	"github.com/openfloorcontrol/ofc/frontend"
 	"github.com/openfloorcontrol/ofc/webui"
@@ -372,6 +373,9 @@ func newFloorWithStore(bp *blueprint.Blueprint) (f *floor.Floor, resuming bool) 
 	sid, resuming := resolveSessionID()
 	f = floor.NewFloorWithSession(bp, sid)
 	f.AgentFactory = agents.New
+	if bp.FloorControl.Model != "" {
+		f.Addresser = floorcontrol.New(bp.FloorControl)
+	}
 	f.ACPIdleTimeout = acpIdleTimeout
 	oauthDir, err := defaultOAuthDir()
 	if err != nil {

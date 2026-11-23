@@ -6,13 +6,59 @@ import (
 	"github.com/mikiobraun/mf/registry"
 )
 
+// ResolvedModel is where a model reference leads.
+type ResolvedModel struct {
+	Endpoint string // OpenAI-compatible API base URL
+	Model    string // the provider's model ID
+	APIKey   string
+	Source   string // where it came from, for display
+}
+
+// ResolveModel resolves a model reference: a name from the blueprint's
+// models section, else an mf address — alias, endpoint/model or @tag —
+// in mf's registry ($MF_CONFIG_DIR, else ~/.config/mf).
+func ResolveModel(bp *Blueprint, ref string) (ResolvedModel, error) {
+	return (&modelResolver{bp: bp}).resolve(ref)
+}
+
+// modelResolver resolves references against one blueprint, reading mf's
+// registry once, and only when a reference isn't a blueprint model.
+type modelResolver struct {
+	bp    *Blueprint
+	store *registry.Store
+}
+
+func (r *modelResolver) resolve(ref string) (ResolvedModel, error) {
+	if def, ok := r.bp.Models[ref]; ok {
+		return ResolvedModel{
+			Endpoint: def.Endpoint, Model: def.Model, APIKey: def.APIKey,
+			Source: fmt.Sprintf("%s (blueprint) → %s", ref, def.Model),
+		}, nil
+	}
+	if r.store == nil {
+		dir, err := registry.DefaultDir()
+		if err != nil {
+			return ResolvedModel{}, err
+		}
+		if r.store, err = registry.Open(dir); err != nil {
+			return ResolvedModel{}, fmt.Errorf("open mf registry: %w", err)
+		}
+	}
+	m, err := registry.Resolve(r.store, ref)
+	if err != nil {
+		return ResolvedModel{}, fmt.Errorf("model %q is not in the blueprint's models, and mf: %w", ref, err)
+	}
+	key, _ := m.Key(r.store)
+	return ResolvedModel{
+		Endpoint: m.Endpoint.URL, Model: m.ModelID, APIKey: key,
+		Source: fmt.Sprintf("%s (mf) → %s/%s", ref, m.Endpoint.Name, m.ModelID),
+	}, nil
+}
+
 // resolveModels sets each LLM agent's Endpoint, Model, APIKey and
-// ModelSource from its model reference (model:, else defaults.model). A
-// reference is a name from the blueprint's models section, else an mf
-// address — alias, endpoint/model or @tag — resolved in mf's registry
-// ($MF_CONFIG_DIR, else ~/.config/mf). The registry is read only when a
-// reference isn't a blueprint model. An agent without a reference keeps
-// an empty model.
+// ModelSource from its model reference (model:, else defaults.model),
+// and the same for floor_control's model. An agent without a reference
+// keeps an empty model.
 func resolveModels(bp *Blueprint) error {
 	for name, def := range bp.Models {
 		if def.Endpoint == "" || def.Model == "" {
@@ -20,25 +66,7 @@ func resolveModels(bp *Blueprint) error {
 		}
 	}
 
-	var store *registry.Store
-	fromMF := func(addr string) (*registry.Ref, string, error) {
-		if store == nil {
-			dir, err := registry.DefaultDir()
-			if err != nil {
-				return nil, "", err
-			}
-			if store, err = registry.Open(dir); err != nil {
-				return nil, "", fmt.Errorf("open mf registry: %w", err)
-			}
-		}
-		ref, err := registry.Resolve(store, addr)
-		if err != nil {
-			return nil, "", err
-		}
-		key, _ := ref.Key(store)
-		return ref, key, nil
-	}
-
+	r := &modelResolver{bp: bp}
 	for i := range bp.Agents {
 		a := &bp.Agents[i]
 		if a.Type == "acp" {
@@ -54,17 +82,19 @@ func resolveModels(bp *Blueprint) error {
 		if ref == "" {
 			continue
 		}
-		if def, ok := bp.Models[ref]; ok {
-			a.Endpoint, a.Model, a.APIKey = def.Endpoint, def.Model, def.APIKey
-			a.ModelSource = fmt.Sprintf("%s (blueprint) → %s", ref, def.Model)
-			continue
-		}
-		r, key, err := fromMF(ref)
+		m, err := r.resolve(ref)
 		if err != nil {
-			return fmt.Errorf("agent %s: model %q is not in the blueprint's models, and mf: %w", a.ID, ref, err)
+			return fmt.Errorf("agent %s: %w", a.ID, err)
 		}
-		a.Endpoint, a.Model, a.APIKey = r.Endpoint.URL, r.ModelID, key
-		a.ModelSource = fmt.Sprintf("%s (mf) → %s/%s", ref, r.Endpoint.Name, r.ModelID)
+		a.Endpoint, a.Model, a.APIKey, a.ModelSource = m.Endpoint, m.Model, m.APIKey, m.Source
+	}
+
+	if fc := &bp.FloorControl; fc.ModelRef != "" {
+		m, err := r.resolve(fc.ModelRef)
+		if err != nil {
+			return fmt.Errorf("floor_control: %w", err)
+		}
+		fc.Endpoint, fc.Model, fc.APIKey, fc.ModelSource = m.Endpoint, m.Model, m.APIKey, m.Source
 	}
 	return nil
 }

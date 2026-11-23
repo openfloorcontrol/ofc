@@ -382,6 +382,9 @@ func (f *Floor) Start(renderInfo func(string)) error {
 			renderInfo(fmt.Sprintf("Model of %s: %s", a.ID, a.ModelSource))
 		}
 	}
+	if src := f.Blueprint.FloorControl.ModelSource; src != "" {
+		renderInfo(fmt.Sprintf("Model of floor control: %s", src))
+	}
 	for _, a := range f.Blueprint.Agents {
 		if a.Type != "acp" {
 			continue
