@@ -40,6 +40,7 @@ func attachAPIServer(f *floor.Floor) {
 		}
 		srv.SetAuthToken(token)
 	}
+	srv.RegisterHealth(api.Health{Version: deployVersion, OFC: fmt.Sprintf("%s (commit %s)", Version, Commit)})
 	f.APIServer = srv
 }
 
@@ -58,6 +59,7 @@ var (
 	dbDSN          string
 	apiToken       string
 	acpIdleTimeout time.Duration
+	deployVersion  string
 
 	// resolvedSessionID is the actual UUID used by this invocation —
 	// either passed via --session, or freshly generated. Captured here
@@ -344,6 +346,7 @@ func init() {
 	fs.StringVar(&remoteURL, "remote", "", "Use a session on a running \"ofc run --web\" server at this URL (token from ?token= or --token) instead of a local floor")
 	fs.StringVar(&apiToken, "token", "", "API token for --web (default: a random one) and for --remote")
 	fs.DurationVar(&acpIdleTimeout, "acp-idle-timeout", 0, "Close an ACP agent's subprocess after it is idle this long (e.g. 15m); 0 keeps it until its session closes")
+	fs.StringVar(&deployVersion, "deploy-version", "", "Version reported as \"version\" by GET /api/health, e.g. the commit of the deployed blueprint")
 	addStoreFlags(fs)
 	addOAuthFlags(fs)
 }

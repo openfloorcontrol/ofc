@@ -476,6 +476,45 @@ func TestAuthMiddleware(t *testing.T) {
 	}
 }
 
+func TestHealthNeedsNoToken(t *testing.T) {
+	f := newTestFloor(&blueprint.Blueprint{Name: "test"}, nil)
+	srv := api.New()
+	srv.SetAuthToken("test-token-123")
+	srv.RegisterHealth(api.Health{Version: "abc1234", OFC: "v0.3.0 (commit 32b1b3a)"})
+	srv.RegisterFloorAPI(f)
+	if err := srv.Start(":0"); err != nil {
+		t.Fatalf("failed to start: %v", err)
+	}
+	defer srv.Stop()
+
+	resp, err := http.Get(srv.BaseURL() + api.HealthPath)
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 without token, got %d", resp.StatusCode)
+	}
+	var got api.Health
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	want := api.Health{Version: "abc1234", OFC: "v0.3.0 (commit 32b1b3a)"}
+	if got != want {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+
+	// The exemption is for exactly this path, not its prefix.
+	resp2, err := http.Get(srv.BaseURL() + api.HealthPath + "x")
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for %sx, got %d", api.HealthPath, resp2.StatusCode)
+	}
+}
+
 func TestGetFurniture(t *testing.T) {
 	tb := furniture.NewTaskBoard()
 	furMap := map[string]furniture.Furniture{"tasks": tb}
