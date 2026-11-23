@@ -224,12 +224,13 @@ func (f *Floor) WorkspacePaths() []string {
 	return dirs
 }
 
-// maxAgentTurns is the blueprint's floor_control.max_agent_turns.
-func (f *Floor) maxAgentTurns() int {
+// configure sets a controller's rules from the blueprint's floor_control.
+func (f *Floor) configure(c *Controller) {
 	if f.Blueprint == nil {
-		return 0
+		return
 	}
-	return f.Blueprint.FloorControl.MaxAgentTurns
+	c.MaxAgentTurns = f.Blueprint.FloorControl.MaxAgentTurns
+	c.DefaultAgent = f.Blueprint.FloorControl.DefaultAgent
 }
 
 // addresser returns the floor's Addresser, a MentionAddresser if none is set.

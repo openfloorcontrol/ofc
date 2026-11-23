@@ -469,7 +469,7 @@ After each message, the floor decides whom it addresses, as one of:
 
 - **call `@x`** — the message asks `@x` something. `@x` speaks next, and its answer goes back to whoever asked (the call stack above). A call to `@user` hands the floor to the user.
 - **chime `@x`** — nobody was asked, but `@x` would react. `@x` speaks next only if nobody is waiting for an answer.
-- **nobody** — whoever is waiting for an answer gets the floor back, otherwise the user does.
+- **nobody** — whoever is waiting for an answer gets the floor back. Otherwise, after a user message, `floor_control.default_agent` answers (if set and it hasn't passed); else the user has the floor.
 
 Without a `floor_control` model, `@x?` is a call and an agent with `activation: always` chimes in. With one, a small model decides from the latest messages, each agent's `turn_prompt` and the call stack:
 
@@ -479,6 +479,7 @@ floor_control:
   history: 3              # how many of the latest messages it sees (default 3)
   retries: 1              # ask again this often on an invalid answer
   max_agent_turns: 6      # agent turns after a user message before the user gets the floor back
+  default_agent: "@hiro"  # answers a user message that addresses nobody
   # prompt: …             # replaces the general instructions
 
 agents:
@@ -487,6 +488,8 @@ agents:
 ```
 
 The model sees the messages with their speakers but without tool output, and it answers with one of the offered options (`call @maya`, `chime @danny`, `nobody`, …) and a short reason. An answer that isn't one of them is asked again `retries` times; after that, and if the model can't be reached, the message addresses nobody. An agent that gets the floor can still answer `[PASS]`; it is then left out of the next decision. With `--debug`, every decision is printed with its reason.
+
+`default_agent` also works with or without a model. It applies only to user messages, so agents don't answer each other through it, and the floor control model is told about it, so it answers `nobody` and leaves the user's small talk to the default agent.
 
 `max_agent_turns` works with or without a model: once that many agents have had the floor since the user's last message, the floor goes back to the user, which ends agents answering each other in circles.
 

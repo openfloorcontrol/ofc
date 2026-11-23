@@ -136,6 +136,11 @@ func (a *Addresser) systemPrompt(req floor.AddressRequest, opts []string) string
 			b.WriteString("  When " + ag.ID + " speaks: " + strings.TrimSpace(ag.TurnPrompt) + "\n")
 		}
 	}
+	for _, ag := range req.Agents {
+		if ag.ID == req.DefaultAgent {
+			b.WriteString("\nWhen a message of @user addresses nobody, " + ag.ID + " answers it; nobody is then the right answer.\n")
+		}
+	}
 	b.WriteString("\nAnswer with exactly one of these on the first line:\n")
 	for _, o := range opts {
 		b.WriteString(o + "\n")

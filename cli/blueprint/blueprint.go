@@ -225,6 +225,9 @@ type FloorControl struct {
 	// MaxAgentTurns is how many agent turns may follow one user message
 	// before the floor goes back to the user; 0 means no limit.
 	MaxAgentTurns int `yaml:"max_agent_turns,omitempty"`
+	// DefaultAgent gets the floor when a user message addresses nobody;
+	// empty: the floor stays with the user.
+	DefaultAgent string `yaml:"default_agent,omitempty"`
 
 	// Endpoint, Model, APIKey and ModelSource are the resolved model; Load
 	// sets them from ModelRef.
@@ -428,6 +431,10 @@ func Load(path string) (*Blueprint, error) {
 	}
 	if bp.FloorControl.History == 0 {
 		bp.FloorControl.History = DefaultFloorControlHistory
+	}
+	if id := bp.FloorControl.DefaultAgent; id != "" &&
+		!slices.ContainsFunc(bp.Agents, func(a Agent) bool { return a.ID == id }) {
+		return nil, fmt.Errorf("floor_control: default_agent %s is not an agent of this blueprint", id)
 	}
 	if err := resolveModels(&bp); err != nil {
 		return nil, err

@@ -63,7 +63,7 @@ func NewSession(id string, floor *Floor) *Session {
 		agentRoom:     make(map[string]string),
 	}
 	main.setSession(s)
-	s.Controller.MaxAgentTurns = floor.maxAgentTurns()
+	floor.configure(s.Controller)
 	for _, a := range floor.agents {
 		s.AddAgentContext(a.ID)
 	}
@@ -143,7 +143,7 @@ func (s *Session) CreateRoom(roomID, creator string, agentIDs []string, prompt s
 	}
 
 	room := NewSubRoom(roomID, creator, agentIDs, prompt, s, s.Floor)
-	room.Controller.MaxAgentTurns = s.Floor.maxAgentTurns()
+	s.Floor.configure(room.Controller)
 	s.Rooms[roomID] = room
 
 	var participantNames []string

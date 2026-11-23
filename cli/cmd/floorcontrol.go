@@ -184,7 +184,7 @@ func readCases(path string) ([]fcCase, error) {
 // request builds the address request of a case: its messages, call stack,
 // and the blueprint's agents that may speak (not "never", not passed).
 func (c fcCase) request(bp *blueprint.Blueprint) (floor.AddressRequest, error) {
-	var req floor.AddressRequest
+	req := floor.AddressRequest{DefaultAgent: bp.FloorControl.DefaultAgent}
 	if len(c.History) == 0 {
 		return req, fmt.Errorf("no history")
 	}

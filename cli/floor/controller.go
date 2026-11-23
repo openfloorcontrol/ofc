@@ -36,10 +36,12 @@ type Controller struct {
 	// MaxAgentTurns is how many agent turns may follow one user message
 	// before the floor goes back to the user; 0 means no limit.
 	MaxAgentTurns int
-	agentTurns    int // agent turns since the last user message
-	passedAgents  map[string]bool
-	RoomBound     map[string]bool // agents currently in rooms — skip on main floor
-	DebugFunc     func(string)    // injected for debug logging; no-op in tests
+	// DefaultAgent gets the floor when a user message addresses nobody.
+	DefaultAgent string
+	agentTurns   int // agent turns since the last user message
+	passedAgents map[string]bool
+	RoomBound    map[string]bool // agents currently in rooms — skip on main floor
+	DebugFunc    func(string)    // injected for debug logging; no-op in tests
 }
 
 // NewController creates a controller for the given registry's full agent set.
@@ -134,7 +136,8 @@ func (c *Controller) retire(agentID string) {
 
 // Request describes the decision the last Observe made necessary: the
 // room's messages, the agents that may get the floor (not passed, not in
-// another room, activation other than "never") and the call stack.
+// another room, activation other than "never"), the call stack and the
+// default agent.
 func (c *Controller) Request(chat *Room) AddressRequest {
 	var agents []blueprint.Agent
 	for _, a := range c.agents() {
@@ -144,10 +147,11 @@ func (c *Controller) Request(chat *Room) AddressRequest {
 		agents = append(agents, a)
 	}
 	return AddressRequest{
-		Seq:       c.seq,
-		History:   chat.History(),
-		Agents:    agents,
-		CallStack: append([]Frame(nil), c.CallStack...),
+		Seq:          c.seq,
+		History:      chat.History(),
+		Agents:       agents,
+		CallStack:    append([]Frame(nil), c.CallStack...),
+		DefaultAgent: c.DefaultAgent,
 	}
 }
 
@@ -164,7 +168,8 @@ func (c *Controller) Current(seq uint64) bool { return seq == c.seq }
 //  3. Otherwise, if someone is waiting for an answer, the call stack is
 //     popped and the floor returns to the caller.
 //  4. Otherwise a chiming agent that may speak gets the floor.
-//  5. Otherwise the floor goes to the user.
+//  5. Otherwise, after a user message, the DefaultAgent gets the floor.
+//  6. Otherwise the floor goes to the user.
 //
 // Once MaxAgentTurns agents have had the floor since the last user
 // message, it goes to the user instead, with an Info saying so.
@@ -206,6 +211,11 @@ func (c *Controller) Next(chat *Room, addr Address) Decision {
 	if addr.Kind == AddressChime && c.mayGetFloor(addr.AgentID, last.From) {
 		c.debug("→ chimes in: %s", addr.AgentID)
 		return c.trigger(addr.AgentID)
+	}
+
+	if last.From == "@user" && c.DefaultAgent != "" && c.mayGetFloor(c.DefaultAgent, last.From) {
+		c.debug("→ default agent: %s", c.DefaultAgent)
+		return c.trigger(c.DefaultAgent)
 	}
 
 	c.debug("→ back to user")

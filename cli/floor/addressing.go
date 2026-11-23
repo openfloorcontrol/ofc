@@ -39,6 +39,8 @@ type AddressRequest struct {
 	Agents []blueprint.Agent
 	// CallStack is who asked whom, innermost last.
 	CallStack []Frame
+	// DefaultAgent gets the floor when a user message addresses nobody.
+	DefaultAgent string
 }
 
 // Addresser decides whom the last message of a room addresses.

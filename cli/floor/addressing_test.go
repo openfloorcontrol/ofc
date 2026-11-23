@@ -77,6 +77,28 @@ func TestPassedAgentIsNotOffered(t *testing.T) {
 	requireDecision(t, ctrl.Next(room, Address{Kind: AddressChime, AgentID: "@hiro"}), "wait", "")
 }
 
+// A user message that addresses nobody goes to the default agent; an
+// agent message, or a default agent that passed, leaves the floor to the
+// user.
+func TestDefaultAgentAnswersTheUser(t *testing.T) {
+	ctrl, room := addressingFloor(t)
+	ctrl.DefaultAgent = "@maya"
+	nobody := Address{Kind: AddressNobody}
+
+	post(ctrl, room, "@user", "*pats the cat*")
+	if got := ctrl.Request(room).DefaultAgent; got != "@maya" {
+		t.Errorf("request's default agent = %q", got)
+	}
+	requireDecision(t, ctrl.Next(room, nobody), "trigger", "@maya")
+
+	post(ctrl, room, "@maya", "Cute, isn't he.")
+	requireDecision(t, ctrl.Next(room, nobody), "wait", "")
+
+	post(ctrl, room, "@user", "*pats the cat again*")
+	ctrl.Observe(AgentPassedEvent{AgentID: "@maya"})
+	requireDecision(t, ctrl.Next(room, nobody), "wait", "")
+}
+
 // Two "always" agents keep answering each other; max_agent_turns ends it
 // and the next user message starts a new count.
 func TestMaxAgentTurnsEndsPingPong(t *testing.T) {

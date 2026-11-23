@@ -59,6 +59,25 @@ func TestDecideAsksAgainOnAnInvalidAnswer(t *testing.T) {
 	}
 }
 
+// The model learns who answers a user message that addresses nobody, as
+// long as that agent may speak.
+func TestPromptNamesTheDefaultAgent(t *testing.T) {
+	a, mock := addresser(t, blueprint.FloorControl{},
+		llmtest.Response{Content: "nobody"}, llmtest.Response{Content: "nobody"})
+	req := shop("@user: *pats the cat*")
+	req.DefaultAgent = "@hiro"
+	a.Decide(req)
+	req.Agents = req.Agents[1:] // @hiro passed
+	a.Decide(req)
+
+	if s := mock.Requests()[0].Messages[0].Content; !strings.Contains(s, "addresses nobody, @hiro answers it") {
+		t.Errorf("system prompt lacks the default agent:\n%s", s)
+	}
+	if s := mock.Requests()[1].Messages[0].Content; strings.Contains(s, "addresses nobody,") {
+		t.Errorf("system prompt names a default agent that passed:\n%s", s)
+	}
+}
+
 func TestDecideGivesUpOnInvalidAnswers(t *testing.T) {
 	a, _ := addresser(t, blueprint.FloorControl{},
 		llmtest.Response{Content: "Maya, probably."})
@@ -98,6 +117,9 @@ func TestPromptContents(t *testing.T) {
 	}
 	if strings.Contains(system, "call @hiro") {
 		t.Errorf("the last speaker is offered:\n%s", system)
+	}
+	if strings.Contains(system, "addresses nobody,") {
+		t.Errorf("mentions a default agent without one:\n%s", system)
 	}
 	if strings.Contains(user, "first message") || !strings.Contains(user, "@hiro: Just the D750.") ||
 		!strings.Contains(user, "Waiting for an answer: @user asked @hiro.") {

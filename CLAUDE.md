@@ -143,8 +143,9 @@ After each message, `Controller.Observe` updates state, `Request` builds an `Add
 2. `call @agent` → push Frame(caller, callee) on CallStack, wake callee
 3. `nobody` → pop CallStack (return to caller), else back to user
 4. `chime @agent` → wake it only if the CallStack is empty
-5. `[PASS]` → agent excluded from the next decision
-6. `floor_control.max_agent_turns` agent turns since the last user message → back to user
+5. Nobody woken after a user message → `floor_control.default_agent`, if set
+6. `[PASS]` → agent excluded from the next decision
+7. `floor_control.max_agent_turns` agent turns since the last user message → back to user
 
 `MentionAddresser` (default): `@x?` is a call, `activation: always` agents chime. `floorcontrol.Addresser` (with `floor_control.model`): a small LLM decides; tune with `ofc floor-control eval`.
 
