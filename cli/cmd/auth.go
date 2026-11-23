@@ -124,6 +124,10 @@ func forwardPastedCallbacks(in io.Reader, out io.Writer) {
 		if pasted == "" {
 			continue
 		}
+		// Phones often copy an address without its scheme.
+		if !strings.Contains(pasted, "://") {
+			pasted = "http://" + pasted
+		}
 		u, err := url.Parse(pasted)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Query().Get("code") == "" {
 			fmt.Fprintln(out, "That is not a callback address (http://…/callback?code=…&state=…). Try again:")
