@@ -224,6 +224,14 @@ func (f *Floor) WorkspacePaths() []string {
 	return dirs
 }
 
+// maxAgentTurns is the blueprint's floor_control.max_agent_turns.
+func (f *Floor) maxAgentTurns() int {
+	if f.Blueprint == nil {
+		return 0
+	}
+	return f.Blueprint.FloorControl.MaxAgentTurns
+}
+
 // addresser returns the floor's Addresser, a MentionAddresser if none is set.
 func (f *Floor) addresser() Addresser {
 	if f.Addresser == nil {

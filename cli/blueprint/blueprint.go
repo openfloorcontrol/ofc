@@ -204,6 +204,13 @@ type OAuthConfig struct {
 	Scopes []string `yaml:"scopes,omitempty"`
 }
 
+// FloorControl configures how the floor decides who speaks next.
+type FloorControl struct {
+	// MaxAgentTurns is how many agent turns may follow one user message
+	// before the floor goes back to the user; 0 means no limit.
+	MaxAgentTurns int `yaml:"max_agent_turns,omitempty"`
+}
+
 // Blueprint is a complete floor configuration: what the floor is. How a
 // floor is run (frontend, ports, session store) is set by ofc's flags.
 type Blueprint struct {
@@ -215,6 +222,8 @@ type Blueprint struct {
 	Models    map[string]ModelDef `yaml:"models,omitempty"`
 	Agents    []Agent             `yaml:"agents"`
 	Furniture []FurnitureDef      `yaml:"furniture,omitempty"`
+	// FloorControl configures how the floor decides who speaks next.
+	FloorControl FloorControl `yaml:"floor_control,omitempty"`
 
 	// Dir is the absolute directory containing the blueprint file.
 	// Used as the cwd for subprocesses (MCP servers, ACP agents) so that
@@ -387,6 +396,9 @@ func Load(path string) (*Blueprint, error) {
 		}
 	}
 
+	if bp.FloorControl.MaxAgentTurns < 0 {
+		return nil, fmt.Errorf("floor_control: max_agent_turns must be 0 (no limit) or more")
+	}
 	if err := resolveModels(&bp); err != nil {
 		return nil, err
 	}

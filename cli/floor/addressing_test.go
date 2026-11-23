@@ -77,6 +77,37 @@ func TestPassedAgentIsNotOffered(t *testing.T) {
 	requireDecision(t, ctrl.Next(room, Address{Kind: AddressChime, AgentID: "@hiro"}), "wait", "")
 }
 
+// Two "always" agents keep answering each other; max_agent_turns ends it
+// and the next user message starts a new count.
+func TestMaxAgentTurnsEndsPingPong(t *testing.T) {
+	f := NewFloor(&blueprint.Blueprint{Name: "test", Agents: []blueprint.Agent{
+		{ID: "@hiro", Activation: "always"},
+		{ID: "@maya", Activation: "always"},
+	}})
+	room := f.DefaultSession().MainRoom
+	go func() {
+		for range room.Events() {
+		}
+	}()
+	ctrl := NewController(f)
+	ctrl.MaxAgentTurns = 3
+	step := func(from string) Decision {
+		msg := ChatMessage{From: from, Content: "I disagree."}
+		room.Post(msg)
+		return ctrl.Decide(room, MessagePosted{Message: msg})
+	}
+
+	requireDecision(t, step("@user"), "trigger", "@hiro")
+	requireDecision(t, step("@hiro"), "trigger", "@maya")
+	requireDecision(t, step("@maya"), "trigger", "@hiro")
+	d := step("@hiro")
+	requireDecision(t, d, "wait", "")
+	if d.Info == "" {
+		t.Error("reaching max_agent_turns should say so")
+	}
+	requireDecision(t, step("@user"), "trigger", "@hiro")
+}
+
 func TestOnlyTheLatestDecisionIsCurrent(t *testing.T) {
 	ctrl, room := addressingFloor(t)
 	post(ctrl, room, "@user", "one")

@@ -29,13 +29,17 @@ type Decision struct {
 // AgentRegistry, but tests can pass any implementation. Room-scoped
 // controllers additionally filter by AllowedIDs.
 type Controller struct {
-	registry     AgentRegistry
-	AllowedIDs   map[string]bool // nil = all agents; non-nil = subset (room scope)
-	CallStack    []Frame
-	seq          uint64 // the latest decision Observe made necessary
-	passedAgents map[string]bool
-	RoomBound    map[string]bool // agents currently in rooms — skip on main floor
-	DebugFunc    func(string)    // injected for debug logging; no-op in tests
+	registry   AgentRegistry
+	AllowedIDs map[string]bool // nil = all agents; non-nil = subset (room scope)
+	CallStack  []Frame
+	seq        uint64 // the latest decision Observe made necessary
+	// MaxAgentTurns is how many agent turns may follow one user message
+	// before the floor goes back to the user; 0 means no limit.
+	MaxAgentTurns int
+	agentTurns    int // agent turns since the last user message
+	passedAgents  map[string]bool
+	RoomBound     map[string]bool // agents currently in rooms — skip on main floor
+	DebugFunc     func(string)    // injected for debug logging; no-op in tests
 }
 
 // NewController creates a controller for the given registry's full agent set.
@@ -107,6 +111,7 @@ func (c *Controller) Observe(ev ChatEvent) bool {
 	case MessagePosted:
 		if e.Message.From == "@user" {
 			c.CallStack = nil
+			c.agentTurns = 0
 		}
 		c.passedAgents = make(map[string]bool)
 	case AgentPassedEvent:
@@ -160,6 +165,9 @@ func (c *Controller) Current(seq uint64) bool { return seq == c.seq }
 //     popped and the floor returns to the caller.
 //  4. Otherwise a chiming agent that may speak gets the floor.
 //  5. Otherwise the floor goes to the user.
+//
+// Once MaxAgentTurns agents have had the floor since the last user
+// message, it goes to the user instead, with an Info saying so.
 func (c *Controller) Next(chat *Room, addr Address) Decision {
 	messages := chat.History()
 	if len(messages) == 0 {
@@ -177,7 +185,7 @@ func (c *Controller) Next(chat *Room, addr Address) Decision {
 		if c.mayGetFloor(addr.AgentID, last.From) {
 			c.CallStack = append(c.CallStack, Frame{Caller: last.From, Callee: addr.AgentID})
 			c.debug("→ called: %s (pushed frame, stack=%d)", addr.AgentID, len(c.CallStack))
-			return Decision{Action: "trigger", AgentID: addr.AgentID}
+			return c.trigger(addr.AgentID)
 		}
 		c.debug("→ %s can't take the floor", addr.AgentID)
 	}
@@ -191,17 +199,29 @@ func (c *Controller) Next(chat *Room, addr Address) Decision {
 			return Decision{Action: "wait"}
 		}
 		if caller := c.getAgent(frame.Caller); caller != nil && !c.passedAgents[caller.ID] {
-			return Decision{Action: "trigger", AgentID: caller.ID}
+			return c.trigger(caller.ID)
 		}
 	}
 
 	if addr.Kind == AddressChime && c.mayGetFloor(addr.AgentID, last.From) {
 		c.debug("→ chimes in: %s", addr.AgentID)
-		return Decision{Action: "trigger", AgentID: addr.AgentID}
+		return c.trigger(addr.AgentID)
 	}
 
 	c.debug("→ back to user")
 	return Decision{Action: "wait"}
+}
+
+// trigger gives agentID the floor, unless MaxAgentTurns agents have had
+// it since the last user message.
+func (c *Controller) trigger(agentID string) Decision {
+	if c.MaxAgentTurns > 0 && c.agentTurns >= c.MaxAgentTurns {
+		c.debug("→ max_agent_turns (%d) reached, back to user instead of %s", c.MaxAgentTurns, agentID)
+		return Decision{Action: "wait", Info: fmt.Sprintf(
+			"%d agent turns since your last message — the floor is yours (floor_control.max_agent_turns)", c.MaxAgentTurns)}
+	}
+	c.agentTurns++
+	return Decision{Action: "trigger", AgentID: agentID}
 }
 
 // mayGetFloor reports whether agentID is an agent of this controller that

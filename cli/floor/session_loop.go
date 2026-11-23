@@ -171,6 +171,9 @@ func (s *Session) act(roomID string, view *Session, d Decision) {
 		}()
 
 	case "wait":
+		if d.Info != "" {
+			s.emit(roomID, InfoEvent{Text: d.Info})
+		}
 		if roomID == "" {
 			s.emit("", AwaitingInput{})
 		}
