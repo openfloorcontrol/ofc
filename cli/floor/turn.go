@@ -59,6 +59,10 @@ func (t *agentTurn) MarkSent() {
 	}
 }
 
+func (t *agentTurn) AttachmentData(id string) ([]byte, error) {
+	return t.view.Store().GetBlob(t.view.ID(), id)
+}
+
 func (t *agentTurn) Stream(ev Event)       { t.room.PostStream(ev) }
 func (t *agentTurn) Status(ev ChatEvent)   { t.room.PostEvent(ev) }
 func (t *agentTurn) Reply(msg ChatMessage) { t.room.Post(msg) }

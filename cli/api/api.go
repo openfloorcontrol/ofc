@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"mime"
 	"net"
@@ -284,6 +285,8 @@ func (s *Server) RegisterFloorAPI(f *floor.Floor) {
 	s.echo.POST("/api/v1/sessions", handleCreateSession(f))
 	s.echo.POST("/api/v1/sessions/:id/messages", withSession(f, handlePostMessage))
 	s.echo.GET("/api/v1/sessions/:id/messages", withSession(f, handleGetMessages))
+	s.echo.POST("/api/v1/sessions/:id/attachments", withSession(f, handlePostAttachment))
+	s.echo.GET("/api/v1/sessions/:id/attachments/:aid", withSession(f, handleGetAttachment))
 	s.echo.GET("/api/v1/sessions/:id/events", withSession(f, handleSSEEvents))
 	s.echo.GET("/api/v1/agents", handleGetAgents(f.Blueprint))
 	s.echo.GET("/api/v1/furniture", handleGetFurniture(f.Furniture))
@@ -371,23 +374,43 @@ func handleCreateSession(f *floor.Floor) echo.HandlerFunc {
 // POST /api/v1/sessions/:id/messages — inject a message into the session.
 // If from is empty or "@user", routes through PostUserInput (handles slash commands).
 // Otherwise posts as the specified sender (for external agents/webhooks).
+//
+// attachments refers to images uploaded with POST .../attachments, by id;
+// name is the display name. Only @user messages take attachments.
 func handlePostMessage(c echo.Context, sess *floor.Session) error {
 	var req struct {
-		From    string `json:"from"`
-		Content string `json:"content"`
+		From        string `json:"from"`
+		Content     string `json:"content"`
+		Attachments []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"attachments"`
 	}
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
 	}
-	if req.Content == "" {
+	if req.Content == "" && len(req.Attachments) == 0 {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "content is required"})
 	}
 
 	from := req.From
 	if from == "" || from == "@user" {
 		from = "@user"
-		sess.MainRoom.PostUserInput(req.Content)
+		in := floor.UserInput{Text: req.Content}
+		for _, ref := range req.Attachments {
+			att, err := sess.LookupAttachment(ref.ID, ref.Name)
+			if err != nil {
+				return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+			}
+			in.Attachments = append(in.Attachments, att)
+		}
+		if err := sess.MainRoom.PostUserInput(in); err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		}
 	} else {
+		if len(req.Attachments) > 0 {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "only @user messages take attachments"})
+		}
 		sess.MainRoom.Post(floor.ChatMessage{From: from, Content: req.Content})
 	}
 
@@ -395,6 +418,39 @@ func handlePostMessage(c echo.Context, sess *floor.Session) error {
 		"ok":      true,
 		"message": map[string]string{"from": from, "content": req.Content},
 	})
+}
+
+// POST /api/v1/sessions/:id/attachments?name=<file name> — upload an
+// image; the body is the image's bytes. Answers with the Attachment,
+// whose id a message then refers to.
+func handlePostAttachment(c echo.Context, sess *floor.Session) error {
+	data, err := io.ReadAll(io.LimitReader(c.Request().Body, floor.MaxAttachmentSize+1))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+	}
+	name := c.QueryParam("name")
+	if name == "" {
+		name = "image"
+	}
+	att, err := sess.AttachImage(name, data)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+	}
+	return c.JSON(http.StatusCreated, att)
+}
+
+// GET /api/v1/sessions/:id/attachments/:aid — an uploaded image's bytes.
+// The id is the content's hash, so the response never changes.
+func handleGetAttachment(c echo.Context, sess *floor.Session) error {
+	data, err := sess.AttachmentData(c.Param("aid"))
+	if errors.Is(err, floor.ErrBlobNotFound) {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "attachment not found"})
+	}
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+	c.Response().Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	return c.Blob(http.StatusOK, http.DetectContentType(data), data)
 }
 
 // GET /api/v1/sessions/:id/messages — the session's #main history as JSON.
@@ -406,6 +462,7 @@ func handleGetMessages(c echo.Context, sess *floor.Session) error {
 		From             string                  `json:"from"`
 		Content          string                  `json:"content"`
 		ToolInteractions []floor.ToolInteraction `json:"tool_interactions,omitempty"`
+		Attachments      []floor.Attachment      `json:"attachments,omitempty"`
 	}
 	events, err := sess.Store().Read(sess.ID(), floor.EventFilter{RoomID: floor.MainRoomID})
 	if err != nil {
@@ -422,6 +479,7 @@ func handleGetMessages(c echo.Context, sess *floor.Session) error {
 			From:             mp.Message.From,
 			Content:          mp.Message.Content,
 			ToolInteractions: mp.Message.ToolInteractions,
+			Attachments:      mp.Message.Attachments,
 		})
 	}
 	return c.JSON(http.StatusOK, map[string]interface{}{"messages": msgs})

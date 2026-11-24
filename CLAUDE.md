@@ -52,7 +52,7 @@ cli/                          # Go module (github.com/openfloorcontrol/ofc)
     output.go                 # Terminal + log file multiplexer
     colors.go                 # ANSI palette, BuildColorMap
   api/                        # HTTP API server (composition layer)
-    api.go                    # api.Server: /api/v1/sessions[/{id}/messages|events], /agents, /furniture, /floors/{floor}/mcp|sse/{name}, /file/*
+    api.go                    # api.Server: /api/v1/sessions[/{id}/messages|events|attachments[/{aid}]], /agents, /furniture, /floors/{floor}/mcp|sse/{name}, /file/*
   acp/                        # Agent Client Protocol integration (low-level)
     session.go                # ACP agent subprocess lifecycle + handshake
     client.go                 # FloorClient: implements acpsdk.Client callbacks

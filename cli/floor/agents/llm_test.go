@@ -79,7 +79,7 @@ func newHarness(t *testing.T, tweak func(*blueprint.Agent), script ...llmtest.Re
 // turn posts a user message and runs one agent turn against it.
 func (h *harness) turn(t *testing.T, prompt string) {
 	t.Helper()
-	h.sess.MainRoom.PostUserInput(prompt)
+	h.sess.MainRoom.PostUserInput(floor.UserInput{Text: prompt})
 	turn := floor.NewAgentTurn(h.sess, h.sess.MainRoom, h.floor, "@a")
 	if err := agents.NewLLM(&h.bp.Agents[0]).Run(context.Background(), turn); err != nil {
 		t.Fatalf("agent run: %v", err)

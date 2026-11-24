@@ -20,6 +20,7 @@ func EventJSON(ev ChatEvent) map[string]interface{} {
 				"content":           e.Message.Content,
 				"reasoning":         e.Message.Reasoning,
 				"tool_interactions": e.Message.ToolInteractions,
+				"attachments":       e.Message.Attachments,
 			},
 		}
 	case StreamEvent:
@@ -125,6 +126,7 @@ type eventJSON struct {
 		Content          string            `json:"content"`
 		Reasoning        string            `json:"reasoning"`
 		ToolInteractions []ToolInteraction `json:"tool_interactions"`
+		Attachments      []Attachment      `json:"attachments"`
 	} `json:"message"`
 	AgentID string `json:"agent_id"`
 	Token   string `json:"token"`
@@ -158,6 +160,7 @@ func ParseEventJSON(data []byte) (TaggedEvent, error) {
 			Content:          j.Message.Content,
 			Reasoning:        j.Message.Reasoning,
 			ToolInteractions: j.Message.ToolInteractions,
+			Attachments:      j.Message.Attachments,
 		}}
 	case "token":
 		ev = StreamEvent{Event: TokenStreamed{AgentID: j.AgentID, Token: j.Token}}

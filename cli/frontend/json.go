@@ -55,7 +55,7 @@ func (j *JSONFrontend) EmitInfo(text string) {
 // RunLoop writes the session's events as JSONL until the session stops
 // (or, with an initial prompt, until it waits for the user). The session
 // may be local or remote.
-func (j *JSONFrontend) RunLoop(client SessionClient, initialPrompt string) error {
+func (j *JSONFrontend) RunLoop(client SessionClient, initial Prompt) error {
 	// Set up log file (stdout is reserved for JSON)
 	if j.logFile != "" || j.debug {
 		j.out = NewOutput(j.logFile, j.debug)
@@ -72,14 +72,14 @@ func (j *JSONFrontend) RunLoop(client SessionClient, initialPrompt string) error
 		"session":   client.ID(),
 	})
 
-	if initialPrompt != "" {
-		if err := client.PostUserInput(initialPrompt); err != nil {
+	if !initial.Empty() {
+		if err := initial.post(client); err != nil {
 			return err
 		}
 	}
 	events := client.Events()
 
-	oneShot := initialPrompt != "" && !floor.IsCommand(initialPrompt)
+	oneShot := initial.oneShot()
 
 	for tagged := range events {
 		if payload := floor.EventJSON(tagged.Event); payload != nil {

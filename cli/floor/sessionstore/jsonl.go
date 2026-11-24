@@ -42,6 +42,9 @@ import (
 //	{"kind":"agent_state","session_id":"...","agent_id":"@coder","state":{...}}
 //
 // For meta and agent_state, the last record wins.
+//
+// Blobs (attachment bytes) are files beside the log:
+// <dir>/<sessionID>.blobs/<sha256>.
 type JSONLStore struct {
 	mu     sync.Mutex
 	dir    string
@@ -283,13 +286,71 @@ func (s *JSONLStore) List() ([]floor.SessionInfo, error) {
 	return infos, nil
 }
 
-// Delete closes and removes the session's file and drops it from the
-// mirror.
+// PutBlob writes data to <dir>/<sessionID>.blobs/<id>. Blobs are not
+// mirrored in memory; GetBlob reads the file.
+func (s *JSONLStore) PutBlob(sessionID string, data []byte) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	dir, err := s.blobDir(sessionID)
+	if err != nil {
+		return "", err
+	}
+	id := floor.BlobID(data)
+	path := filepath.Join(dir, id)
+	if _, err := os.Stat(path); err == nil {
+		return id, nil
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("create blob dir: %w", err)
+	}
+	// Write under a temporary name and rename, so a crash never leaves a
+	// partial blob under its ID.
+	tmp, err := os.CreateTemp(dir, ".tmp-*")
+	if err != nil {
+		return "", fmt.Errorf("create blob: %w", err)
+	}
+	_, werr := tmp.Write(data)
+	serr := tmp.Sync()
+	cerr := tmp.Close()
+	if err := errors.Join(werr, serr, cerr); err != nil {
+		os.Remove(tmp.Name())
+		return "", fmt.Errorf("write blob: %w", err)
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		os.Remove(tmp.Name())
+		return "", fmt.Errorf("store blob: %w", err)
+	}
+	return id, nil
+}
+
+// GetBlob reads <dir>/<sessionID>.blobs/<id>.
+func (s *JSONLStore) GetBlob(sessionID, id string) ([]byte, error) {
+	dir, err := s.blobDir(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if !floor.ValidBlobID(id) {
+		return nil, floor.ErrBlobNotFound
+	}
+	data, err := os.ReadFile(filepath.Join(dir, id))
+	if os.IsNotExist(err) {
+		return nil, floor.ErrBlobNotFound
+	}
+	return data, err
+}
+
+// Delete closes and removes the session's file and blobs and drops it
+// from the mirror.
 func (s *JSONLStore) Delete(sessionID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	path, err := s.path(sessionID)
+	if err != nil {
+		return err
+	}
+	blobDir, err := s.blobDir(sessionID)
 	if err != nil {
 		return err
 	}
@@ -301,8 +362,16 @@ func (s *JSONLStore) Delete(sessionID string) error {
 		delete(s.loaded, sessionID)
 		_ = s.mem.Delete(sessionID) // absent if the file held no records
 	}
+	_, statErr := os.Stat(blobDir)
+	hadBlobs := statErr == nil
+	if err := os.RemoveAll(blobDir); err != nil {
+		return fmt.Errorf("delete blobs of session %s: %w", sessionID, err)
+	}
 	if err := os.Remove(path); err != nil {
 		if os.IsNotExist(err) {
+			if hadBlobs {
+				return nil
+			}
 			return floor.ErrSessionNotFound
 		}
 		return fmt.Errorf("delete session %s: %w", sessionID, err)
@@ -319,6 +388,15 @@ func (s *JSONLStore) path(sessionID string) (string, error) {
 		return "", fmt.Errorf("invalid session ID %q", sessionID)
 	}
 	return filepath.Join(s.dir, sessionID+".jsonl"), nil
+}
+
+// blobDir returns the directory of a session's blobs.
+func (s *JSONLStore) blobDir(sessionID string) (string, error) {
+	path, err := s.path(sessionID)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(path, ".jsonl") + ".blobs", nil
 }
 
 // ensureLoaded replays the session's file into the mirror on first use.

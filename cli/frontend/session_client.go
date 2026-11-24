@@ -20,7 +20,10 @@ type SessionClient interface {
 	// closed when the session ends or the connection drops.
 	Events() <-chan floor.TaggedEvent
 	// PostUserInput sends a message or slash command from @user.
-	PostUserInput(text string) error
+	PostUserInput(in floor.UserInput) error
+	// AttachImage uploads an image to the session, for a later
+	// PostUserInput to carry.
+	AttachImage(name string, data []byte) (floor.Attachment, error)
 	// Close stops event delivery.
 	Close()
 }
@@ -64,9 +67,12 @@ func (l *LocalSession) History() []floor.ChatMessage { return l.sess.MainRoom.Hi
 
 func (l *LocalSession) Events() <-chan floor.TaggedEvent { return l.events }
 
-func (l *LocalSession) PostUserInput(text string) error {
-	l.sess.MainRoom.PostUserInput(text)
-	return nil
+func (l *LocalSession) PostUserInput(in floor.UserInput) error {
+	return l.sess.MainRoom.PostUserInput(in)
+}
+
+func (l *LocalSession) AttachImage(name string, data []byte) (floor.Attachment, error) {
+	return l.sess.AttachImage(name, data)
 }
 
 func (l *LocalSession) Close() { l.sess.Unsubscribe(l.events) }

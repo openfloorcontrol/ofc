@@ -4,6 +4,7 @@ package llm
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,6 +19,41 @@ type Message struct {
 	Name       string     `json:"name,omitempty"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
+	// Images go to the model after Content. A message with images is
+	// sent with content as a list of parts; see MarshalJSON.
+	Images []Image `json:"-"`
+}
+
+// Image is an image in a message, for models that take images.
+type Image struct {
+	MIME string
+	Data []byte
+}
+
+// MarshalJSON writes content as a string, or, when the message has
+// images, as a list of parts: the text, then each image as a data URL.
+func (m Message) MarshalJSON() ([]byte, error) {
+	type plain Message // without this method
+	if len(m.Images) == 0 {
+		return json.Marshal(plain(m))
+	}
+	type imageURL struct {
+		URL string `json:"url"`
+	}
+	type part struct {
+		Type     string    `json:"type"`
+		Text     string    `json:"text,omitempty"`
+		ImageURL *imageURL `json:"image_url,omitempty"`
+	}
+	parts := []part{{Type: "text", Text: m.Content}}
+	for _, img := range m.Images {
+		url := "data:" + img.MIME + ";base64," + base64.StdEncoding.EncodeToString(img.Data)
+		parts = append(parts, part{Type: "image_url", ImageURL: &imageURL{URL: url}})
+	}
+	return json.Marshal(struct {
+		plain
+		Content []part `json:"content"`
+	}{plain(m), parts})
 }
 
 // ToolCall represents a tool invocation

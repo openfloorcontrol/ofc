@@ -3,6 +3,8 @@ package frontend
 import (
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -64,7 +66,7 @@ func (f *CLIFrontend) Debug(msg string) {
 // RunLoop renders the session's events and feeds stdin to it until the
 // session stops (or, with an initial prompt, until the session waits for
 // the user). The session may be local or remote.
-func (f *CLIFrontend) RunLoop(client SessionClient, initialPrompt string) error {
+func (f *CLIFrontend) RunLoop(client SessionClient, initial Prompt) error {
 	defer f.Close()
 	defer client.Close()
 
@@ -91,17 +93,20 @@ func (f *CLIFrontend) RunLoop(client SessionClient, initialPrompt string) error 
 	go f.readStdinLoop(client, readyForInput, stdinDone)
 
 	// If initial prompt, post it as @user (or handle as command)
-	if initialPrompt != "" {
+	if !initial.Empty() {
 		f.renderStream(floor.AgentLabel{AgentID: "@user"}, "")
-		f.renderStream(floor.TokenStreamed{AgentID: "@user", Token: initialPrompt + "\n"}, "")
-		if err := client.PostUserInput(initialPrompt); err != nil {
+		f.renderStream(floor.TokenStreamed{AgentID: "@user", Token: initial.Text + "\n"}, "")
+		for _, path := range initial.Images {
+			f.out.Print("%s[📎 %s]%s\n", Dim, path, Reset)
+		}
+		if err := initial.post(client); err != nil {
 			return err
 		}
 	} else {
 		signalReady()
 	}
 
-	oneShot := initialPrompt != "" && !floor.IsCommand(initialPrompt)
+	oneShot := initial.oneShot()
 
 	for {
 		var tagged floor.TaggedEvent
@@ -171,7 +176,18 @@ func (f *CLIFrontend) RunLoop(client SessionClient, initialPrompt string) error 
 // Waits for readyForInput before showing the prompt (so it doesn't
 // appear while agents are streaming). Closes stdinDone at end of input:
 // that ends this frontend, not the session.
+//
+// /attach <path> uploads an image and stages it for the next message;
+// /attach alone lists the staged images, /detach drops them. These
+// commands stay in the frontend: the session never sees them.
 func (f *CLIFrontend) readStdinLoop(client SessionClient, readyForInput chan struct{}, stdinDone chan<- struct{}) {
+	var staged []floor.Attachment
+	reprompt := func() {
+		select {
+		case readyForInput <- struct{}{}:
+		default:
+		}
+	}
 	for range readyForInput {
 		f.out.Print("\n")
 		prompt := fmt.Sprintf("%s%s[%s]:%s ", Bold, f.agentColor("@user"), "@user", Reset)
@@ -189,21 +205,67 @@ func (f *CLIFrontend) readStdinLoop(client SessionClient, readyForInput chan str
 
 		if text == "" {
 			// Empty line — re-prompt immediately
-			select {
-			case readyForInput <- struct{}{}:
-			default:
-			}
+			reprompt()
 			continue
 		}
 
-		if err := client.PostUserInput(text); err != nil {
+		if cmd, arg, _ := strings.Cut(text, " "); cmd == "/attach" || cmd == "/detach" {
+			staged = f.attachCommand(client, cmd, strings.TrimSpace(arg), staged)
+			reprompt()
+			continue
+		}
+
+		in := floor.UserInput{Text: text}
+		if !floor.IsCommand(text) {
+			in.Attachments = staged
+		}
+		if err := client.PostUserInput(in); err != nil {
 			f.renderSystemInfo(fmt.Sprintf("[ERROR: %v]", err))
-			select {
-			case readyForInput <- struct{}{}:
-			default:
-			}
+			reprompt()
+			continue
+		}
+		if !floor.IsCommand(text) {
+			staged = nil
 		}
 	}
+}
+
+// attachCommand runs /attach or /detach and returns the staged images.
+func (f *CLIFrontend) attachCommand(client SessionClient, cmd, arg string, staged []floor.Attachment) []floor.Attachment {
+	switch {
+	case cmd == "/detach":
+		f.renderSystemInfo(fmt.Sprintf("Dropped %d staged image(s)", len(staged)))
+		return nil
+	case arg == "":
+		if len(staged) == 0 {
+			f.renderSystemInfo("No images staged. /attach <path> stages one for your next message")
+		}
+		for _, a := range staged {
+			f.renderSystemInfo(attachmentLabel(a))
+		}
+		return staged
+	}
+	att, err := attachFile(client, expandPath(arg))
+	if err != nil {
+		f.renderSystemInfo(fmt.Sprintf("[ERROR: %v]", err))
+		return staged
+	}
+	f.renderSystemInfo(attachmentLabel(att) + " staged for your next message")
+	return append(staged, att)
+}
+
+// expandPath undoes what a shell or a terminal's drag-and-drop does to a
+// path: surrounding quotes and a leading ~/.
+func expandPath(p string) string {
+	if len(p) >= 2 && (p[0] == '\'' || p[0] == '"') && p[len(p)-1] == p[0] {
+		p = p[1 : len(p)-1]
+	}
+	if rest, ok := strings.CutPrefix(p, "~/"); ok {
+		if home, err := os.UserHomeDir(); err == nil {
+			p = filepath.Join(home, rest)
+		}
+	}
+	return p
 }
 
 // renderStream handles display of streaming events.
@@ -291,6 +353,9 @@ func (f *CLIFrontend) renderLastTurnIfAny(history []floor.ChatMessage) {
 		f.out.Print("\n")
 		f.out.AgentLabel(msg.From, f.agentColor(msg.From))
 		f.out.Print("%s\n", msg.Content)
+		for _, a := range msg.Attachments {
+			f.out.Print("%s%s%s\n", Dim, attachmentLabel(a), Reset)
+		}
 	}
 }
 
@@ -310,6 +375,6 @@ func (f *CLIFrontend) renderHeader(info FloorInfo) {
 	if len(info.Furniture) > 0 {
 		f.renderSystemInfo(fmt.Sprintf("Furniture: %s", strings.Join(info.Furniture, ", ")))
 	}
-	f.renderSystemInfo(fmt.Sprintf("Type %s/quit%s to exit, %s/clear%s to reset", Bold, Reset, Bold, Reset))
+	f.renderSystemInfo(fmt.Sprintf("Type %s/quit%s to exit, %s/clear%s to reset, %s/attach <path>%s to add an image", Bold, Reset, Bold, Reset, Bold, Reset))
 	f.renderSystemInfo(fmt.Sprintf("%s%s%s", Bold, strings.Repeat("=", 50), Reset))
 }

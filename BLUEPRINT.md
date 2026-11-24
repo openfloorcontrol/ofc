@@ -166,6 +166,28 @@ When the floor starts it prints where each agent's model came from:
 
 `model` is for LLM agents; an ACP agent chooses its own model.
 
+#### Images
+
+Users can attach images to their messages (web UI, `/attach <path>` in the
+CLI, `ofc run --attach`). An agent sees them only if its model takes
+images, which a blueprint model declares with `vision: true`, and an mf
+entry with `vision = true` (`mf set <name> vision true`):
+
+```yaml
+models:
+  eyes:
+    endpoint: https://api.openai.com/v1
+    model: gpt-5
+    api_key: ${OPENAI_API_KEY}
+    vision: true
+```
+
+An agent on a model without `vision` gets a
+note such as `[image cat.png (image/png) attached — not shown …]` in place
+of the image. An ACP agent gets images when it advertises
+`promptCapabilities.image`, and the same note otherwise. To check whether a
+model takes images: `ofc check ask @agent --attach cat.png "what is this?"`.
+
 ### Thinking
 
 Reasoning models emit their thinking either inline as `<think>…</think>` or as a

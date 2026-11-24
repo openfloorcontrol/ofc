@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, provide } from 'vue'
 import { useSSE } from './composables/useSSE.js'
 import { useChat } from './composables/useChat.js'
 import { useFurniture } from './composables/useFurniture.js'
@@ -85,13 +85,46 @@ async function fetchMetadata() {
   agents.value = data.agents || []
 }
 
-async function sendMessage(content) {
-  await apiFetch(`${sessionBase}/messages`, {
+// apiError turns a failed response into an Error with the server's message.
+async function apiError(resp) {
+  const body = await resp.json().catch(() => ({}))
+  return new Error(body.error || `${resp.status} ${resp.statusText}`)
+}
+
+async function sendMessage({ text, attachments }) {
+  const resp = await apiFetch(`${sessionBase}/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({
+      content: text,
+      attachments: attachments.map((a) => ({ id: a.id, name: a.name })),
+    }),
   })
+  if (!resp.ok) throw await apiError(resp)
 }
+
+// uploadImage stores an image in the session; a message then refers to
+// the returned attachment by id.
+async function uploadImage(file) {
+  const name = encodeURIComponent(file.name || 'image')
+  const resp = await apiFetch(`${sessionBase}/attachments?name=${name}`, {
+    method: 'POST',
+    headers: { 'Content-Type': file.type || 'application/octet-stream' },
+    body: file,
+  })
+  if (!resp.ok) throw await apiError(resp)
+  return resp.json()
+}
+
+// attachmentUrl is where an <img> loads a message's image from.
+function attachmentUrl(attachment) {
+  const token = tokenForUrls.value
+  const query = token ? `?token=${encodeURIComponent(token)}` : ''
+  return `${sessionBase}/attachments/${encodeURIComponent(attachment.id)}${query}`
+}
+const tokenForUrls = ref('')
+getToken().then((t) => { tokenForUrls.value = t })
+provide('attachmentUrl', attachmentUrl)
 
 function handleEventWithRefresh(event) {
   // Sub-room events aren't shown yet.
@@ -176,7 +209,7 @@ onMounted(async () => {
           :streamingMessage="streamingMessage"
           :agents="agents"
         />
-        <InputBar :disabled="false" @send="sendMessage" />
+        <InputBar :disabled="false" :send="sendMessage" :upload="uploadImage" />
       </div>
     </div>
     </template>

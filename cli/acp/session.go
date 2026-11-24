@@ -20,6 +20,7 @@ type Subprocess struct {
 	Client          *FloorClient
 	McpCapabilities acpsdk.McpCapabilities // from agent init response
 	CanResume       bool                   // agent advertises session/resume
+	AcceptsImages   bool                   // agent advertises promptCapabilities.image
 }
 
 // NewSubprocess launches an ACP agent process and establishes a connection.
@@ -87,8 +88,9 @@ func (s *Subprocess) Initialize(ctx context.Context) error {
 
 	s.McpCapabilities = resp.AgentCapabilities.McpCapabilities
 	s.CanResume = resp.AgentCapabilities.SessionCapabilities.Resume != nil
-	s.Client.debug(fmt.Sprintf("initialized: protocol v%d, mcp={http:%v, sse:%v}, resume=%v",
-		resp.ProtocolVersion, s.McpCapabilities.Http, s.McpCapabilities.Sse, s.CanResume))
+	s.AcceptsImages = resp.AgentCapabilities.PromptCapabilities.Image
+	s.Client.debug(fmt.Sprintf("initialized: protocol v%d, mcp={http:%v, sse:%v}, resume=%v, image=%v",
+		resp.ProtocolVersion, s.McpCapabilities.Http, s.McpCapabilities.Sse, s.CanResume, s.AcceptsImages))
 	return nil
 }
 

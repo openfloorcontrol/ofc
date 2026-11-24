@@ -120,6 +120,7 @@ type Agent struct {
 	Model       string `yaml:"-"`
 	APIKey      string `yaml:"-"`
 	ModelSource string `yaml:"-"`
+	Vision      bool   `yaml:"-"` // the model takes images (models.<name>.vision)
 
 	Command string            `yaml:"command"` // ACP: command to launch agent
 	Args    []string          `yaml:"args"`    // ACP: args for the command
@@ -164,6 +165,9 @@ type ModelDef struct {
 	Endpoint string `yaml:"endpoint"`          // OpenAI-compatible API base URL
 	Model    string `yaml:"model"`             // the provider's model ID
 	APIKey   string `yaml:"api_key,omitempty"` // supports ${VAR} env expansion
+	// Vision says the model takes images. Agents on a model without it
+	// get a note in place of each image.
+	Vision bool `yaml:"vision,omitempty"`
 }
 
 // FurnitureDef configures a piece of furniture on the floor.

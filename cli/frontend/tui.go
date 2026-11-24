@@ -148,7 +148,7 @@ func (t *TUIFrontend) RunLoop(fl *floor.Floor, initialPrompt string) error {
 				t.program.Send(tuiDisplayMsg{Event: floor.AgentLabel{AgentID: "@user"}})
 				t.program.Send(tuiDisplayMsg{Event: floor.TokenStreamed{AgentID: "@user", Token: initialPrompt + "\n"}})
 			}
-			sess.MainRoom.PostUserInput(initialPrompt)
+			sess.MainRoom.PostUserInput(floor.UserInput{Text: initialPrompt})
 		}
 
 		for tagged := range events {
@@ -319,7 +319,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			// Post to Chat
 			if m.chat != nil {
-				m.chat.PostUserInput(text)
+				m.chat.PostUserInput(floor.UserInput{Text: text})
 			}
 			return m, nil
 		}

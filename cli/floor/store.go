@@ -153,6 +153,15 @@ type SessionStore interface {
 	// GetAgentState returns the agent's state in the session, or
 	// ErrNoAgentState if none was recorded.
 	GetAgentState(sessionID, agentID string) (AgentState, error)
+
+	// PutBlob stores data in the session under BlobID(data) and returns
+	// that ID. Storing the same data again is a no-op. Blobs hold the
+	// bytes of message attachments; Delete removes them with the session.
+	PutBlob(sessionID string, data []byte) (string, error)
+
+	// GetBlob returns the session's blob with the given ID, or
+	// ErrBlobNotFound.
+	GetBlob(sessionID, id string) ([]byte, error)
 }
 
 // SortSessionInfos orders sessions as List documents: most recent

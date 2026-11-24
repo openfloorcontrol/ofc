@@ -55,6 +55,7 @@ var (
 	bindAddr       string
 	webHostname    string
 	useJSON        bool
+	attachImages   []string
 	sessionID      string
 	remoteURL      string
 	dbDSN          string
@@ -75,14 +76,19 @@ var runCmd = &cobra.Command{
 	Long:  `Run a floor with optional initial prompt.`,
 	Args:  cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
+		prompt := frontend.Prompt{Images: attachImages}
+		if len(args) > 0 {
+			prompt.Text = args[0]
+		}
+		if len(attachImages) > 0 && (useWeb || useTUI) {
+			fmt.Fprintln(os.Stderr, "Error: --attach works with the CLI and --json frontends")
+			os.Exit(1)
+		}
+
 		if remoteURL != "" {
 			if useWeb || useTUI {
 				fmt.Fprintln(os.Stderr, "Error: --remote works with the CLI and --json frontends")
 				os.Exit(1)
-			}
-			var prompt string
-			if len(args) > 0 {
-				prompt = args[0]
 			}
 			runRemote(prompt)
 			return
@@ -101,28 +107,23 @@ var runCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		var initialPrompt string
-		if len(args) > 0 {
-			initialPrompt = args[0]
-		}
-
 		if useWeb {
-			if initialPrompt != "" {
+			if prompt.Text != "" {
 				fmt.Fprintln(os.Stderr, "Error: --web takes no prompt; each browser tab starts its own session")
 				os.Exit(1)
 			}
 			runWeb(bp)
 		} else if useJSON {
-			runJSON(bp, initialPrompt)
+			runJSON(bp, prompt)
 		} else if useTUI {
-			runTUI(bp, initialPrompt)
+			runTUI(bp, prompt.Text)
 		} else {
-			runCLI(bp, initialPrompt)
+			runCLI(bp, prompt)
 		}
 	},
 }
 
-func runCLI(bp *blueprint.Blueprint, initialPrompt string) {
+func runCLI(bp *blueprint.Blueprint, initialPrompt frontend.Prompt) {
 	fe := frontend.NewCLI(logFile, debug, frontend.BuildColorMap(agentIDs(bp)), historyFile())
 
 	f, _ := newFloorWithStore(bp)
@@ -150,7 +151,7 @@ func runCLI(bp *blueprint.Blueprint, initialPrompt string) {
 
 // runRemote runs the CLI or JSON frontend against a session on the ofc
 // web server at --remote, without a local floor.
-func runRemote(initialPrompt string) {
+func runRemote(initialPrompt frontend.Prompt) {
 	client, err := openRemoteSession()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -306,7 +307,7 @@ func runTUI(bp *blueprint.Blueprint, initialPrompt string) {
 	}
 }
 
-func runJSON(bp *blueprint.Blueprint, initialPrompt string) {
+func runJSON(bp *blueprint.Blueprint, initialPrompt frontend.Prompt) {
 	fe := frontend.NewJSON(logFile, debug)
 
 	f, _ := newFloorWithStore(bp)
@@ -343,6 +344,7 @@ func init() {
 	fs.StringVar(&bindAddr, "bind", "127.0.0.1", "Address the web UI listens on (0.0.0.0 for all interfaces)")
 	fs.StringVar(&webHostname, "hostname", "", "External URL for web UI (e.g. https://myhost.dev), overrides localhost in printed URL")
 	fs.BoolVar(&useJSON, "json", false, "Output events as JSONL to stdout")
+	fs.StringArrayVar(&attachImages, "attach", nil, "Image file to attach to the prompt (repeatable; CLI and --json)")
 	fs.StringVar(&sessionID, "session", "", "Session UUID to resume (default: generate a new one)")
 	fs.StringVar(&remoteURL, "remote", "", "Use a session on a running \"ofc run --web\" server at this URL (token from ?token= or --token) instead of a local floor")
 	fs.StringVar(&apiToken, "token", "", "API token for --web (default: a random one) and for --remote")

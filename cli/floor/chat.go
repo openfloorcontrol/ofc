@@ -8,6 +8,15 @@ type ChatMessage struct {
 	Content          string            // The text content
 	Reasoning        string            // Model reasoning, if any — displayed but never fed back as context
 	ToolInteractions []ToolInteraction // Tool calls made during this turn
+	Attachments      []Attachment      `json:",omitempty"` // images; bytes in the session's blob store
+}
+
+// UserInput is what a user sends: text, and images uploaded to the
+// session beforehand (Session.AttachImage). Text starting with "/" is a
+// slash command, which takes no attachments.
+type UserInput struct {
+	Text        string
+	Attachments []Attachment
 }
 
 // ChatEvent is anything that happens in a room — messages, streaming, lifecycle.

@@ -47,7 +47,7 @@ func runFloor(t *testing.T, bp *blueprint.Blueprint, prompt string) *FloorResult
 	defer sess.Unsubscribe(events)
 	sess.Start()
 
-	sess.MainRoom.PostUserInput(prompt)
+	sess.MainRoom.PostUserInput(floor.UserInput{Text: prompt})
 
 	result := &FloorResult{bp: bp}
 	for tagged := range events {

@@ -1,7 +1,10 @@
 package frontend_test
 
 import (
+	"bytes"
 	"context"
+	"image"
+	"image/png"
 	"testing"
 	"time"
 
@@ -72,7 +75,7 @@ func TestRemoteSessionNewAndAttach(t *testing.T) {
 	if info := client.Info(); info.Name != "remote-test" || len(info.Agents) != 1 {
 		t.Errorf("info = %+v", info)
 	}
-	if err := client.PostUserInput("@echo? ping"); err != nil {
+	if err := client.PostUserInput(floor.UserInput{Text: "@echo? ping"}); err != nil {
 		t.Fatal(err)
 	}
 	var replied bool
@@ -93,6 +96,48 @@ func TestRemoteSessionNewAndAttach(t *testing.T) {
 	}
 	defer attached.Close()
 	if h := attached.History(); len(h) != 2 || h[1].Content != "pong" {
+		t.Errorf("history = %+v", h)
+	}
+}
+
+// An image uploaded through a remote session travels with the message,
+// over the event stream and in the history.
+func TestRemoteSessionAttachImage(t *testing.T) {
+	_, base := startServer(t, "secret")
+	client, err := frontend.NewRemoteSession(base, "secret", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	var buf bytes.Buffer
+	png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, 2, 2)))
+	att, err := client.AttachImage("dot.png", buf.Bytes())
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	if att.MIME != "image/png" || att.Name != "dot.png" {
+		t.Errorf("attachment = %+v", att)
+	}
+	if err := client.PostUserInput(floor.UserInput{Text: "@echo? look", Attachments: []floor.Attachment{att}}); err != nil {
+		t.Fatal(err)
+	}
+	var streamed bool
+	for _, ev := range waitFor[floor.AwaitingInput](t, client.Events()) {
+		if mp, ok := ev.(floor.MessagePosted); ok && mp.Message.From == "@user" {
+			streamed = len(mp.Message.Attachments) == 1 && mp.Message.Attachments[0] == att
+		}
+	}
+	if !streamed {
+		t.Error("the user's message came over the stream without its attachment")
+	}
+
+	again, err := frontend.NewRemoteSession(base, "secret", client.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.Close()
+	if h := again.History(); len(h) < 1 || len(h[0].Attachments) != 1 || h[0].Attachments[0] != att {
 		t.Errorf("history = %+v", h)
 	}
 }

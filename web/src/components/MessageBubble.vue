@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, inject } from 'vue'
 import { useMarkdown } from '../composables/useMarkdown.js'
 import ToolCall from './ToolCall.vue'
 
@@ -9,6 +9,7 @@ const props = defineProps({
 })
 
 const { renderMarkdown } = useMarkdown()
+const attachmentUrl = inject('attachmentUrl', null)
 
 const senderColors = {
   '@user': 'text-cyan-400',
@@ -76,5 +77,22 @@ const segments = computed(() => {
         <ToolCall :toolCall="seg" />
       </div>
     </template>
+
+    <div v-if="attachmentUrl && message.attachments?.length" class="flex flex-wrap gap-2 mb-2">
+      <a
+        v-for="att in message.attachments"
+        :key="att.id"
+        :href="attachmentUrl(att)"
+        target="_blank"
+        rel="noopener"
+        :title="att.name"
+      >
+        <img
+          :src="attachmentUrl(att)"
+          :alt="att.name"
+          class="max-h-48 max-w-xs rounded border border-slate-600 object-contain bg-slate-800"
+        />
+      </a>
+    </div>
   </div>
 </template>
