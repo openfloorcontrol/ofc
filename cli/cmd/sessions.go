@@ -66,13 +66,13 @@ var sessionsLsCmd = &cobra.Command{
 }
 
 var sessionsRmCmd = &cobra.Command{
-	Use:   "rm <uuid>",
+	Use:   "rm <uuid or unique prefix>",
 	Short: "Remove a session",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		id := args[0]
 		store := mustOpenSessionStore()
 		defer store.Close()
+		id := mustResolveSessionID(store, args[0])
 
 		if !rmForce {
 			fmt.Printf("Delete session %s? [y/N] ", id)
@@ -98,13 +98,13 @@ var sessionsRmCmd = &cobra.Command{
 }
 
 var sessionsShowCmd = &cobra.Command{
-	Use:   "show <uuid>",
+	Use:   "show <uuid or unique prefix>",
 	Short: "Print a session's conversation as markdown",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		id := args[0]
 		store := mustOpenSessionStore()
 		defer store.Close()
+		id := mustResolveSessionID(store, args[0])
 
 		meta, metaErr := store.GetMeta(id)
 		if metaErr != nil && !errors.Is(metaErr, floor.ErrNoSessionMeta) {
@@ -156,6 +156,52 @@ var sessionsShowCmd = &cobra.Command{
 			fmt.Printf("**[%s]**: %s\n\n", msg.From, msg.Content)
 		}
 	},
+}
+
+// mustResolveSessionID returns the ID of the one stored session that
+// starts with prefix, or exits. ls prints IDs cut to 8 characters, so
+// show and rm take any unique prefix; a full ID matches itself.
+func mustResolveSessionID(store sessionStore, prefix string) string {
+	infos, err := store.List()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error listing sessions: %v\n", err)
+		os.Exit(1)
+	}
+	ids := make([]string, len(infos))
+	for i, info := range infos {
+		ids[i] = info.ID
+	}
+	id, err := matchSessionID(ids, prefix)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	return id
+}
+
+// matchSessionID returns the one id that equals or starts with prefix.
+func matchSessionID(ids []string, prefix string) (string, error) {
+	if prefix == "" {
+		return "", errors.New("empty session ID")
+	}
+	var matches []string
+	for _, id := range ids {
+		if id == prefix {
+			return id, nil
+		}
+		if strings.HasPrefix(id, prefix) {
+			matches = append(matches, id)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return "", fmt.Errorf("session %s not found", prefix)
+	case 1:
+		return matches[0], nil
+	default:
+		return "", fmt.Errorf("session %s is ambiguous, it matches %d sessions: %s",
+			prefix, len(matches), strings.Join(matches, ", "))
+	}
 }
 
 // mustOpenSessionStore opens the configured store or exits.
