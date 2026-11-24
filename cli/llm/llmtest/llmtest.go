@@ -81,6 +81,49 @@ type Message struct {
 	Name       string `json:"name,omitempty"`
 	ToolCallID string `json:"tool_call_id,omitempty"`
 	ToolCalls  []Call `json:"tool_calls,omitempty"`
+	// Images are the image_url parts of a content sent as a list of
+	// parts (whose text parts make up Content).
+	Images []string `json:"-"`
+}
+
+// UnmarshalJSON reads content as a string or as a list of parts.
+func (m *Message) UnmarshalJSON(b []byte) error {
+	type plain Message
+	var w struct {
+		plain
+		Content json.RawMessage `json:"content"`
+	}
+	if err := json.Unmarshal(b, &w); err != nil {
+		return err
+	}
+	*m = Message(w.plain)
+	if len(w.Content) == 0 || string(w.Content) == "null" {
+		return nil
+	}
+	if w.Content[0] == '"' {
+		return json.Unmarshal(w.Content, &m.Content)
+	}
+	var parts []struct {
+		Type     string `json:"type"`
+		Text     string `json:"text"`
+		ImageURL struct {
+			URL string `json:"url"`
+		} `json:"image_url"`
+	}
+	if err := json.Unmarshal(w.Content, &parts); err != nil {
+		return fmt.Errorf("content: %w", err)
+	}
+	for _, p := range parts {
+		switch p.Type {
+		case "text":
+			m.Content += p.Text
+		case "image_url":
+			m.Images = append(m.Images, p.ImageURL.URL)
+		default:
+			return fmt.Errorf("content: unknown part type %q", p.Type)
+		}
+	}
+	return nil
 }
 
 // Request is a recorded chat-completions request.

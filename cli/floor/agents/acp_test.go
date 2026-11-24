@@ -59,11 +59,17 @@ func startACPFloor(t *testing.T) *floor.Floor {
 // ACP idle timeout (0 for none). The caller stops the floor.
 func newACPFloor(t *testing.T, store floor.SessionStore, stateDir string, idle time.Duration) *floor.Floor {
 	t.Helper()
+	return newACPFloorEnv(t, store, map[string]string{"FAKE_ACP_STATE_DIR": stateDir}, idle)
+}
+
+// newACPFloorEnv is newACPFloor with @fake's environment given in full.
+func newACPFloorEnv(t *testing.T, store floor.SessionStore, env map[string]string, idle time.Duration) *floor.Floor {
+	t.Helper()
 	bp := &blueprint.Blueprint{
 		Name: "acp-test",
 		Agents: []blueprint.Agent{{
 			ID: "@fake", Type: "acp", Command: fakeAgent(t), Activation: "always",
-			Env:    map[string]string{"FAKE_ACP_STATE_DIR": stateDir},
+			Env:    env,
 			Prompt: "You are @fake.",
 		}},
 	}
@@ -128,7 +134,16 @@ func TestACPSessionResumesAfterRestart(t *testing.T) {
 // ask posts a user message to the session and returns @fake's reply.
 func ask(t *testing.T, sess *floor.Session, events <-chan floor.TaggedEvent, text string) string {
 	t.Helper()
-	sess.MainRoom.PostUserInput(text)
+	return askInput(t, sess, events, floor.UserInput{Text: text})
+}
+
+// askInput is ask with any user input.
+func askInput(t *testing.T, sess *floor.Session, events <-chan floor.TaggedEvent, in floor.UserInput) string {
+	t.Helper()
+	text := in.Text
+	if err := sess.MainRoom.PostUserInput(in); err != nil {
+		t.Fatalf("post %q: %v", text, err)
+	}
 	timeout := time.After(10 * time.Second)
 	for {
 		select {
@@ -234,7 +249,7 @@ func TestACPSubprocessClosedOnQuit(t *testing.T) {
 	sess.Start()
 
 	p := pid(t, ask(t, sess, events, "hello"))
-	sess.MainRoom.PostUserInput("/quit")
+	sess.MainRoom.PostUserInput(floor.UserInput{Text: "/quit"})
 	deadline := time.Now().Add(5 * time.Second)
 	for processAlive(p) {
 		if time.Now().After(deadline) {

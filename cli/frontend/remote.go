@@ -44,9 +44,10 @@ func NewRemoteSession(base, token, sessionID string) (*RemoteSession, error) {
 
 	var history struct {
 		Messages []struct {
-			Seq     uint64 `json:"seq"`
-			From    string `json:"from"`
-			Content string `json:"content"`
+			Seq         uint64             `json:"seq"`
+			From        string             `json:"from"`
+			Content     string             `json:"content"`
+			Attachments []floor.Attachment `json:"attachments"`
 		} `json:"messages"`
 	}
 	if err := r.do("GET", r.sessionPath("/messages"), nil, &history); err != nil {
@@ -54,13 +55,13 @@ func NewRemoteSession(base, token, sessionID string) (*RemoteSession, error) {
 	}
 	var lastSeq uint64
 	for _, m := range history.Messages {
-		r.hist = append(r.hist, floor.ChatMessage{From: m.From, Content: m.Content})
+		r.hist = append(r.hist, floor.ChatMessage{From: m.From, Content: m.Content, Attachments: m.Attachments})
 		lastSeq = m.Seq
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	r.cancel = cancel
-	resp, err := r.request(ctx, "GET", r.sessionPath(fmt.Sprintf("/events?last_event_id=%d", lastSeq)), nil)
+	resp, err := r.request(ctx, "GET", r.sessionPath(fmt.Sprintf("/events?last_event_id=%d", lastSeq)), nil, "")
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("open event stream: %w", err)
@@ -76,9 +77,32 @@ func (r *RemoteSession) History() []floor.ChatMessage     { return r.hist }
 func (r *RemoteSession) Events() <-chan floor.TaggedEvent { return r.events }
 func (r *RemoteSession) Close()                           { r.cancel() }
 
-func (r *RemoteSession) PostUserInput(text string) error {
-	body, _ := json.Marshal(map[string]string{"content": text})
+func (r *RemoteSession) PostUserInput(in floor.UserInput) error {
+	type ref struct {
+		ID   string `json:"id"`
+		Name string `json:"name,omitempty"`
+	}
+	req := struct {
+		Content     string `json:"content"`
+		Attachments []ref  `json:"attachments,omitempty"`
+	}{Content: in.Text}
+	for _, a := range in.Attachments {
+		req.Attachments = append(req.Attachments, ref{ID: a.ID, Name: a.Name})
+	}
+	body, _ := json.Marshal(req)
 	return r.do("POST", r.sessionPath("/messages"), body, nil)
+}
+
+func (r *RemoteSession) AttachImage(name string, data []byte) (floor.Attachment, error) {
+	var att floor.Attachment
+	path := r.sessionPath("/attachments?name=" + url.QueryEscape(name))
+	resp, err := r.request(context.Background(), "POST", path, data, "application/octet-stream")
+	if err != nil {
+		return att, err
+	}
+	defer resp.Body.Close()
+	err = json.NewDecoder(resp.Body).Decode(&att)
+	return att, err
 }
 
 func (r *RemoteSession) loadInfo() error {
@@ -139,7 +163,7 @@ func (r *RemoteSession) sessionPath(suffix string) string {
 
 // do sends a request and decodes a JSON response into out (if non-nil).
 func (r *RemoteSession) do(method, path string, body []byte, out any) error {
-	resp, err := r.request(context.Background(), method, path, body)
+	resp, err := r.request(context.Background(), method, path, body, "application/json")
 	if err != nil {
 		return err
 	}
@@ -151,13 +175,14 @@ func (r *RemoteSession) do(method, path string, body []byte, out any) error {
 }
 
 // request sends a request with the Bearer token and fails on non-2xx.
-func (r *RemoteSession) request(ctx context.Context, method, path string, body []byte) (*http.Response, error) {
+// contentType applies when there is a body.
+func (r *RemoteSession) request(ctx context.Context, method, path string, body []byte, contentType string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, r.base+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Content-Type", contentType)
 	}
 	if r.token != "" {
 		req.Header.Set("Authorization", "Bearer "+r.token)

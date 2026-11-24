@@ -3,7 +3,9 @@
 //
 //	pid=<process id> prompts=<prompts in this ACP session> | <prompt text>
 //
-// where <prompt text> is the prompt's text blocks joined with " / ". Tests
+// where <prompt text> is the prompt's text blocks joined with " / ", with
+// each image block shown as <image MIME BYTES bytes>. It advertises
+// image prompts unless FAKE_ACP_NO_IMAGES is set. Tests
 // use pid to tell subprocesses apart, prompts to see whether a session
 // continued, and the text to see what context the agent received.
 //
@@ -25,6 +27,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -55,6 +58,7 @@ func (a *fakeAgent) Initialize(ctx context.Context, _ acp.InitializeRequest) (ac
 		AgentCapabilities: acp.AgentCapabilities{
 			McpCapabilities:     acp.McpCapabilities{Http: true, Sse: true},
 			SessionCapabilities: acp.SessionCapabilities{Resume: &acp.SessionResumeCapabilities{}},
+			PromptCapabilities:  acp.PromptCapabilities{Image: os.Getenv("FAKE_ACP_NO_IMAGES") == ""},
 		},
 	}, nil
 }
@@ -97,6 +101,9 @@ func (a *fakeAgent) Prompt(ctx context.Context, params acp.PromptRequest) (acp.P
 		if b.Text != nil {
 			texts = append(texts, b.Text.Text)
 		}
+		if b.Image != nil {
+			texts = append(texts, imageText(b.Image))
+		}
 	}
 
 	a.mu.Lock()
@@ -132,6 +139,16 @@ func (a *fakeAgent) Prompt(ctx context.Context, params acp.PromptRequest) (acp.P
 		return acp.PromptResponse{}, err
 	}
 	return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, nil
+}
+
+// imageText shows an image block as text: <image MIME BYTES bytes>, or
+// <image MIME undecodable> if its data is not valid base64.
+func imageText(img *acp.ContentBlockImage) string {
+	data, err := base64.StdEncoding.DecodeString(img.Data)
+	if err != nil {
+		return fmt.Sprintf("<image %s undecodable>", img.MimeType)
+	}
+	return fmt.Sprintf("<image %s %d bytes>", img.MimeType, len(data))
 }
 
 // save writes the session's prompt count to the state dir, if any.

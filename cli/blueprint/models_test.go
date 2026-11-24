@@ -27,6 +27,7 @@ tags     = ['coding']
 name     = 'smart'
 endpoint = 'gw'
 model    = 'anthropic/claude-smart'
+vision   = true
 `), 0o644)
 	os.WriteFile(filepath.Join(dir, "models.secrets"), []byte(`
 [[secret]]
@@ -132,5 +133,38 @@ func TestBlueprintModelsDoNotReadRegistry(t *testing.T) {
 	body := "name: t\nmodels:\n  local:\n    endpoint: http://x\n    model: m\nagents:\n  - id: \"@a\"\n    model: local\n"
 	if _, err := loadBlueprint(t, body); err != nil {
 		t.Errorf("a blueprint with only its own models failed to load: %v", err)
+	}
+}
+
+// vision on a blueprint model or an mf entry reaches the agents on it.
+func TestModelVision(t *testing.T) {
+	withMFRegistry(t)
+	bp, err := loadBlueprint(t, `
+name: t
+models:
+  eyes:
+    endpoint: http://localhost/v1
+    model: vl
+    vision: true
+  blind:
+    endpoint: http://localhost/v1
+    model: text
+agents:
+  - id: "@a"
+    model: eyes
+  - id: "@b"
+    model: blind
+  - id: "@c"
+    model: fast
+  - id: "@d"
+    model: smart
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []bool{true, false, false, true} {
+		if got := bp.Agents[i].Vision; got != want {
+			t.Errorf("%s: Vision = %v, want %v", bp.Agents[i].ID, got, want)
+		}
 	}
 }

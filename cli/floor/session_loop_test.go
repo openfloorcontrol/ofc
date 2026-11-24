@@ -62,7 +62,7 @@ func eventTypes(evs []floor.ChatEvent) []string {
 
 func TestSessionLoopRunsMentionedAgent(t *testing.T) {
 	sess, events := startLoopSession(t)
-	sess.MainRoom.PostUserInput("@echo? ping")
+	sess.MainRoom.PostUserInput(floor.UserInput{Text: "@echo? ping"})
 
 	got := eventTypes(collectUntil[floor.AwaitingInput](t, events))
 	want := []string{
@@ -79,10 +79,10 @@ func TestSessionLoopRunsMentionedAgent(t *testing.T) {
 
 func TestSessionLoopClear(t *testing.T) {
 	sess, events := startLoopSession(t)
-	sess.MainRoom.PostUserInput("@echo? ping")
+	sess.MainRoom.PostUserInput(floor.UserInput{Text: "@echo? ping"})
 	collectUntil[floor.AwaitingInput](t, events)
 
-	sess.MainRoom.PostUserInput("/clear")
+	sess.MainRoom.PostUserInput(floor.UserInput{Text: "/clear"})
 	got := eventTypes(collectUntil[floor.AwaitingInput](t, events))
 	want := []string{"floor.UserCommandEvent", "floor.SessionCleared", "floor.AwaitingInput"}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
@@ -95,11 +95,11 @@ func TestSessionLoopClear(t *testing.T) {
 
 func TestSessionLoopQuitStopsDispatch(t *testing.T) {
 	sess, events := startLoopSession(t)
-	sess.MainRoom.PostUserInput("/quit")
+	sess.MainRoom.PostUserInput(floor.UserInput{Text: "/quit"})
 	collectUntil[floor.SessionStopped](t, events)
 
 	// After /quit the message is still forwarded, but no agent runs.
-	sess.MainRoom.PostUserInput("@echo? ping")
+	sess.MainRoom.PostUserInput(floor.UserInput{Text: "@echo? ping"})
 	collectUntil[floor.MessagePosted](t, events)
 	select {
 	case tagged := <-events:
@@ -120,7 +120,7 @@ func TestSessionLoopUnknownAgentReportsInfo(t *testing.T) {
 	sess.Start()
 	defer sess.Close()
 
-	sess.MainRoom.PostUserInput("@ghost? hello")
+	sess.MainRoom.PostUserInput(floor.UserInput{Text: "@ghost? hello"})
 	got := collectUntil[floor.InfoEvent](t, events)
 	if info := got[len(got)-1].(floor.InfoEvent); info.Text == "" {
 		t.Errorf("empty info text")

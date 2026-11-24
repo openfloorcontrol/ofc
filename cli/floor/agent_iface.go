@@ -23,6 +23,9 @@ type AgentTurn interface {
 	Entries() []*ChatMessage
 	Delta() []*ChatMessage
 	MarkSent()
+	// AttachmentData returns the bytes of an attachment of a message in
+	// this session.
+	AttachmentData(id string) ([]byte, error)
 
 	// Emit results into the bound room.
 	Stream(ev Event)

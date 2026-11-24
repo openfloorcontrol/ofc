@@ -219,15 +219,39 @@ func (a *LLMAgent) buildContext(turn floor.AgentTurn) ([]llmsdk.Message, error) 
 					content += "\n\n" + toolSummary
 				}
 			}
+			images, notes := a.loadImages(turn, msg.Attachments)
+			for _, note := range notes {
+				content += "\n" + note
+			}
 			messages = append(messages, llmsdk.Message{
 				Role:    "user",
 				Content: content,
 				Name:    strings.TrimPrefix(msg.From, "@"),
+				Images:  images,
 			})
 		}
 	}
 
 	return messages, nil
+}
+
+// loadImages turns a message's attachments into images for the model,
+// or, for a model without vision and for images that fail to load, into
+// notes for the message text.
+func (a *LLMAgent) loadImages(turn floor.AgentTurn, atts []floor.Attachment) (images []llmsdk.Image, notes []string) {
+	for _, att := range atts {
+		if !a.agent.Vision {
+			notes = append(notes, imageNote(att))
+			continue
+		}
+		data, err := turn.AttachmentData(att.ID)
+		if err != nil {
+			notes = append(notes, missingImageNote(att, err))
+			continue
+		}
+		images = append(images, llmsdk.Image{MIME: att.MIME, Data: data})
+	}
+	return images, notes
 }
 
 // buildTools constructs the tool list for this agent.

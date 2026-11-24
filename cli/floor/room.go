@@ -1,6 +1,7 @@
 package floor
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 )
@@ -135,12 +136,19 @@ func (r *Room) PostEvent(ev ChatEvent) {
 // PostUserInput routes user input: slash commands become UserCommandEvents,
 // everything else becomes a ChatMessage from @user (which goes through Post
 // and is therefore stored).
-func (r *Room) PostUserInput(text string) {
-	if strings.HasPrefix(text, "/") {
-		r.PostEvent(UserCommandEvent{Command: text})
-	} else {
-		r.Post(ChatMessage{From: "@user", Content: text})
+func (r *Room) PostUserInput(in UserInput) error {
+	if strings.HasPrefix(in.Text, "/") {
+		if len(in.Attachments) > 0 {
+			return fmt.Errorf("a command (%s) takes no attachments", strings.Fields(in.Text)[0])
+		}
+		r.PostEvent(UserCommandEvent{Command: in.Text})
+		return nil
 	}
+	if in.Text == "" && len(in.Attachments) == 0 {
+		return fmt.Errorf("empty input")
+	}
+	r.Post(ChatMessage{From: "@user", Content: in.Text, Attachments: in.Attachments})
+	return nil
 }
 
 // History returns a snapshot of all messages in this room.

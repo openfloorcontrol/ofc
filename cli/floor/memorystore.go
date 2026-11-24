@@ -23,6 +23,7 @@ type memSession struct {
 	agentRefs   map[string][]uint64   // agentID → seq numbers in arrival order
 	meta        *SessionMeta          // nil if SetMeta was never called
 	agentStates map[string]AgentState // agentID → state
+	blobs       map[string][]byte     // BlobID → data
 }
 
 // NewMemoryStore creates an empty in-memory store.
@@ -38,6 +39,7 @@ func (m *MemoryStore) getSession(sessionID string) *memSession {
 		s = &memSession{
 			agentRefs:   make(map[string][]uint64),
 			agentStates: make(map[string]AgentState),
+			blobs:       make(map[string][]byte),
 		}
 		m.sessions[sessionID] = s
 	}
@@ -274,6 +276,30 @@ func (m *MemoryStore) GetAgentState(sessionID, agentID string) (AgentState, erro
 		return AgentState{}, ErrNoAgentState
 	}
 	return st, nil
+}
+
+// PutBlob implements SessionStore.
+func (m *MemoryStore) PutBlob(sessionID string, data []byte) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	id := BlobID(data)
+	m.getSession(sessionID).blobs[id] = append([]byte(nil), data...)
+	return id, nil
+}
+
+// GetBlob implements SessionStore.
+func (m *MemoryStore) GetBlob(sessionID, id string) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.sessions[sessionID]
+	if !ok {
+		return nil, ErrBlobNotFound
+	}
+	data, ok := s.blobs[id]
+	if !ok {
+		return nil, ErrBlobNotFound
+	}
+	return append([]byte(nil), data...), nil
 }
 
 // matches checks whether an event satisfies the filter.

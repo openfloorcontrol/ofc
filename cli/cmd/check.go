@@ -3,10 +3,12 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/openfloorcontrol/ofc/blueprint"
+	"github.com/openfloorcontrol/ofc/floor"
 	"github.com/openfloorcontrol/ofc/llm"
 	"github.com/spf13/cobra"
 )
@@ -16,6 +18,7 @@ var (
 	checkEndpoint string
 	checkKey      string
 	checkModel    string
+	checkAttach   []string
 )
 
 var checkCmd = &cobra.Command{
@@ -132,7 +135,19 @@ only, no system prompt is sent.`,
 		if t.SystemPrompt != "" {
 			messages = append(messages, llm.Message{Role: "system", Content: t.SystemPrompt})
 		}
-		messages = append(messages, llm.Message{Role: "user", Content: prompt})
+		user := llm.Message{Role: "user", Content: prompt}
+		for _, path := range checkAttach {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				fatal(err)
+			}
+			att, err := floor.DescribeImage(filepath.Base(path), data)
+			if err != nil {
+				fatal(err)
+			}
+			user.Images = append(user.Images, llm.Image{MIME: att.MIME, Data: data})
+		}
+		messages = append(messages, user)
 
 		client := llm.NewClient(t.Endpoint, t.APIKey)
 		_, err = client.ChatStream(t.Model, messages, t.Temperature, nil, llm.StreamHandler{
@@ -277,6 +292,7 @@ func init() {
 	checkCmd.AddCommand(checkPingCmd)
 	checkCmd.AddCommand(checkModelsCmd)
 	checkCmd.AddCommand(checkAskCmd)
+	checkAskCmd.Flags().StringArrayVar(&checkAttach, "attach", nil, "Image file to send with the prompt (repeatable), to check that a model takes images before setting vision: true")
 
 	rootCmd.AddCommand(checkCmd)
 }

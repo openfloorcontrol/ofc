@@ -99,6 +99,7 @@ export function useChat() {
           from: event.message.from,
           content: event.message.content,
           toolInteractions: event.message.tool_interactions || [],
+          attachments: event.message.attachments || [],
         }
 
         // If we were streaming for this agent, merge segments
@@ -162,6 +163,7 @@ export function useChat() {
       from: m.from,
       content: m.content,
       toolInteractions: m.tool_interactions || [],
+      attachments: m.attachments || [],
     }))
     return loaded.length > 0 ? loaded[loaded.length - 1].seq : 0
   }

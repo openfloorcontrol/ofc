@@ -2,6 +2,7 @@ package agents
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"strings"
 
@@ -56,7 +57,7 @@ func (a *ACPAgent) Run(ctx context.Context, turn floor.AgentTurn) error {
 	// Emit agent label before first token
 	turn.Stream(floor.AgentLabel{AgentID: a.agent.ID})
 
-	blocks, err := a.buildACPContext(turn)
+	blocks, err := a.buildACPContext(turn, subproc.AcceptsImages)
 	if err != nil {
 		turn.Status(floor.AgentErrorEvent{AgentID: a.agent.ID, Err: err})
 		return err
@@ -104,8 +105,9 @@ func (a *ACPAgent) Run(ctx context.Context, turn floor.AgentTurn) error {
 // Uses Delta() to send only new messages since the last prompt; ACP
 // agents maintain their own session state, so we skip the agent's own
 // messages (it already remembers them) and only send the system prompt
-// once.
-func (a *ACPAgent) buildACPContext(turn floor.AgentTurn) ([]acpsdk.ContentBlock, error) {
+// once. A message's images follow its text as image blocks if the agent
+// accepts images, else as notes in the text.
+func (a *ACPAgent) buildACPContext(turn floor.AgentTurn, acceptsImages bool) ([]acpsdk.ContentBlock, error) {
 	var blocks []acpsdk.ContentBlock
 
 	delta := turn.Delta()
@@ -147,7 +149,22 @@ func (a *ACPAgent) buildACPContext(turn floor.AgentTurn) ([]acpsdk.ContentBlock,
 			}
 		}
 
+		var images []acpsdk.ContentBlock
+		for _, att := range msg.Attachments {
+			if !acceptsImages {
+				sb.WriteString("\n" + imageNote(att))
+				continue
+			}
+			data, err := turn.AttachmentData(att.ID)
+			if err != nil {
+				sb.WriteString("\n" + missingImageNote(att, err))
+				continue
+			}
+			images = append(images, acpsdk.ImageBlock(base64.StdEncoding.EncodeToString(data), att.MIME))
+		}
+
 		blocks = append(blocks, acpsdk.TextBlock(sb.String()))
+		blocks = append(blocks, images...)
 	}
 
 	blocks = append(blocks, acpsdk.TextBlock("Your turn to respond."))

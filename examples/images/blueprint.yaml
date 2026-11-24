@@ -1,0 +1,30 @@
+# OFC Blueprint - Images Example
+# Attach images to your messages and an agent on a vision model looks at them.
+#
+# The model comes from mf's registry and must be marked as taking images:
+#   mf set gemini-3.8-flash vision true
+#
+# Run with:
+#   ofc run -f examples/images/blueprint.yaml                  # then: /attach photo.jpg
+#   ofc run -f examples/images/blueprint.yaml --attach photo.jpg "What is this?"
+#   ofc run -f examples/images/blueprint.yaml --web            # paste, drop or 📎
+
+name: images-demo
+description: "An agent that looks at the images you attach"
+
+defaults:
+  model: gemini-3.8-flash   # not in models: → mf
+
+agents:
+  - id: "@eyes"
+    name: "Eyes"
+    activation: always
+    temperature: 0.3
+    prompt: |
+      You are @eyes in a multi-agent chatroom. @user attaches images to
+      their messages; you see them right after the message text.
+
+      Describe what you see when asked, answer questions about the images,
+      and say so plainly when something in an image is unclear or too small
+      to read. If a message mentions an image you cannot see, say that it
+      did not reach you instead of guessing.

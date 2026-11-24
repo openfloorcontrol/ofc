@@ -12,6 +12,7 @@ type ResolvedModel struct {
 	Model    string // the provider's model ID
 	APIKey   string
 	Source   string // where it came from, for display
+	Vision   bool   // takes images: the blueprint model's or mf entry's vision
 }
 
 // ResolveModel resolves a model reference: a name from the blueprint's
@@ -31,7 +32,7 @@ type modelResolver struct {
 func (r *modelResolver) resolve(ref string) (ResolvedModel, error) {
 	if def, ok := r.bp.Models[ref]; ok {
 		return ResolvedModel{
-			Endpoint: def.Endpoint, Model: def.Model, APIKey: def.APIKey,
+			Endpoint: def.Endpoint, Model: def.Model, APIKey: def.APIKey, Vision: def.Vision,
 			Source: fmt.Sprintf("%s (blueprint) → %s", ref, def.Model),
 		}, nil
 	}
@@ -50,7 +51,7 @@ func (r *modelResolver) resolve(ref string) (ResolvedModel, error) {
 	}
 	key, _ := m.Key(r.store)
 	return ResolvedModel{
-		Endpoint: m.Endpoint.URL, Model: m.ModelID, APIKey: key,
+		Endpoint: m.Endpoint.URL, Model: m.ModelID, APIKey: key, Vision: m.Vision,
 		Source: fmt.Sprintf("%s (mf) → %s/%s", ref, m.Endpoint.Name, m.ModelID),
 	}, nil
 }
@@ -86,7 +87,7 @@ func resolveModels(bp *Blueprint) error {
 		if err != nil {
 			return fmt.Errorf("agent %s: %w", a.ID, err)
 		}
-		a.Endpoint, a.Model, a.APIKey, a.ModelSource = m.Endpoint, m.Model, m.APIKey, m.Source
+		a.Endpoint, a.Model, a.APIKey, a.ModelSource, a.Vision = m.Endpoint, m.Model, m.APIKey, m.Source, m.Vision
 	}
 
 	if fc := &bp.FloorControl; fc.ModelRef != "" {
