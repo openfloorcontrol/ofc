@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/openfloorcontrol/ofc/api"
 	"github.com/openfloorcontrol/ofc/blueprint"
 	"github.com/openfloorcontrol/ofc/floor"
 )
@@ -49,6 +50,90 @@ func TestCreateAndListSessions(t *testing.T) {
 	resp.Body.Close()
 	if len(list.Sessions) != 1 || list.Sessions[0].ID != created.ID || list.Sessions[0].EventCount != 1 {
 		t.Errorf("list = %+v, want only %s with 1 event", list.Sessions, created.ID)
+	}
+}
+
+// Sessions created with X-Volume-User belong to that user: others neither
+// list nor open them. Sessions without an owner are open to everyone, and
+// a caller without the header sees everything.
+func TestSessionsAreSeparatedByUser(t *testing.T) {
+	f := newTestFloor(&blueprint.Blueprint{Name: "test"}, nil)
+	f.SessionMetaTemplate = &floor.SessionMeta{BlueprintName: "test"}
+	base := startTestAPI(t, f)
+
+	do := func(method, path, user, body string) *http.Response {
+		t.Helper()
+		req, _ := http.NewRequest(method, base+path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		if user != "" {
+			req.Header.Set(api.UserHeader, user)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s %s: %v", method, path, err)
+		}
+		return resp
+	}
+	create := func(user string) string {
+		t.Helper()
+		resp := do("POST", "/api/v1/sessions", user, "")
+		defer resp.Body.Close()
+		var created struct{ ID string }
+		json.NewDecoder(resp.Body).Decode(&created)
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("create as %q: status %d", user, resp.StatusCode)
+		}
+		return created.ID
+	}
+	list := func(user string) (string, map[string]string) {
+		t.Helper()
+		resp := do("GET", "/api/v1/sessions", user, "")
+		defer resp.Body.Close()
+		var l struct {
+			User     string `json:"user"`
+			Sessions []struct {
+				ID   string `json:"id"`
+				User string `json:"user"`
+			} `json:"sessions"`
+		}
+		json.NewDecoder(resp.Body).Decode(&l)
+		owners := map[string]string{}
+		for _, s := range l.Sessions {
+			owners[s.ID] = s.User
+		}
+		return l.User, owners
+	}
+
+	alice, bob, nobody := create("alice"), create("bob"), create("")
+
+	me, got := list("alice")
+	want := map[string]string{alice: "alice", nobody: ""}
+	if me != "alice" || len(got) != len(want) || got[alice] != "alice" || got[nobody] != "" || got[bob] != "" {
+		t.Errorf("alice lists user %q, sessions %v; want alice, %v", me, got, want)
+	}
+	if _, got := list(""); len(got) != 3 || got[bob] != "bob" {
+		t.Errorf("without a user: %v, want all three", got)
+	}
+
+	for _, c := range []struct {
+		user, id string
+		status   int
+	}{
+		{"alice", bob, http.StatusNotFound},
+		{"bob", bob, http.StatusOK},
+		{"alice", nobody, http.StatusOK},
+		{"", bob, http.StatusOK},
+	} {
+		resp := do("GET", "/api/v1/sessions/"+c.id+"/messages", c.user, "")
+		resp.Body.Close()
+		if resp.StatusCode != c.status {
+			t.Errorf("%q reads %s: status %d, want %d", c.user, c.id[:8], resp.StatusCode, c.status)
+		}
+	}
+	resp := do("POST", "/api/v1/sessions/"+bob+"/messages", "alice", `{"content": "hi"}`)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("alice posts to bob's session: status %d, want 404", resp.StatusCode)
 	}
 }
 

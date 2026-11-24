@@ -8,13 +8,15 @@ import (
 	"github.com/google/uuid"
 )
 
-// CreateSession starts a new session on the floor. If SessionMetaTemplate
-// is set, it is recorded for the session first.
-func (f *Floor) CreateSession() (*Session, error) {
+// CreateSession starts a new session on the floor, owned by user ("" for
+// nobody in particular). If SessionMetaTemplate is set, it is recorded for
+// the session first, with User replaced by user.
+func (f *Floor) CreateSession(user string) (*Session, error) {
 	id := uuid.NewString()
 	if f.SessionMetaTemplate != nil {
 		meta := *f.SessionMetaTemplate
 		meta.CreatedAt = time.Now()
+		meta.User = user
 		if err := f.Store.SetMeta(id, meta); err != nil {
 			return nil, fmt.Errorf("record session meta: %w", err)
 		}
@@ -77,19 +79,42 @@ func (f *Floor) checkStoredSession(id string) error {
 }
 
 // ListSessions returns the stored sessions whose meta names this floor's
-// blueprint, most recent activity first.
-func (f *Floor) ListSessions() ([]SessionInfo, error) {
+// blueprint, most recent activity first. A non-empty user limits them to
+// the ones user may open (see MayOpen).
+func (f *Floor) ListSessions(user string) ([]SessionInfo, error) {
 	all, err := f.Store.List()
 	if err != nil {
 		return nil, err
 	}
 	var out []SessionInfo
 	for _, info := range all {
-		if info.Meta != nil && info.Meta.BlueprintName == f.ID() {
+		if info.Meta != nil && info.Meta.BlueprintName == f.ID() && mayOpen(info.Meta.User, user) {
 			out = append(out, info)
 		}
 	}
 	return out, nil
+}
+
+// MayOpen reports whether user may open session id. An empty user (a
+// caller nobody identified) may open every session; anyone may open a
+// session without an owner. A session the store doesn't hold is
+// reported as allowed: opening it fails with ErrSessionNotFound anyway.
+func (f *Floor) MayOpen(id, user string) (bool, error) {
+	if user == "" {
+		return true, nil
+	}
+	meta, err := f.Store.GetMeta(id)
+	if errors.Is(err, ErrNoSessionMeta) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return mayOpen(meta.User, user), nil
+}
+
+func mayOpen(owner, user string) bool {
+	return user == "" || owner == "" || owner == user
 }
 
 // notifySessions posts a stream event to the main room of every running

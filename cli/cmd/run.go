@@ -450,7 +450,9 @@ func applySessionStore(f *floor.Floor, bp *blueprint.Blueprint, resuming bool) e
 
 // makeSessionMeta builds a SessionMeta for the current invocation. The
 // blueprint hash is sha256 of the on-disk file contents (captures any
-// change — prompts, agent set, furniture config).
+// change — prompts, agent set, furniture config). User is $USER, the
+// owner of this invocation's own session; sessions created over the web
+// API get the gateway's user instead (Floor.CreateSession).
 func makeSessionMeta(bp *blueprint.Blueprint, bpPath string) (floor.SessionMeta, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -471,6 +473,7 @@ func makeSessionMeta(bp *blueprint.Blueprint, bpPath string) (floor.SessionMeta,
 		BlueprintHash: hash,
 		OfcVersion:    Version,
 		CreatedAt:     time.Now(),
+		User:          os.Getenv("USER"),
 	}, nil
 }
 

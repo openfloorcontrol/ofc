@@ -41,23 +41,26 @@ var sessionsLsCmd = &cobra.Command{
 		}
 
 		// Truncate UUID to 8 chars for readability — full UUID still works as input.
-		fmt.Printf("%-8s  %-19s  %6s  %-20s  %s\n", "UUID", "LAST ACTIVITY", "EVENTS", "BLUEPRINT", "CWD")
+		fmt.Printf("%-8s  %-19s  %6s  %-20s  %-12s  %s\n", "UUID", "LAST ACTIVITY", "EVENTS", "BLUEPRINT", "USER", "CWD")
 		for _, info := range infos {
 			last := "-"
 			if !info.LastActivity.IsZero() {
 				last = info.LastActivity.Local().Format("2006-01-02 15:04:05")
 			}
-			bp, cwd := "-", "-"
+			bp, user, cwd := "-", "-", "-"
 			if info.Meta != nil {
 				if info.Meta.BlueprintName != "" {
 					bp = info.Meta.BlueprintName
+				}
+				if info.Meta.User != "" {
+					user = info.Meta.User
 				}
 				if info.Meta.CWD != "" {
 					cwd = shortCWD(info.Meta.CWD)
 				}
 			}
-			fmt.Printf("%-8s  %-19s  %6d  %-20s  %s\n",
-				info.ID[:min(8, len(info.ID))], last, info.EventCount, truncate(bp, 20), cwd)
+			fmt.Printf("%-8s  %-19s  %6d  %-20s  %-12s  %s\n",
+				info.ID[:min(8, len(info.ID))], last, info.EventCount, truncate(bp, 20), truncate(user, 12), cwd)
 		}
 	},
 }
@@ -124,6 +127,9 @@ var sessionsShowCmd = &cobra.Command{
 			fmt.Printf("- **Blueprint**: %s\n", meta.BlueprintName)
 			if meta.BlueprintPath != "" {
 				fmt.Printf("- **Blueprint path**: %s\n", meta.BlueprintPath)
+			}
+			if meta.User != "" {
+				fmt.Printf("- **User**: %s\n", meta.User)
 			}
 			if meta.CWD != "" {
 				fmt.Printf("- **Working dir**: %s\n", meta.CWD)

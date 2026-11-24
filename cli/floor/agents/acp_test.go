@@ -89,7 +89,7 @@ func TestACPSessionResumesAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	f1 := newACPFloor(t, store1, stateDir, 0)
-	sess, err := f1.CreateSession()
+	sess, err := f1.CreateSession("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,11 +161,11 @@ func pid(t *testing.T, reply string) string {
 // process across turns.
 func TestACPSubprocessPerSession(t *testing.T) {
 	f := startACPFloor(t)
-	a, err := f.CreateSession()
+	a, err := f.CreateSession("")
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := f.CreateSession()
+	b, err := f.CreateSession("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +290,7 @@ func TestACPAgentUsesOnlyItsFurniture(t *testing.T) {
 	}
 	t.Cleanup(f.Stop)
 
-	sess, err := f.CreateSession()
+	sess, err := f.CreateSession("")
 	if err != nil {
 		t.Fatal(err)
 	}

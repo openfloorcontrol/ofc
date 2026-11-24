@@ -291,11 +291,30 @@ func (s *Server) RegisterFloorAPI(f *floor.Floor) {
 	s.echo.GET("/api/v1/file/*", handleServeFile(f.Furniture, f.WorkspacePaths))
 }
 
+// UserHeader names the user the auth gateway (volume-auth via Caddy)
+// authenticated. It is trusted because every /api route needs the access
+// token, which only the gateway sends. Without it, a caller is nobody in
+// particular and sees every session.
+const UserHeader = "X-Volume-User"
+
+func requestUser(c echo.Context) string {
+	return c.Request().Header.Get(UserHeader)
+}
+
 // withSession resolves the :id path parameter to a running session
 // (resuming it from the store if needed) and passes it to the handler.
+// Another user's session is reported as not found.
 func withSession(f *floor.Floor, h func(echo.Context, *floor.Session) error) echo.HandlerFunc {
 	return func(c echo.Context) error {
-		sess, err := f.Session(c.Param("id"))
+		id := c.Param("id")
+		ok, err := f.MayOpen(id, requestUser(c))
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		}
+		if !ok {
+			return c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+		}
+		sess, err := f.Session(id)
 		if errors.Is(err, floor.ErrSessionNotFound) {
 			return c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		}
@@ -306,35 +325,42 @@ func withSession(f *floor.Floor, h func(echo.Context, *floor.Session) error) ech
 	}
 }
 
-// GET /api/v1/sessions — this floor's stored sessions, most recent first.
+// GET /api/v1/sessions — this floor's stored sessions the caller may open,
+// most recent first. "user" is the caller's user, omitted when unknown.
 func handleListSessions(f *floor.Floor) echo.HandlerFunc {
 	type jsonSession struct {
 		ID           string     `json:"id"`
+		User         string     `json:"user,omitempty"`
 		CreatedAt    time.Time  `json:"created_at"`
 		LastActivity *time.Time `json:"last_activity,omitempty"`
 		EventCount   int        `json:"event_count"`
 	}
+	type jsonList struct {
+		User     string        `json:"user,omitempty"`
+		Sessions []jsonSession `json:"sessions"`
+	}
 	return func(c echo.Context) error {
-		infos, err := f.ListSessions()
+		user := requestUser(c)
+		infos, err := f.ListSessions(user)
 		if err != nil {
 			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		}
 		out := make([]jsonSession, len(infos))
 		for i, info := range infos {
-			out[i] = jsonSession{ID: info.ID, CreatedAt: info.Meta.CreatedAt, EventCount: info.EventCount}
+			out[i] = jsonSession{ID: info.ID, User: info.Meta.User, CreatedAt: info.Meta.CreatedAt, EventCount: info.EventCount}
 			if !info.LastActivity.IsZero() {
 				last := info.LastActivity
 				out[i].LastActivity = &last
 			}
 		}
-		return c.JSON(http.StatusOK, map[string]interface{}{"sessions": out})
+		return c.JSON(http.StatusOK, jsonList{User: user, Sessions: out})
 	}
 }
 
-// POST /api/v1/sessions — start a new session.
+// POST /api/v1/sessions — start a new session, owned by the caller's user.
 func handleCreateSession(f *floor.Floor) echo.HandlerFunc {
 	return func(c echo.Context) error {
-		sess, err := f.CreateSession()
+		sess, err := f.CreateSession(requestUser(c))
 		if err != nil {
 			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		}

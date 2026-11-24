@@ -57,6 +57,11 @@ type SessionMeta struct {
 	BlueprintHash string    `json:"blueprint_hash"` // sha256 hex of blueprint file contents
 	OfcVersion    string    `json:"ofc_version"`
 	CreatedAt     time.Time `json:"created_at"`
+	// User owns the session: the gateway's X-Volume-User for sessions
+	// created over the web API, $USER for a CLI session. Empty for
+	// sessions recorded before this field existed, or created over the
+	// API without that header; such sessions are open to everyone.
+	User string `json:"user,omitempty"`
 }
 
 // ErrNoSessionMeta is returned by GetMeta when no metadata has been
