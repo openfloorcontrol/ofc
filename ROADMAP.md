@@ -34,7 +34,25 @@ Multi-agent coordination is working end-to-end with LLM (OpenAI-compatible) and 
 
 - [ ] Blueprint rooms — permanent rooms defined in YAML (agents assigned at startup)
 - [ ] Test edge cases in delegation/return flow (nested mentions, multi-agent chains)
-- [ ] The circle: track who is in the conversation, next to the call stack (who waits for whom). Speaking or being called joins it; `[LEAVE]` ("not my topic, I step out") or N messages of silence leaves it, while `[PASS]` only means "nothing to say right now". Members may follow up on answers; floor control sees the circle as context. `followup_agent` would become "always in the circle". Open: how several members get offered a turn without piling up — one at a time, and how one agent interrupts another (random order, or a protocol where agents sign up to interrupt)
+- [ ] Floor control beyond addressing — see [Floor control ideas](#floor-control-ideas-unsettled)
+
+### Floor control ideas (unsettled)
+
+Ideas for making turn-taking feel more like a real conversation. None is decided; they overlap and may combine.
+
+What works today: a small model decides whom a message addresses (call / chime / nobody), the call stack returns answers to whoever asked, `default_agent` and `followup_agent` are fixed roles, `[PASS]` skips a turn. Known gap: when the user replies to two agents in one message, floor control picks one and doesn't track the other.
+
+**The circle — who is in the conversation.** Next to the call stack (who waits for whom: an obligation), track who is part of the conversation right now (attention). Speaking or being called joins it; `[LEAVE]` ("this topic doesn't interest me, I step out") or N messages of silence leaves it, while `[PASS]` only means "nothing to say right now". Members may follow up on answers, and floor control sees the circle as context. `followup_agent` would become "always in the circle". Open: how several members get offered a turn without piling up (asking all in order made them stack unrelated questions); asking one at a time — "ask → agent doesn't pass → it adds" — then raises how agents interrupt each other: random order, or a protocol where the floor announces who is asked and others sign up to interrupt.
+
+**Initiative — scores instead of a single answer.** Like initiative in DnD: each agent gets a score whether to speak, from modifiers, plus a roll.
+- The floor control model rates relevance per agent from the topic (`{hiro: +10, maya: +0, danny: +2}`) instead of answering `chime @maya` — the model judges, the rules decide.
+- Personality as a base value: a bossy agent +3, a shy one −2, maybe situational through the `turn_prompt`.
+- State as modifiers: addressed, recently spoke (the circle as a number), passed, just spoke.
+- With a seed the rolls are reproducible, and the eval checks the model's modifiers instead of dice results.
+- Calls probably stay obligations (whoever is asked answers; the call stack stays); initiative decides the rest — chiming in, following up, who takes a message to nobody — and could replace `default_agent` and `followup_agent`.
+- The numbers need workshopping.
+
+**Actions and reactions — a mini rule set for conversation.** On its turn an agent takes an action: ask, answer, remark, step out. Others may react: "Hiro steps in before Danny can answer" reacts to a question, "Danny replies, but Hiro follows up" reacts to an answer. As in DnD, one reaction per round would limit chattiness more organically than `max_agent_turns`, and initiative decides who reacts first. Floor control becomes the DM: it reads the situation and hands out modifiers, the rules do the rest. Today's pieces map onto it: a call is an action with an obligation to answer, the call stack holds the open actions, `followup_agent` is a fixed reaction, `[PASS]` is no reaction.
 
 ### Furniture Expansion
 
