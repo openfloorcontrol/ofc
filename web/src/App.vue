@@ -13,6 +13,8 @@ import SessionPicker from './components/SessionPicker.vue'
 // ?sessions shows the session picker instead of a conversation.
 const picking = new URLSearchParams(window.location.search).has('sessions')
 const sessions = ref([])
+// The signed-in user the server filtered the sessions for; '' if unknown.
+const sessionsUser = ref('')
 
 // urlWith returns the current URL with query params changed; a null
 // value removes the param. Keeps the token.
@@ -36,7 +38,9 @@ async function fetchSessions() {
   if (resp.status === 401) {
     throw new Error('unauthorized')
   }
-  sessions.value = (await resp.json()).sessions || []
+  const body = await resp.json()
+  sessions.value = body.sessions || []
+  sessionsUser.value = body.user || ''
 }
 
 const floorName = ref('')
@@ -150,7 +154,7 @@ onMounted(async () => {
       :sessionsHref="picking ? '' : sessionsHref"
       @toggle-sidebar="sidebarOpen = !sidebarOpen"
     />
-    <SessionPicker v-if="picking" :sessions="sessions" :hrefFor="sessionHref" />
+    <SessionPicker v-if="picking" :sessions="sessions" :user="sessionsUser" :hrefFor="sessionHref" />
     <div v-else class="flex flex-1 min-h-0 relative">
       <!-- Mobile backdrop -->
       <div
