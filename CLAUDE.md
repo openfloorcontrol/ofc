@@ -8,6 +8,7 @@ Multi-agent conversational orchestration system in Go. Agents take turns in a sh
 cd cli && go build -o ofc .    # binary at cli/ofc (canonical location)
 go test ./...                   # run from cli/
 ofc run examples/taskboard-acp/blueprint.yaml --log --debug
+ofc building ~/my-building      # web UI over many floors made from templates/
 ```
 
 Flags: `--debug` (debug output), `--log` (write ofc.log), `--tui` (Bubble Tea UI), `-f/--blueprint` (blueprint path), `--config` (env file of settings). Every flag `--foo-bar` is also `OFC_FOO_BAR`; precedence: flag > environment > config file > default (`cli/cmd/config.go`).
@@ -17,13 +18,13 @@ Flags: `--debug` (debug output), `--log` (write ofc.log), `--tui` (Bubble Tea UI
 ```
 cli/                          # Go module (github.com/openfloorcontrol/ofc)
   main.go                     # Entry point
-  cmd/                        # Cobra CLI commands (run, auth, sessions, floor-control eval, check, eval, init, version)
-  blueprint/                  # YAML blueprint schema + loader; models.go resolves model refs (blueprint models:, else mf registry; vision flag)
+  cmd/                        # Cobra CLI commands (run, building, auth, sessions, floor-control eval, check, eval, init, version)
+  blueprint/                  # YAML blueprint schema + loader; models.go resolves model refs (blueprint models:, else mf registry; vision flag); yamlerrors.go rewrites yaml.v3 errors (unknown field → "did you mean", wrong kind → "expected a list")
   floor/                      # Core engine — types, interfaces, runtime
-    floor.go                  # Floor: live DOM (agents, furniture, sandbox, ACP pool, sessions, store, APIServer)
+    floor.go                  # Floor: live DOM (agents, furniture, sandbox, ACP pool, sessions); ID (blueprint name, or NewFloorWithID); served by an APIServer and persisting to a store, both owned by the caller
     session.go                # Session: one conversation thread (rooms + AgentContexts + Controller); implements SessionView
     session_loop.go           # Session.Start: turn-taking loop (Observe → Addresser in a goroutine → AddressDecided → Next → dispatch); Subscribe for frontends
-    floor_sessions.go         # CreateSession / Session(id) (resumes from store) / ListSessions; floor ID = blueprint name
+    floor_sessions.go         # CreateSession / Session(id) (resumes from store) / ListSessions, scoped by SessionMeta.Floor; Busy (for idle stop)
     room.go                   # Room: messages + event channel + subscribers; #main + sub-rooms
     controller.go             # Controller: pure-logic turn-taking (Observe → Request → Next, no I/O; Decide = all three with mentions)
     addressing.go             # Address (call/chime/nobody), Addresser interface, MentionAddresser (the @name? rules)
@@ -43,6 +44,7 @@ cli/                          # Go module (github.com/openfloorcontrol/ofc)
     run_once.go               # RunOnce helper (used by eval/)
   floor/sessionstore/         # File/DB-backed SessionStore implementations
     jsonl.go                  # JSONLStore: directory of <sessionID>.jsonl files + in-memory mirror, crash-recovery
+    jsonl_migrate.go          # format migrations, counted in <dir>/schema_version
     postgres.go               # PostgresStore (+ postgres_migrations/)
   floor/agents/               # LLMAgent + ACPAgent — implement floor.Agent through floor.AgentTurn; agents.New = Floor.AgentFactory
   floor/floorcontrol/         # LLM Addresser: a small model decides whom a message addresses (blueprint floor_control:); Floor.Addresser
@@ -53,7 +55,9 @@ cli/                          # Go module (github.com/openfloorcontrol/ofc)
     output.go                 # Terminal + log file multiplexer
     colors.go                 # ANSI palette, BuildColorMap
   api/                        # HTTP API server (composition layer)
-    api.go                    # api.Server: /api/v1/sessions[/{id}/messages|events|attachments[/{aid}]], /agents, /furniture, /floors/{floor}/mcp|sse/{name}, /file/*
+    api.go                    # api.Server: serves several floors (AddFloor/RemoveFloor); /api/v1/floors, and per floor /api/v1/floors/{floor}/: sessions[/{id}/messages|events|attachments[/{aid}]], agents, furniture, mcp|sse/{name}, file/*
+    building.go               # Building interface (SetBuilding): opens stopped floors on request; /api/v1/templates, POST /floors, PATCH /floors/{f} (rename), GET|PUT /floors/{f}/blueprint (PUT validates via blueprint.Load, 400 + reason), /floors/{f}/stop, DELETE /floors/{f}
+  building/                   # Building: a directory of floors made from templates/ (floor.yaml manifests), lazy start + idle stop (composition layer)
   acp/                        # Agent Client Protocol integration (low-level)
     session.go                # ACP agent subprocess lifecycle + handshake
     client.go                 # FloorClient: implements acpsdk.Client callbacks
@@ -78,12 +82,14 @@ examples/                     # Blueprint examples
   data-analysis-opencode/     # LLM analyst (fs MCP) + OpenCode coder
   acp-test/                   # ACP agent with sandbox
   chaindepth/                 # Delegation chain depth test
+  fake/                       # No model: the test ACP agent (`make fakeagent`) + taskboard, for checks by hand
+  building/                   # `ofc building examples/building`: templates fake, taskboard, assistant (persona.md); floors/ + sessions/ gitignored
 ```
 
 **Package boundary cheat-sheet.** `floor/` owns the engine and defines the
 interfaces. `floor/sessionstore/` and `floor/agents/{llm,acp}/` are
 *extensions* — they implement floor interfaces (nesting signals the
-plug-in relationship). `frontend/` and `api/` are top-level
+plug-in relationship). `frontend/`, `api/` and `building/` are top-level
 *composition* — they consume floor through its interfaces but aren't
 part of it. Agents never reach into `*Floor` or `*Session`: they get a
 `floor.AgentTurn` handle from the dispatch site with exactly the

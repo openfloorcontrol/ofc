@@ -168,7 +168,16 @@ OFC_INTEGRATION=1 go test ./... -timeout 120s
 
 ## 4. Live ACP checks (`tests/live/opencode`)
 
-`go test` covers ACP with `cli/acp/fakeagent`, a deterministic agent. To check the same behavior against a real agent and model, run:
+`go test` covers ACP with `cli/acp/fakeagent`, a deterministic agent. The same agent makes a floor without a model for checks by hand — the CLI, `--web`, `ofc building`:
+
+```bash
+make fakeagent                                        # builds cli/fakeagent (gitignored)
+ofc run -f examples/fake/blueprint.yaml 'hi mcp=tasks.add_task{"title":"x"}'
+```
+
+`@fake` answers with its pid, its session's prompt count and the prompt; `mcp=<furniture>.<tool>{json}` in a message makes it call that tool, `sleep=<ms>` delays its answer (see the comment in `cli/acp/fakeagent/main.go`).
+
+To check the same behavior against a real agent and model, run:
 
 ```bash
 mf set <name> tags ofc-test             # once: tag a cheap model for live tests

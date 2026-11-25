@@ -306,7 +306,7 @@ func TestLoad_RejectsUnknownKeys(t *testing.T) {
 		if err := os.WriteFile(bpPath, []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := Load(bpPath); err == nil || !strings.Contains(err.Error(), "not found") {
+		if _, err := Load(bpPath); err == nil || !strings.Contains(err.Error(), "has no field") {
 			t.Errorf("%s: want an unknown-field error, got %v", name, err)
 		}
 	}

@@ -104,6 +104,7 @@ func NewTUI(logPath string, debug bool, colorMap map[string]string) (*TUIFronten
 
 // RunLoop starts the floor and its default session, then renders the
 // session's events to Bubble Tea via p.Send() from a background goroutine.
+// The caller stops the floor.
 func (t *TUIFrontend) RunLoop(fl *floor.Floor, initialPrompt string) error {
 	// Start floor infrastructure
 	if err := fl.Start(func(msg string) {
@@ -120,7 +121,6 @@ func (t *TUIFrontend) RunLoop(fl *floor.Floor, initialPrompt string) error {
 
 	// Background goroutine: render the session's events
 	go func() {
-		defer fl.Stop()
 		defer sess.Unsubscribe(events)
 
 		// Render header

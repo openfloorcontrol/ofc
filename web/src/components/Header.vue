@@ -9,6 +9,8 @@ const props = defineProps({
   hasFurniture: { type: Boolean, default: false },
   sidebarOpen: { type: Boolean, default: false },
   sessionsHref: { type: String, default: '' },
+  floorsHref: { type: String, default: '' },
+  blueprintHref: { type: String, default: '' },
 })
 
 defineEmits(['toggle-sidebar'])
@@ -80,6 +82,18 @@ function borderForAgent(index) {
         </div>
       </div>
       <div class="flex items-center gap-2 flex-shrink-0">
+        <a
+          v-if="floorsHref"
+          :href="floorsHref"
+          class="text-xs text-slate-500 hover:text-slate-300 transition-colors px-1"
+          title="Switch floor"
+        >Floors</a>
+        <a
+          v-if="blueprintHref"
+          :href="blueprintHref"
+          class="text-xs text-slate-500 hover:text-slate-300 transition-colors px-1"
+          title="Edit this floor's blueprint"
+        >Blueprint</a>
         <a
           v-if="sessionsHref"
           :href="sessionsHref"

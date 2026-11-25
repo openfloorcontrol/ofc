@@ -1,0 +1,15 @@
+# One assistant whose personality lives in persona.md, beside this file.
+# A floor made from this template gets its own copy of both, so each
+# floor's assistant can be given a different persona. The model is
+# whichever mf model is tagged ofc-test (`mf set <name> tags ofc-test`) —
+# or edit it in the floor's blueprint.
+name: assistant
+description: "A single assistant, its persona in persona.md"
+
+defaults:
+  model: "@ofc-test"                   # an mf tag
+
+agents:
+  - id: "@assistant"
+    activation: always
+    prompt_file: persona.md

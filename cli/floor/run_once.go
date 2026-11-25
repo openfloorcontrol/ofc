@@ -12,7 +12,7 @@ type RunOnceConfig struct {
 	Blueprint *blueprint.Blueprint // floor blueprint (furniture, agent config)
 	AgentID   string               // which agent to run
 	Input     string               // the user input to post
-	APIServer APIServer            // optional; one is constructed via the caller's choice (typically api.New())
+	APIServer APIServer            // a running server (typically api.New(), started); the caller stops it
 }
 
 // RunOnceResult holds the agent's response from a single turn, plus the
@@ -38,15 +38,15 @@ func RunOnce(cfg RunOnceConfig, agent Agent) (*RunOnceResult, error) {
 		return nil, fmt.Errorf("RunOnce: agent is nil")
 	}
 	if cfg.APIServer == nil {
-		return nil, fmt.Errorf("RunOnce: APIServer is nil (pass api.New() in cfg)")
+		return nil, fmt.Errorf("RunOnce: APIServer is nil (pass a started api.New() in cfg)")
 	}
-	// Create and start the floor (furniture, API server, etc.)
+	// Create and start the floor (furniture, ACP agents)
 	f := NewFloor(cfg.Blueprint)
 	f.APIServer = cfg.APIServer
+	defer f.Stop()
 	if err := f.Start(func(string) {}); err != nil {
 		return nil, fmt.Errorf("start floor: %w", err)
 	}
-	defer f.Stop()
 
 	sess := f.DefaultSession()
 

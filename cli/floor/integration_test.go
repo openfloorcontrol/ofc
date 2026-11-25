@@ -40,7 +40,8 @@ func testFactory(agents map[string]floor.Agent) func(*blueprint.Agent) floor.Age
 }
 
 // setupTestFloor creates a Floor with API server and session loop running.
-// Returns the default session's API base URL (…/api/v1/sessions/<id>)
+// Returns the default session's API base URL
+// (…/api/v1/floors/<floor>/sessions/<id>)
 // and a cleanup function.
 func setupTestFloor(t *testing.T, bp *blueprint.Blueprint, agents map[string]floor.Agent) (string, func()) {
 	t.Helper()
@@ -51,7 +52,9 @@ func setupTestFloor(t *testing.T, bp *blueprint.Blueprint, agents map[string]flo
 
 	srv := api.New()
 	f.APIServer = srv
-	srv.RegisterFloorAPI(f)
+	if err := srv.AddFloor(f); err != nil {
+		t.Fatal(err)
+	}
 	if err := srv.Start(":0"); err != nil {
 		t.Fatalf("failed to start API server: %v", err)
 	}
@@ -63,7 +66,7 @@ func setupTestFloor(t *testing.T, bp *blueprint.Blueprint, agents map[string]flo
 		sess.Close()
 	}
 
-	return srv.BaseURL() + "/api/v1/sessions/" + sess.ID(), cleanup
+	return srv.BaseURL() + "/api/v1/floors/" + f.ID() + "/sessions/" + sess.ID(), cleanup
 }
 
 // pollMessages polls GET <session>/messages until the expected message count

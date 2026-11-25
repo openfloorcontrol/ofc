@@ -7,6 +7,7 @@ __pycache__/
 # Go
 cli/ofc
 /ofc
+cli/fakeagent
 
 # IDE
 .idea/
@@ -57,4 +58,10 @@ dev.yaml
 examples/*/workspace
 cli/workspace
 
+# What `ofc building examples/building` makes: floors and their sessions.
+examples/building/floors/
+examples/building/sessions/
+
 scratch/
+
+changes.local

@@ -215,6 +215,22 @@ Other ofc processes can work in the server's sessions with `--remote`, e.g. a sc
 0 7 * * * ofc run --remote https://ofc.example.com "Summarize yesterday's notes"
 ```
 
+On a server with several floors, `--remote` and the web UI name one with `?floor=<id>`.
+
+### Many floors: `ofc building`
+
+`ofc building <dir>` serves a directory of floors made from templates (try `ofc building examples/building`, see its [README](examples/building/README.md)):
+
+```
+my-building/
+  templates/<name>/blueprint.yaml   blueprints floors are made from, with the files they use
+  floors/<id>/floor.yaml            a floor: id, name, template, created
+  floors/<id>/blueprint.yaml        its own copy of the template (edit it freely), and its workspace/
+  sessions/                         the sessions of all floors (or --db / --sessions-dir)
+```
+
+`POST /api/v1/floors {"template": "<name>"}` copies the template's directory into `floors/<name>-<n>/`. A floor starts when a request names it and stops after `--idle-timeout` (default 30m) without requests, open event streams or running turns; its sessions resume when it starts again, also after editing its blueprint. `POST /api/v1/floors/<id>/stop` stops a floor, `DELETE /api/v1/floors/<id>` deletes its directory (its sessions stay in the store).
+
 ## Architecture
 
 ```
@@ -242,28 +258,36 @@ cli/
 
 ## HTTP API
 
-The floor runs an HTTP API server for external integration:
+The floor runs an HTTP API server for external integration. Everything about a floor lives under `/api/v1/floors/{f}`, where `{f}` is the floor's ID (for `ofc run`, the blueprint's `name:`):
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /api/v1/sessions` | List sessions |
-| `POST /api/v1/sessions` | Start a session |
-| `POST /api/v1/sessions/:id/messages` | Post a message into a session (with `attachments`) |
-| `GET /api/v1/sessions/:id/messages` | Read a session's messages |
-| `GET /api/v1/sessions/:id/events` | SSE stream of a session's events |
-| `POST /api/v1/sessions/:id/attachments` | Upload an image (raw body, `?name=`) to attach to a message |
-| `GET /api/v1/sessions/:id/attachments/:aid` | Fetch an attached image |
-| `GET /api/v1/agents` | Floor metadata and agent list |
-| `GET /api/v1/furniture` | List furniture with their tools |
-| `POST /api/v1/furniture/:name/call` | Proxy a tool call to furniture |
-| `GET /api/v1/file/*` | Serve files (workspace or `:furniture/path`) |
+| `GET /api/v1/floors` | List the floors (`id`, `name`, `description`, `template`, `running`) and whether they are `manageable` |
+| `GET /api/v1/templates` | Templates floors can be made from (`ofc building`) |
+| `POST /api/v1/floors` | Make a floor from `{"template": …}` (`ofc building`) |
+| `PATCH /api/v1/floors/{f}` | Rename a floor: `{"name": …}`; its ID stays (`ofc building`) |
+| `GET /api/v1/floors/{f}/blueprint` | The floor's `blueprint.yaml` as `{"blueprint": …}` (`ofc building`) |
+| `PUT /api/v1/floors/{f}/blueprint` | Replace it: checked first (400 with the reason if it doesn't load), then written; the floor restarts on its next request (`ofc building`) |
+| `POST /api/v1/floors/{f}/stop` | Stop a floor (`ofc building`) |
+| `DELETE /api/v1/floors/{f}` | Stop a floor and delete its directory (`ofc building`) |
+| `GET /api/v1/floors/{f}/sessions` | List sessions |
+| `POST /api/v1/floors/{f}/sessions` | Start a session |
+| `POST /api/v1/floors/{f}/sessions/:id/messages` | Post a message into a session (with `attachments`) |
+| `GET /api/v1/floors/{f}/sessions/:id/messages` | Read a session's messages |
+| `GET /api/v1/floors/{f}/sessions/:id/events` | SSE stream of a session's events |
+| `POST /api/v1/floors/{f}/sessions/:id/attachments` | Upload an image (raw body, `?name=`) to attach to a message |
+| `GET /api/v1/floors/{f}/sessions/:id/attachments/:aid` | Fetch an attached image |
+| `GET /api/v1/floors/{f}/agents` | Floor metadata and agent list |
+| `GET /api/v1/floors/{f}/furniture` | List furniture with their tools |
+| `POST /api/v1/floors/{f}/furniture/:name/call` | Proxy a tool call to furniture |
+| `GET /api/v1/floors/{f}/file/*` | Serve files (workspace or `:furniture/path`) |
 | `/api/v1/floors/{f}/mcp/{name}/` | Streamable HTTP MCP for furniture |
 | `/api/v1/floors/{f}/sse/{name}/` | SSE MCP for furniture |
 | `GET /api/health` | Health and versions (`ofc`, and `version` from `--deploy-version`) |
 
 ### SSE Event Protocol
 
-The `GET /api/v1/sessions/:id/events` endpoint streams Server-Sent Events as JSON. This is the integration point for building custom frontends. Each event has a `type` field:
+The `GET /api/v1/floors/{f}/sessions/:id/events` endpoint streams Server-Sent Events as JSON. This is the integration point for building custom frontends. Each event has a `type` field:
 
 **Message lifecycle:**
 

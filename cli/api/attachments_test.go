@@ -20,14 +20,14 @@ func TestAttachmentUploadAndMessage(t *testing.T) {
 	f := newTestFloor(&blueprint.Blueprint{Name: "test"}, nil)
 	base := startTestAPI(t, f)
 
-	resp, err := http.Post(base+"/api/v1/sessions", "application/json", nil)
+	resp, err := http.Post(base+"/api/v1/floors/test/sessions", "application/json", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var created struct{ ID string }
 	json.NewDecoder(resp.Body).Decode(&created)
 	resp.Body.Close()
-	sessURL := base + "/api/v1/sessions/" + created.ID
+	sessURL := base + "/api/v1/floors/test/sessions/" + created.ID
 
 	var buf bytes.Buffer
 	png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, 2, 2)))

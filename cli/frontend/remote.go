@@ -19,6 +19,7 @@ import (
 type RemoteSession struct {
 	base   string // e.g. https://host:port
 	token  string
+	floor  string
 	id     string
 	info   FloorInfo
 	hist   []floor.ChatMessage
@@ -26,14 +27,21 @@ type RemoteSession struct {
 	cancel context.CancelFunc
 }
 
-// NewRemoteSession connects to the server at base. With sessionID empty,
-// it starts a new session there. token is sent as a Bearer token.
-func NewRemoteSession(base, token, sessionID string) (*RemoteSession, error) {
-	r := &RemoteSession{base: strings.TrimSuffix(base, "/"), token: token, id: sessionID}
+// NewRemoteSession connects to floor floorID on the server at base. With
+// floorID empty, the server must serve exactly one floor, which is used.
+// With sessionID empty, it starts a new session there. token is sent as
+// a Bearer token.
+func NewRemoteSession(base, token, floorID, sessionID string) (*RemoteSession, error) {
+	r := &RemoteSession{base: strings.TrimSuffix(base, "/"), token: token, floor: floorID, id: sessionID}
 
+	if r.floor == "" {
+		if err := r.pickOnlyFloor(); err != nil {
+			return nil, err
+		}
+	}
 	if r.id == "" {
 		var created struct{ ID string }
-		if err := r.do("POST", "/api/v1/sessions", nil, &created); err != nil {
+		if err := r.do("POST", r.floorPath("/sessions"), nil, &created); err != nil {
 			return nil, fmt.Errorf("create session: %w", err)
 		}
 		r.id = created.ID
@@ -113,7 +121,7 @@ func (r *RemoteSession) loadInfo() error {
 			ID string `json:"id"`
 		} `json:"agents"`
 	}
-	if err := r.do("GET", "/api/v1/agents", nil, &agents); err != nil {
+	if err := r.do("GET", r.floorPath("/agents"), nil, &agents); err != nil {
 		return fmt.Errorf("load floor info: %w", err)
 	}
 	var furniture struct {
@@ -121,7 +129,7 @@ func (r *RemoteSession) loadInfo() error {
 			Name string `json:"name"`
 		} `json:"furniture"`
 	}
-	if err := r.do("GET", "/api/v1/furniture", nil, &furniture); err != nil {
+	if err := r.do("GET", r.floorPath("/furniture"), nil, &furniture); err != nil {
 		return fmt.Errorf("load furniture: %w", err)
 	}
 	r.info = FloorInfo{Name: agents.FloorName, Description: agents.Description}
@@ -157,8 +165,34 @@ func (r *RemoteSession) readEvents(ctx context.Context, body io.ReadCloser) {
 	}
 }
 
+// pickOnlyFloor sets r.floor to the server's floor, if it serves exactly
+// one.
+func (r *RemoteSession) pickOnlyFloor() error {
+	var list struct {
+		Floors []struct {
+			ID string `json:"id"`
+		} `json:"floors"`
+	}
+	if err := r.do("GET", "/api/v1/floors", nil, &list); err != nil {
+		return fmt.Errorf("list floors: %w", err)
+	}
+	if len(list.Floors) != 1 {
+		ids := make([]string, len(list.Floors))
+		for i, f := range list.Floors {
+			ids[i] = f.ID
+		}
+		return fmt.Errorf("the server has %d floors (%s): name one with ?floor=", len(ids), strings.Join(ids, ", "))
+	}
+	r.floor = list.Floors[0].ID
+	return nil
+}
+
+func (r *RemoteSession) floorPath(suffix string) string {
+	return "/api/v1/floors/" + url.PathEscape(r.floor) + suffix
+}
+
 func (r *RemoteSession) sessionPath(suffix string) string {
-	return "/api/v1/sessions/" + url.PathEscape(r.id) + suffix
+	return r.floorPath("/sessions/" + url.PathEscape(r.id) + suffix)
 }
 
 // do sends a request and decodes a JSON response into out (if non-nil).

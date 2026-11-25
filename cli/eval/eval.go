@@ -86,11 +86,16 @@ func Run(input string, evalPrompt string, agentID string, bp *blueprint.Blueprin
 
 // runOnce does one eval attempt. Separated so Run can retry cleanly.
 func runOnce(input string, agentDef *blueprint.Agent, bp *blueprint.Blueprint) (*Result, error) {
+	srv := api.New()
+	if err := srv.Start("127.0.0.1:0"); err != nil {
+		return nil, fmt.Errorf("eval run: %w", err)
+	}
+	defer srv.Stop()
 	result, err := floor.RunOnce(floor.RunOnceConfig{
 		Blueprint: bp,
 		AgentID:   agentDef.ID,
 		Input:     input,
-		APIServer: api.New(),
+		APIServer: srv,
 	}, agents.NewLLM(agentDef))
 	if err != nil {
 		return nil, fmt.Errorf("eval run: %w", err)

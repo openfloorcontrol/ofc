@@ -77,12 +77,24 @@ func newACPFloorEnv(t *testing.T, store floor.SessionStore, env map[string]strin
 	f.ACPIdleTimeout = idle
 	f.Store = store
 	f.AgentFactory = agents.New
-	f.APIServer = api.New()
+	f.APIServer = startAPI(t)
 	f.StderrWriter = os.Stderr
 	if err := f.Start(func(string) {}); err != nil {
 		t.Fatalf("start floor: %v", err)
 	}
 	return f
+}
+
+// startAPI starts an API server for the test's floors, stopped when the
+// test ends.
+func startAPI(t *testing.T) *api.Server {
+	t.Helper()
+	srv := api.New()
+	if err := srv.Start("127.0.0.1:0"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { srv.Stop() })
+	return srv
 }
 
 // A session reopened after a restart resumes the agent's ACP session in
@@ -298,7 +310,7 @@ func TestACPAgentUsesOnlyItsFurniture(t *testing.T) {
 	f := floor.NewFloor(bp)
 	f.Store = floor.NewMemoryStore()
 	f.AgentFactory = agents.New
-	f.APIServer = api.New()
+	f.APIServer = startAPI(t)
 	f.StderrWriter = os.Stderr
 	if err := f.Start(func(string) {}); err != nil {
 		t.Fatalf("start floor: %v", err)

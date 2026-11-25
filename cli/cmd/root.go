@@ -39,6 +39,7 @@ ofc ` + Version + ` (commit ` + Commit + `)
 `)
 
 	rootCmd.AddCommand(runCmd)
+	rootCmd.AddCommand(buildingCmd)
 	rootCmd.AddCommand(evalCmd)
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(versionCmd)

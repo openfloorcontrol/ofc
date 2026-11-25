@@ -299,7 +299,7 @@ func decodeStrict(data []byte, v any) error {
 	d := yaml.NewDecoder(bytes.NewReader(data))
 	d.KnownFields(true)
 	if err := d.Decode(v); err != nil && err != io.EOF {
-		return err
+		return readableYAMLError(err, v)
 	}
 	return nil
 }

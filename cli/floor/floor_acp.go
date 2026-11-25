@@ -138,7 +138,8 @@ func (f *Floor) spawnACPSubprocess(sessionID string, agent blueprint.Agent) (*ac
 	f.debug("starting ACP agent %s (%s)", agent.ID, agent.Command)
 
 	// The agent's file and terminal requests run in its sandbox, rooted
-	// at the sandbox's workspace, or else on the host in ./workspace.
+	// at the sandbox's workspace, or else on the host in the workspace
+	// directory beside the blueprint.
 	var sb *sandbox.Sandbox
 	var workDir string
 	if agent.Sandbox != "" {
@@ -148,8 +149,7 @@ func (f *Floor) spawnACPSubprocess(sessionID string, agent blueprint.Agent) (*ac
 		}
 		workDir = sb.WorkspaceDir
 	} else {
-		cwd, _ := os.Getwd()
-		workDir = filepath.Join(cwd, "workspace")
+		workDir = filepath.Join(f.Blueprint.Dir, "workspace")
 		os.MkdirAll(workDir, 0o755)
 	}
 	client := acpclient.NewFloorClient(sb, workDir)
