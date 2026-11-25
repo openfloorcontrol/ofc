@@ -206,7 +206,6 @@ Launch with `ofc run --web` to open a browser-based interface:
 - **Image attachments** — paste, drop or pick images (📎) to send with a message
 - **Responsive design** — works on desktop and mobile
 - **Sessions** — each tab works in its own session (`?session=<id>`); `?sessions` lists and switches them
-- **Floors** — with `ofc building`, the start page lists the floors (running ones marked), adds a floor from a template, renames, stops and deletes floors; `?floor=<id>` opens one. Each floor's blueprint can be edited in the browser (`?floor=<id>&blueprint`): saving checks it first and points at the line of any error
 - **Auth** — a Bearer token: `--token` if set (stable across restarts), otherwise random; the printed URL carries it as `?token=`. It opens the whole API, including every furniture's MCP endpoint (`/api/v1/floors/<floor>/mcp/<furniture>/`); each ACP agent gets its own token that opens only the MCP endpoints of the furniture it lists
 
 Other ofc processes can work in the server's sessions with `--remote`, e.g. a scheduled prompt whose session you open in the browser later:
@@ -220,7 +219,7 @@ On a server with several floors, `--remote` and the web UI name one with `?floor
 
 ### Many floors: `ofc building`
 
-`ofc run --web` serves one blueprint. `ofc building <dir>` serves a directory of floors made from templates (try `ofc building examples/building`, see its [README](examples/building/README.md)):
+`ofc building <dir>` serves a directory of floors made from templates (try `ofc building examples/building`, see its [README](examples/building/README.md)):
 
 ```
 my-building/
