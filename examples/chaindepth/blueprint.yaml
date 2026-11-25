@@ -4,13 +4,8 @@
 name: my-floor
 description: "Describe your floor here"
 
-models:
-  glm:
-    endpoint: http://localhost:11434/v1
-    model: glm-4.7:cloud
-
 defaults:
-  model: glm
+  model: "@ofc-test"   # the mf model tagged ofc-test (mf set <name> tags ofc-test)
 
 agents:
   - id: "@assistant"

@@ -558,13 +558,8 @@ When all agents in a room are done (no more agents to trigger), the room auto-cl
 name: data-analysis
 description: "Data analysis team with analyst and coder"
 
-models:
-  glm:
-    endpoint: http://localhost:11434/v1
-    model: glm-4.7:cloud
-
 defaults:
-  model: glm
+  model: "@ofc-test"   # an mf tag: the model tagged ofc-test
 
 agents:
   - id: "@data"

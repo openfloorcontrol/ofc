@@ -4,14 +4,9 @@
 name: data-analysis
 description: "Data analysis team with analyst and coder"
 
-models:
-  glm:
-    endpoint: http://localhost:11434/v1
-    model: glm-4.7:cloud
-
 # Default settings
 defaults:
-  model: glm
+  model: "@ofc-test"   # the mf model tagged ofc-test (mf set <name> tags ofc-test)
 
 # Agents on this floor
 agents:
