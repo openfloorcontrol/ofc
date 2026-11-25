@@ -1,8 +1,8 @@
-// Package api implements the HTTP API server that exposes a floor's
-// chat, furniture, and MCP endpoints. The concrete Server type
+// Package api implements the HTTP API server that exposes floors'
+// sessions, furniture, and MCP endpoints. The concrete Server type
 // satisfies the floor.APIServer interface; callers (cmd/, tests)
 // construct api.New() and assign it to Floor.APIServer before
-// Floor.Start.
+// Floor.Start, which adds the floor to it.
 package api
 
 import (
@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,27 +29,40 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/openfloorcontrol/ofc/blueprint"
 	"github.com/openfloorcontrol/ofc/floor"
 	"github.com/openfloorcontrol/ofc/furniture"
 )
 
-// Server serves MCP endpoints for furniture over HTTP. Implements
-// floor.APIServer.
+// Server serves the API of its floors over HTTP: per floor, sessions,
+// agents, furniture and the furniture's MCP endpoints, all under
+// /api/v1/floors/{floor}/. Implements floor.APIServer.
 type Server struct {
 	echo      *echo.Echo
 	listener  net.Listener
 	authToken string
 
-	// furnitureRoutes maps the route patterns of furniture MCP endpoints
-	// to the furniture's name. Guarded by routesMu: furniture is added
-	// while the server runs.
-	furnitureRoutes map[string]string
-	routesMu        sync.RWMutex
-	// agentMayUse reports whether an agent token grants a furniture; set
-	// by RegisterFloorAPI.
-	agentMayUse func(token, furniture string) bool
+	// mu guards floors and mcp: floors and furniture come and go while
+	// the server runs.
+	mu     sync.RWMutex
+	floors map[string]*floor.Floor
+	// mcp holds the MCP endpoints of each floor's furniture, by floor ID
+	// and furniture name.
+	mcp map[string]map[string]mcpHandlers
+
+	// building, if set, manages the floors (see SetBuilding).
+	building Building
 }
+
+// mcpHandlers are the two MCP transports of one furniture.
+type mcpHandlers struct {
+	http, sse http.Handler
+}
+
+// Route patterns of the furniture MCP endpoints.
+const (
+	mcpRoute = "/api/v1/floors/:floor/mcp/:name"
+	sseRoute = "/api/v1/floors/:floor/sse/:name"
+)
 
 // New creates a new API server.
 func New() *Server {
@@ -59,12 +73,14 @@ func New() *Server {
 	// CORS middleware — needed for Vite dev server (port 5173 → 8080)
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: []string{"*"},
-		AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodOptions},
+		AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions},
 		AllowHeaders: []string{echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization},
 	}))
 
-	s := &Server{echo: e, furnitureRoutes: map[string]string{}}
+	s := &Server{echo: e, floors: map[string]*floor.Floor{}, mcp: map[string]map[string]mcpHandlers{}}
 	e.Use(s.authMiddleware)
+	s.registerFloorRoutes()
+	s.registerBuildingRoutes()
 	return s
 }
 
@@ -104,13 +120,11 @@ func (s *Server) authMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		token := requestToken(c)
 		isAccessToken := s.authToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(s.authToken)) == 1
 
-		s.routesMu.RLock()
-		name, isFurniture := s.furnitureRoutes[c.Path()]
-		s.routesMu.RUnlock()
-
+		route := strings.TrimSuffix(c.Path(), "/")
 		var allowed bool
-		if isFurniture {
-			allowed = isAccessToken || (token != "" && s.agentMayUse != nil && s.agentMayUse(token, name))
+		if route == mcpRoute || route == sseRoute {
+			f, ok := s.floor(c.Param("floor"))
+			allowed = isAccessToken || (token != "" && ok && f.AgentMayUse(token, c.Param("name")))
 		} else {
 			allowed = s.authToken == "" || isAccessToken
 		}
@@ -129,29 +143,40 @@ func requestToken(c echo.Context) string {
 	return c.QueryParam("token")
 }
 
-// RegisterFurniture adds MCP endpoints for a piece of furniture.
-// Registers both Streamable HTTP and SSE transports:
+// RegisterFurniture serves a piece of furniture over MCP, in both
+// transports:
 //   - /api/v1/floors/{floor}/mcp/{name}/ — Streamable HTTP
 //   - /api/v1/floors/{floor}/sse/{name}/ — SSE (legacy, used by claude-code-acp)
 func (s *Server) RegisterFurniture(floorID, name string, mcpSrv *mcp.Server) {
 	getServer := func(r *http.Request) *mcp.Server { return mcpSrv }
+	h := mcpHandlers{
+		http: mcp.NewStreamableHTTPHandler(getServer, &mcp.StreamableHTTPOptions{Stateless: true}),
+		sse:  mcp.NewSSEHandler(getServer, nil),
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.mcp[floorID] == nil {
+		s.mcp[floorID] = map[string]mcpHandlers{}
+	}
+	s.mcp[floorID][name] = h
+}
 
-	// Streamable HTTP endpoint
-	httpPath := fmt.Sprintf("/api/v1/floors/%s/mcp/%s", floorID, name)
-	httpHandler := mcp.NewStreamableHTTPHandler(getServer, &mcp.StreamableHTTPOptions{
-		Stateless: true,
-	})
-	// SSE endpoint (for ACP agents like claude-code-acp that only support SSE)
-	ssePath := fmt.Sprintf("/api/v1/floors/%s/sse/%s", floorID, name)
-	sseHandler := mcp.NewSSEHandler(getServer, nil)
-
-	s.routesMu.Lock()
-	defer s.routesMu.Unlock()
-	for path, h := range map[string]http.Handler{httpPath: httpHandler, ssePath: sseHandler} {
-		for _, p := range []string{path, path + "/"} {
-			s.echo.Any(p, echo.WrapHandler(h))
-			s.furnitureRoutes[p] = name
+// serveMCP serves the MCP endpoint of the furniture named by the path,
+// in the transport chosen by sse.
+func (s *Server) serveMCP(sse bool) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		s.mu.RLock()
+		h, ok := s.mcp[c.Param("floor")][c.Param("name")]
+		s.mu.RUnlock()
+		if !ok {
+			return c.JSON(http.StatusNotFound, map[string]string{"error": "furniture not found"})
 		}
+		if sse {
+			h.sse.ServeHTTP(c.Response(), c.Request())
+		} else {
+			h.http.ServeHTTP(c.Response(), c.Request())
+		}
+		return nil
 	}
 }
 
@@ -277,21 +302,89 @@ func (s *Server) RegisterHealth(h Health) {
 	})
 }
 
-// RegisterFloorAPI adds the session, agent and furniture endpoints for
-// the floor. Session routes look the session up per request.
-func (s *Server) RegisterFloorAPI(f *floor.Floor) {
-	s.agentMayUse = f.AgentMayUse
-	s.echo.GET("/api/v1/sessions", handleListSessions(f))
-	s.echo.POST("/api/v1/sessions", handleCreateSession(f))
-	s.echo.POST("/api/v1/sessions/:id/messages", withSession(f, handlePostMessage))
-	s.echo.GET("/api/v1/sessions/:id/messages", withSession(f, handleGetMessages))
-	s.echo.POST("/api/v1/sessions/:id/attachments", withSession(f, handlePostAttachment))
-	s.echo.GET("/api/v1/sessions/:id/attachments/:aid", withSession(f, handleGetAttachment))
-	s.echo.GET("/api/v1/sessions/:id/events", withSession(f, handleSSEEvents))
-	s.echo.GET("/api/v1/agents", handleGetAgents(f.Blueprint))
-	s.echo.GET("/api/v1/furniture", handleGetFurniture(f.Furniture))
-	s.echo.POST("/api/v1/furniture/:name/call", handleFurnitureCall(f.Furniture))
-	s.echo.GET("/api/v1/file/*", handleServeFile(f.Furniture, f.WorkspacePaths))
+// AddFloor serves f's API under /api/v1/floors/{f.ID()}/. Fails if the
+// server already has a floor with that ID.
+func (s *Server) AddFloor(f *floor.Floor) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.floors[f.ID()]; ok {
+		return fmt.Errorf("the API already serves a floor %q", f.ID())
+	}
+	s.floors[f.ID()] = f
+	return nil
+}
+
+// RemoveFloor stops serving the floor with the given ID: its API and its
+// furniture's MCP endpoints.
+func (s *Server) RemoveFloor(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.floors, id)
+	delete(s.mcp, id)
+}
+
+func (s *Server) floor(id string) (*floor.Floor, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	f, ok := s.floors[id]
+	return f, ok
+}
+
+// registerFloorRoutes adds the floor list and each floor's session,
+// agent, furniture, file and MCP endpoints. A request names its floor in
+// the path.
+func (s *Server) registerFloorRoutes() {
+	const p = "/api/v1/floors/:floor"
+	for _, route := range []string{mcpRoute, mcpRoute + "/"} {
+		s.echo.Any(route, s.serveMCP(false))
+	}
+	for _, route := range []string{sseRoute, sseRoute + "/"} {
+		s.echo.Any(route, s.serveMCP(true))
+	}
+	s.echo.GET("/api/v1/floors", s.handleListFloors)
+	s.echo.GET(p+"/sessions", s.onFloor(handleListSessions))
+	s.echo.POST(p+"/sessions", s.onFloor(handleCreateSession))
+	s.echo.POST(p+"/sessions/:id/messages", s.onSession(handlePostMessage))
+	s.echo.GET(p+"/sessions/:id/messages", s.onSession(handleGetMessages))
+	s.echo.POST(p+"/sessions/:id/attachments", s.onSession(handlePostAttachment))
+	s.echo.GET(p+"/sessions/:id/attachments/:aid", s.onSession(handleGetAttachment))
+	s.echo.GET(p+"/sessions/:id/events", s.onSession(handleSSEEvents))
+	s.echo.GET(p+"/agents", s.onFloor(handleGetAgents))
+	s.echo.GET(p+"/furniture", s.onFloor(handleGetFurniture))
+	s.echo.POST(p+"/furniture/:name/call", s.onFloor(handleFurnitureCall))
+	s.echo.GET(p+"/file/*", s.onFloor(handleServeFile))
+}
+
+// onFloor resolves the :floor path parameter (see openFloor) and hands
+// the floor to h. An unknown floor is not found.
+func (s *Server) onFloor(h func(*floor.Floor) echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		f, err := s.openFloor(c.Param("floor"))
+		if errors.Is(err, ErrFloorNotFound) {
+			return c.JSON(http.StatusNotFound, map[string]string{"error": "floor not found"})
+		}
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		}
+		return h(f)(c)
+	}
+}
+
+// onSession resolves :floor and the session :id on it (see withSession).
+func (s *Server) onSession(h func(echo.Context, *floor.Session) error) echo.HandlerFunc {
+	return s.onFloor(func(f *floor.Floor) echo.HandlerFunc { return withSession(f, h) })
+}
+
+// servedFloors describes the floors added with AddFloor, by ID.
+func (s *Server) servedFloors() []FloorInfo {
+	s.mu.RLock()
+	out := make([]FloorInfo, 0, len(s.floors))
+	for id, f := range s.floors {
+		out = append(out, FloorInfo{ID: id, Name: f.Blueprint.Name, Description: f.Blueprint.Description, Running: true})
+	}
+	s.mu.RUnlock()
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
 }
 
 // UserHeader names the user the auth gateway (volume-auth via Caddy)
@@ -328,7 +421,7 @@ func withSession(f *floor.Floor, h func(echo.Context, *floor.Session) error) ech
 	}
 }
 
-// GET /api/v1/sessions — this floor's stored sessions the caller may open,
+// GET /api/v1/floors/:floor/sessions — the floor's stored sessions the caller may open,
 // most recent first. "user" is the caller's user, omitted when unknown.
 func handleListSessions(f *floor.Floor) echo.HandlerFunc {
 	type jsonSession struct {
@@ -360,7 +453,7 @@ func handleListSessions(f *floor.Floor) echo.HandlerFunc {
 	}
 }
 
-// POST /api/v1/sessions — start a new session, owned by the caller's user.
+// POST /api/v1/floors/:floor/sessions — start a new session, owned by the caller's user.
 func handleCreateSession(f *floor.Floor) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		sess, err := f.CreateSession(requestUser(c))
@@ -371,7 +464,7 @@ func handleCreateSession(f *floor.Floor) echo.HandlerFunc {
 	}
 }
 
-// POST /api/v1/sessions/:id/messages — inject a message into the session.
+// POST /api/v1/floors/:floor/sessions/:id/messages — inject a message into the session.
 // If from is empty or "@user", routes through PostUserInput (handles slash commands).
 // Otherwise posts as the specified sender (for external agents/webhooks).
 //
@@ -420,7 +513,7 @@ func handlePostMessage(c echo.Context, sess *floor.Session) error {
 	})
 }
 
-// POST /api/v1/sessions/:id/attachments?name=<file name> — upload an
+// POST /api/v1/floors/:floor/sessions/:id/attachments?name=<file name> — upload an
 // image; the body is the image's bytes. Answers with the Attachment,
 // whose id a message then refers to.
 func handlePostAttachment(c echo.Context, sess *floor.Session) error {
@@ -439,7 +532,7 @@ func handlePostAttachment(c echo.Context, sess *floor.Session) error {
 	return c.JSON(http.StatusCreated, att)
 }
 
-// GET /api/v1/sessions/:id/attachments/:aid — an uploaded image's bytes.
+// GET /api/v1/floors/:floor/sessions/:id/attachments/:aid — an uploaded image's bytes.
 // The id is the content's hash, so the response never changes.
 func handleGetAttachment(c echo.Context, sess *floor.Session) error {
 	data, err := sess.AttachmentData(c.Param("aid"))
@@ -453,7 +546,7 @@ func handleGetAttachment(c echo.Context, sess *floor.Session) error {
 	return c.Blob(http.StatusOK, http.DetectContentType(data), data)
 }
 
-// GET /api/v1/sessions/:id/messages — the session's #main history as JSON.
+// GET /api/v1/floors/:floor/sessions/:id/messages — the session's #main history as JSON.
 // Each message carries its seq; open the event stream with
 // ?last_event_id=<last seq> to continue exactly after it.
 func handleGetMessages(c echo.Context, sess *floor.Session) error {
@@ -485,8 +578,9 @@ func handleGetMessages(c echo.Context, sess *floor.Session) error {
 	return c.JSON(http.StatusOK, map[string]interface{}{"messages": msgs})
 }
 
-// GET /api/v1/agents — return floor metadata and agent list.
-func handleGetAgents(bp *blueprint.Blueprint) echo.HandlerFunc {
+// GET /api/v1/floors/:floor/agents — return floor metadata and agent list.
+func handleGetAgents(f *floor.Floor) echo.HandlerFunc {
+	bp := f.Blueprint
 	type jsonAgent struct {
 		ID         string   `json:"id"`
 		Name       string   `json:"name"`
@@ -547,8 +641,9 @@ func handleGetAgents(bp *blueprint.Blueprint) echo.HandlerFunc {
 	}
 }
 
-// GET /api/v1/furniture — list available furniture with their tools.
-func handleGetFurniture(furnitureMap map[string]furniture.Furniture) echo.HandlerFunc {
+// GET /api/v1/floors/:floor/furniture — list available furniture with their tools.
+func handleGetFurniture(f *floor.Floor) echo.HandlerFunc {
+	furnitureMap := f.Furniture
 	type jsonTool struct {
 		Name        string                 `json:"name"`
 		Description string                 `json:"description"`
@@ -582,8 +677,9 @@ func handleGetFurniture(furnitureMap map[string]furniture.Furniture) echo.Handle
 	}
 }
 
-// POST /api/v1/furniture/:name/call — proxy a tool call to a furniture instance.
-func handleFurnitureCall(furnitureMap map[string]furniture.Furniture) echo.HandlerFunc {
+// POST /api/v1/floors/:floor/furniture/:name/call — proxy a tool call to a furniture instance.
+func handleFurnitureCall(f *floor.Floor) echo.HandlerFunc {
+	furnitureMap := f.Furniture
 	type request struct {
 		Tool string                 `json:"tool"`
 		Args map[string]interface{} `json:"args"`
@@ -615,12 +711,13 @@ func handleFurnitureCall(furnitureMap map[string]furniture.Furniture) echo.Handl
 	}
 }
 
-// GET /api/v1/file/* — unified file serving endpoint.
+// GET /api/v1/floors/:floor/file/* — unified file serving endpoint.
 // Path scheme:
 //   - ":furniture/path" → serve via furniture's FileReader (MCP)
 //   - "path"            → serve from the first workspace that has it: the
-//     sandboxes' workspaces, then ./workspace
-func handleServeFile(furnitureMap map[string]furniture.Furniture, workspacePaths func() []string) echo.HandlerFunc {
+//     sandboxes' workspaces, then the workspace beside the blueprint
+func handleServeFile(f *floor.Floor) echo.HandlerFunc {
+	furnitureMap, workspacePaths := f.Furniture, f.WorkspacePaths
 	return func(c echo.Context) error {
 		rawPath := c.Param("*")
 		if rawPath == "" {
@@ -659,7 +756,7 @@ func handleServeFile(furnitureMap map[string]furniture.Furniture, workspacePaths
 		}
 
 		// Bare path: serve from workspace
-		wsDirs := append(workspacePaths(), "workspace")
+		wsDirs := append(workspacePaths(), filepath.Join(f.Blueprint.Dir, "workspace"))
 
 		for _, wsDir := range wsDirs {
 			absWS, err := filepath.Abs(wsDir)
@@ -690,7 +787,7 @@ func handleServeFile(furnitureMap map[string]furniture.Furniture, workspacePaths
 	}
 }
 
-// GET /api/v1/sessions/:id/events — SSE stream of the session's events
+// GET /api/v1/floors/:floor/sessions/:id/events — SSE stream of the session's events
 // (all rooms, plus the loop's lifecycle events). Sub-room events carry
 // a room_id.
 //

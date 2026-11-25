@@ -27,7 +27,7 @@ func TestAPIServerMCPEndToEnd(t *testing.T) {
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start API server: %v", err)
 	}
-	defer api.Stop()
+	defer stopServer(api)
 
 	baseURL := api.BaseURL()
 	if baseURL == "" {
@@ -105,6 +105,14 @@ func TestAPIServerMCPEndToEnd(t *testing.T) {
 	t.Logf("get_task result: %s", contentText(result))
 }
 
+// stopServer stops a test's server. Shutdown waits up to 5s for
+// connections the client opened but never used; closing them first keeps
+// the test fast.
+func stopServer(srv *api.Server) {
+	http.DefaultClient.CloseIdleConnections()
+	srv.Stop()
+}
+
 // newTestFloor builds a floor for API tests with the given furniture.
 func newTestFloor(bp *blueprint.Blueprint, fur map[string]furniture.Furniture) *floor.Floor {
 	f := floor.NewFloor(bp)
@@ -118,17 +126,19 @@ func newTestFloor(bp *blueprint.Blueprint, fur map[string]furniture.Furniture) *
 func startTestAPI(t *testing.T, f *floor.Floor) string {
 	t.Helper()
 	srv := api.New()
-	srv.RegisterFloorAPI(f)
+	if err := srv.AddFloor(f); err != nil {
+		t.Fatal(err)
+	}
 	if err := srv.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
-	t.Cleanup(func() { srv.Stop() })
+	t.Cleanup(func() { stopServer(srv) })
 	return srv.BaseURL()
 }
 
 // sessionURL is the API base for the floor's default session.
 func sessionURL(base string, f *floor.Floor) string {
-	return base + "/api/v1/sessions/" + f.DefaultSessionID()
+	return base + "/api/v1/floors/" + f.ID() + "/sessions/" + f.DefaultSessionID()
 }
 
 func TestPostMessage(t *testing.T) {
@@ -286,13 +296,15 @@ func TestGetAgents(t *testing.T) {
 
 	f := newTestFloor(bp, nil)
 	api := api.New()
-	api.RegisterFloorAPI(f)
+	if err := api.AddFloor(f); err != nil {
+		t.Fatal(err)
+	}
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
-	defer api.Stop()
+	defer stopServer(api)
 
-	resp, err := http.Get(api.BaseURL() + "/api/v1/agents")
+	resp, err := http.Get(api.BaseURL() + "/api/v1/floors/test-floor/agents")
 	if err != nil {
 		t.Fatalf("GET failed: %v", err)
 	}
@@ -334,14 +346,16 @@ func TestAuthMiddlewareBlocksWithoutToken(t *testing.T) {
 	f := newTestFloor(&blueprint.Blueprint{Name: "test"}, nil)
 	api := api.New()
 	api.SetAuthToken("test-secret-token")
-	api.RegisterFloorAPI(f)
+	if err := api.AddFloor(f); err != nil {
+		t.Fatal(err)
+	}
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
-	defer api.Stop()
+	defer stopServer(api)
 
 	// Request without token → 401
-	resp, err := http.Get(api.BaseURL() + "/api/v1/agents")
+	resp, err := http.Get(api.BaseURL() + "/api/v1/floors/test/agents")
 	if err != nil {
 		t.Fatalf("GET failed: %v", err)
 	}
@@ -351,7 +365,7 @@ func TestAuthMiddlewareBlocksWithoutToken(t *testing.T) {
 	}
 
 	// Request with Bearer header → 200
-	req, _ := http.NewRequest("GET", api.BaseURL()+"/api/v1/agents", nil)
+	req, _ := http.NewRequest("GET", api.BaseURL()+"/api/v1/floors/test/agents", nil)
 	req.Header.Set("Authorization", "Bearer test-secret-token")
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
@@ -363,7 +377,7 @@ func TestAuthMiddlewareBlocksWithoutToken(t *testing.T) {
 	}
 
 	// Request with query param → 200
-	resp, err = http.Get(api.BaseURL() + "/api/v1/agents?token=test-secret-token")
+	resp, err = http.Get(api.BaseURL() + "/api/v1/floors/test/agents?token=test-secret-token")
 	if err != nil {
 		t.Fatalf("GET with query token failed: %v", err)
 	}
@@ -379,15 +393,17 @@ func TestFurnitureCallProxy(t *testing.T) {
 
 	f := newTestFloor(&blueprint.Blueprint{Name: "test"}, furMap)
 	api := api.New()
-	api.RegisterFloorAPI(f)
+	if err := api.AddFloor(f); err != nil {
+		t.Fatal(err)
+	}
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
-	defer api.Stop()
+	defer stopServer(api)
 
 	// Add a task
 	resp, err := http.Post(
-		api.BaseURL()+"/api/v1/furniture/tasks/call",
+		api.BaseURL()+"/api/v1/floors/test/furniture/tasks/call",
 		"application/json",
 		strings.NewReader(`{"tool": "add_task", "args": {"title": "Test task"}}`),
 	)
@@ -401,7 +417,7 @@ func TestFurnitureCallProxy(t *testing.T) {
 
 	// List tasks
 	resp, err = http.Post(
-		api.BaseURL()+"/api/v1/furniture/tasks/call",
+		api.BaseURL()+"/api/v1/floors/test/furniture/tasks/call",
 		"application/json",
 		strings.NewReader(`{"tool": "list_tasks", "args": {}}`),
 	)
@@ -420,7 +436,7 @@ func TestFurnitureCallProxy(t *testing.T) {
 
 	// Unknown furniture → 404
 	resp, err = http.Post(
-		api.BaseURL()+"/api/v1/furniture/nonexistent/call",
+		api.BaseURL()+"/api/v1/floors/test/furniture/nonexistent/call",
 		"application/json",
 		strings.NewReader(`{"tool": "list_tasks", "args": {}}`),
 	)
@@ -437,14 +453,16 @@ func TestAuthMiddleware(t *testing.T) {
 	f := newTestFloor(&blueprint.Blueprint{Name: "test"}, nil)
 	api := api.New()
 	api.SetAuthToken("test-token-123")
-	api.RegisterFloorAPI(f)
+	if err := api.AddFloor(f); err != nil {
+		t.Fatal(err)
+	}
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
-	defer api.Stop()
+	defer stopServer(api)
 
 	// Unauthenticated request should be rejected
-	resp, err := http.Get(api.BaseURL() + "/api/v1/agents")
+	resp, err := http.Get(api.BaseURL() + "/api/v1/floors/test/agents")
 	if err != nil {
 		t.Fatalf("GET failed: %v", err)
 	}
@@ -454,7 +472,7 @@ func TestAuthMiddleware(t *testing.T) {
 	}
 
 	// Request with Bearer token should succeed
-	req, _ := http.NewRequest("GET", api.BaseURL()+"/api/v1/agents", nil)
+	req, _ := http.NewRequest("GET", api.BaseURL()+"/api/v1/floors/test/agents", nil)
 	req.Header.Set("Authorization", "Bearer test-token-123")
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
@@ -466,7 +484,7 @@ func TestAuthMiddleware(t *testing.T) {
 	}
 
 	// Request with query param token should succeed
-	resp, err = http.Get(api.BaseURL() + "/api/v1/agents?token=test-token-123")
+	resp, err = http.Get(api.BaseURL() + "/api/v1/floors/test/agents?token=test-token-123")
 	if err != nil {
 		t.Fatalf("GET with query token failed: %v", err)
 	}
@@ -481,11 +499,13 @@ func TestHealthNeedsNoToken(t *testing.T) {
 	srv := api.New()
 	srv.SetAuthToken("test-token-123")
 	srv.RegisterHealth(api.Health{Version: "abc1234", OFC: "v0.3.0 (commit 32b1b3a)"})
-	srv.RegisterFloorAPI(f)
+	if err := srv.AddFloor(f); err != nil {
+		t.Fatal(err)
+	}
 	if err := srv.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
-	defer srv.Stop()
+	defer stopServer(srv)
 
 	resp, err := http.Get(srv.BaseURL() + api.HealthPath)
 	if err != nil {
@@ -521,13 +541,15 @@ func TestGetFurniture(t *testing.T) {
 
 	f := newTestFloor(&blueprint.Blueprint{Name: "test"}, furMap)
 	api := api.New()
-	api.RegisterFloorAPI(f)
+	if err := api.AddFloor(f); err != nil {
+		t.Fatal(err)
+	}
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
-	defer api.Stop()
+	defer stopServer(api)
 
-	resp, err := http.Get(api.BaseURL() + "/api/v1/furniture")
+	resp, err := http.Get(api.BaseURL() + "/api/v1/floors/test/furniture")
 	if err != nil {
 		t.Fatalf("GET failed: %v", err)
 	}
@@ -564,13 +586,15 @@ func TestGetFurniture(t *testing.T) {
 func TestGetFurnitureEmpty(t *testing.T) {
 	f := newTestFloor(&blueprint.Blueprint{Name: "test"}, nil)
 	api := api.New()
-	api.RegisterFloorAPI(f)
+	if err := api.AddFloor(f); err != nil {
+		t.Fatal(err)
+	}
 	if err := api.Start(":0"); err != nil {
 		t.Fatalf("failed to start: %v", err)
 	}
-	defer api.Stop()
+	defer stopServer(api)
 
-	resp, err := http.Get(api.BaseURL() + "/api/v1/furniture")
+	resp, err := http.Get(api.BaseURL() + "/api/v1/floors/test/furniture")
 	if err != nil {
 		t.Fatalf("GET failed: %v", err)
 	}
@@ -628,13 +652,15 @@ func TestFurnitureEndpointsCheckAgentTokens(t *testing.T) {
 	}}, nil)
 	srv := api.New()
 	srv.SetAuthToken("access")
-	srv.RegisterFloorAPI(f)
+	if err := srv.AddFloor(f); err != nil {
+		t.Fatal(err)
+	}
 	srv.RegisterFurniture("tok", "tasks", furniture.WrapAsMCP(furniture.NewTaskBoard()))
 	srv.RegisterFurniture("tok", "secret", furniture.WrapAsMCP(furniture.NewTaskBoard()))
 	if err := srv.Start("127.0.0.1:0"); err != nil {
 		t.Fatal(err)
 	}
-	defer srv.Stop()
+	defer stopServer(srv)
 
 	agentToken := f.AgentToken("@a")
 	connects := func(furnitureName, token string) bool {
@@ -666,7 +692,7 @@ func TestFurnitureEndpointsCheckAgentTokens(t *testing.T) {
 		}
 	}
 
-	req, _ := http.NewRequest("GET", srv.BaseURL()+"/api/v1/agents", nil)
+	req, _ := http.NewRequest("GET", srv.BaseURL()+"/api/v1/floors/tok/agents", nil)
 	req.Header.Set("Authorization", "Bearer "+agentToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -684,12 +710,14 @@ func TestFurnitureEndpointsNeedATokenWithoutAccessToken(t *testing.T) {
 		{ID: "@a", Furniture: []string{"tasks"}},
 	}}, nil)
 	srv := api.New()
-	srv.RegisterFloorAPI(f)
+	if err := srv.AddFloor(f); err != nil {
+		t.Fatal(err)
+	}
 	srv.RegisterFurniture("tok", "tasks", furniture.WrapAsMCP(furniture.NewTaskBoard()))
 	if err := srv.Start("127.0.0.1:0"); err != nil {
 		t.Fatal(err)
 	}
-	defer srv.Stop()
+	defer stopServer(srv)
 
 	for token, want := range map[string]int{"": http.StatusUnauthorized, f.AgentToken("@a"): http.StatusOK} {
 		req, _ := http.NewRequest("POST", srv.BaseURL()+"/api/v1/floors/tok/mcp/tasks/",

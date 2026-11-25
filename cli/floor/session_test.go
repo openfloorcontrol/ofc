@@ -152,3 +152,44 @@ func TestSessionForRoomReturnsShallowView(t *testing.T) {
 		t.Error("view should share AgentContext pointers with parent")
 	}
 }
+
+// Floors sharing a store list and open only the sessions whose meta
+// names them. The blueprint name in the meta plays no part.
+func TestFloorsSeeOnlyTheirOwnSessions(t *testing.T) {
+	store := NewMemoryStore()
+	newFloor := func(name string) *Floor {
+		f := NewFloor(&blueprint.Blueprint{Name: name})
+		f.Store = store
+		f.SessionMetaTemplate = &SessionMeta{BlueprintName: "shared-blueprint"}
+		return f
+	}
+	a, b := newFloor("a"), newFloor("b")
+
+	sa, err := a.CreateSession("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sa.Close()
+	if meta, _ := store.GetMeta(sa.ID()); meta.Floor != "a" {
+		t.Errorf("session meta floor = %q, want a", meta.Floor)
+	}
+
+	listed, err := b.ListSessions("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 0 {
+		t.Errorf("floor b lists %v, want none", listed)
+	}
+	if _, err := b.Session(sa.ID()); err == nil {
+		t.Error("floor b opened floor a's session")
+	}
+
+	listed, err = a.ListSessions("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].ID != sa.ID() {
+		t.Errorf("floor a lists %v, want its session %s", listed, sa.ID())
+	}
+}

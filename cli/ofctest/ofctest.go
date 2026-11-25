@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/openfloorcontrol/ofc/api"
 	"github.com/openfloorcontrol/ofc/blueprint"
 	"github.com/openfloorcontrol/ofc/eval"
 	"github.com/openfloorcontrol/ofc/floor"
@@ -35,12 +36,19 @@ func RunFloor(t *testing.T, blueprintPath string, prompt string) *FloorResult {
 func runFloor(t *testing.T, bp *blueprint.Blueprint, prompt string) *FloorResult {
 	t.Helper()
 
+	srv := api.New()
+	if err := srv.Start("127.0.0.1:0"); err != nil {
+		t.Fatalf("ofctest: start API server: %v", err)
+	}
+	defer srv.Stop()
+
 	f := floor.NewFloor(bp)
 	f.AgentFactory = floor_agents.New
+	f.APIServer = srv
+	defer f.Stop()
 	if err := f.Start(func(string) {}); err != nil {
 		t.Fatalf("ofctest: start floor: %v", err)
 	}
-	defer f.Stop()
 
 	sess := f.DefaultSession()
 	events := sess.Subscribe()

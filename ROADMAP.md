@@ -20,7 +20,7 @@ Multi-agent coordination is working end-to-end with LLM (OpenAI-compatible) and 
 - **Web frontend** — Vue + Tailwind chat UI (`--web`) with SSE-driven streaming, furniture sidebar (task boards, file lists), inline image rendering from agent markdown, responsive design, token-based auth.
 - **Furniture system** — Shared interactive objects (task boards, external MCP servers) exposed via API server. LLM agents get namespaced tool injection; ACP agents get MCP pass-through with capability-based transport selection.
 - **External MCP servers** — Connect to MCP servers via subprocess (`command`/`args`) or HTTP (`url`). Tool discovery, call proxying, binary file serving via `FileReader` interface.
-- **File serving** — Unified `/api/v1/file/*` endpoint serving workspace files and furniture-qualified paths with MIME detection.
+- **File serving** — Unified `/api/v1/floors/{f}/file/*` endpoint serving workspace files and furniture-qualified paths with MIME detection.
 - **Integration tests** — Full-pipeline tests over HTTP: agent triggering, mention delegation, PASS semantics, SSE streaming, rooms, furniture proxy.
 - **JSONL output** — `--json` flag for machine-readable event output, foundation for testing and evaluation.
 - **HTTP MCP auth** — `headers` field with `${VAR}` env expansion for authenticated MCP servers.

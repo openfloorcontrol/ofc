@@ -4,12 +4,26 @@ import { useSSE } from './composables/useSSE.js'
 import { useChat } from './composables/useChat.js'
 import { useFurniture } from './composables/useFurniture.js'
 import { getToken, apiFetch } from './composables/useAuth.js'
+import { floorApi, setFloor, listFloors, apiError } from './composables/useFloor.js'
 import Header from './components/Header.vue'
 import ChatPanel from './components/ChatPanel.vue'
 import InputBar from './components/InputBar.vue'
 import Sidebar from './components/Sidebar.vue'
 import SessionPicker from './components/SessionPicker.vue'
+import FloorPicker from './components/FloorPicker.vue'
+import BlueprintEditor from './components/BlueprintEditor.vue'
 
+// ?floor=<id> names the floor. Without it, a server that manages floors
+// (ofc building) shows the floor picker; one serving a single floor
+// (ofc run) shows that floor.
+const pickingFloor = ref(false)
+// Whether the server manages floors: then the header links to the picker.
+const manageable = ref(false)
+// The ID of this tab's floor, once resolved.
+const floorId = ref('')
+// ?blueprint shows the floor's blueprint editor, on a server that manages
+// floors.
+const editingBlueprint = ref(false)
 // ?sessions shows the session picker instead of a conversation.
 const picking = new URLSearchParams(window.location.search).has('sessions')
 const sessions = ref([])
@@ -32,9 +46,12 @@ function urlWith(changes) {
 
 const sessionsHref = urlWith({ sessions: '', session: null })
 const sessionHref = (id) => urlWith({ sessions: null, session: id })
+const floorsHref = urlWith({ floor: null, sessions: null, session: null, blueprint: null })
+const floorHref = (id) => urlWith({ floor: id, sessions: null, session: null, blueprint: null })
+const blueprintHref = (id) => urlWith({ floor: id, sessions: null, session: null, blueprint: '' })
 
 async function fetchSessions() {
-  const resp = await apiFetch('/api/v1/sessions')
+  const resp = await apiFetch(floorApi('/sessions'))
   if (resp.status === 401) {
     throw new Error('unauthorized')
   }
@@ -54,7 +71,7 @@ const { messages, streamingMessage, isStreaming, handleEvent, loadHistory } = us
 const { furniture, fetchFurniture, callTool } = useFurniture()
 const sse = useSSE(getToken)
 
-// API base of this tab's session, e.g. /api/v1/sessions/<id>
+// API base of this tab's session, e.g. /api/v1/floors/<floor>/sessions/<id>
 let sessionBase = ''
 
 // resolveSession returns the session named by ?session=, or creates one
@@ -63,7 +80,7 @@ async function resolveSession() {
   const params = new URLSearchParams(window.location.search)
   let id = params.get('session')
   if (!id) {
-    const resp = await apiFetch('/api/v1/sessions', { method: 'POST' })
+    const resp = await apiFetch(floorApi('/sessions'), { method: 'POST' })
     if (resp.status === 401) {
       throw new Error('unauthorized')
     }
@@ -75,20 +92,35 @@ async function resolveSession() {
 }
 
 async function fetchMetadata() {
-  const resp = await apiFetch('/api/v1/agents')
+  const resp = await apiFetch(floorApi('/agents'))
   if (resp.status === 401) {
     throw new Error('unauthorized')
   }
-  const data = await resp.json()
-  floorName.value = data.floor_name || 'OFC'
-  floorDescription.value = data.description || ''
-  agents.value = data.agents || []
+  if (!resp.ok) throw await apiError(resp)
+  agents.value = (await resp.json()).agents || []
 }
 
-// apiError turns a failed response into an Error with the server's message.
-async function apiError(resp) {
-  const body = await resp.json().catch(() => ({}))
-  return new Error(body.error || `${resp.status} ${resp.statusText}`)
+// resolveFloor picks this tab's floor (see pickingFloor) and returns
+// false when the floor picker is to be shown instead.
+async function resolveFloor() {
+  const list = await listFloors()
+  manageable.value = list.manageable
+  let id = new URLSearchParams(window.location.search).get('floor')
+  if (!id) {
+    if (list.manageable || list.floors.length !== 1) {
+      return false
+    }
+    id = list.floors[0].id
+  }
+  const entry = list.floors.find((f) => f.id === id)
+  if (!entry) {
+    throw new Error(`There is no floor "${id}" here.`)
+  }
+  floorName.value = entry.name
+  floorDescription.value = entry.description || ''
+  floorId.value = id
+  setFloor(id)
+  return true
 }
 
 async function sendMessage({ text, attachments }) {
@@ -141,12 +173,23 @@ function handleEventWithRefresh(event) {
 
 onMounted(async () => {
   try {
+    if (!(await resolveFloor())) {
+      pickingFloor.value = true
+      floorName.value = 'Floors'
+      return
+    }
+    if (manageable.value && new URLSearchParams(window.location.search).has('blueprint')) {
+      // The editor doesn't start the floor: a broken blueprint must stay
+      // fixable.
+      editingBlueprint.value = true
+      return
+    }
     await fetchMetadata()
     if (picking) {
       await fetchSessions()
       return
     }
-    sessionBase = `/api/v1/sessions/${encodeURIComponent(await resolveSession())}`
+    sessionBase = floorApi(`/sessions/${encodeURIComponent(await resolveSession())}`)
     const [lastSeq] = await Promise.all([loadHistory(`${sessionBase}/messages`), fetchFurniture()])
     sse.onEvent(handleEventWithRefresh)
     // Continue right after the loaded history; on reconnect the browser
@@ -155,11 +198,17 @@ onMounted(async () => {
   } catch (err) {
     if (err.message === 'unauthorized') {
       authError.value = 'Authentication required. Open the URL with token from the ofc console output.'
-    } else {
+    } else if (err instanceof TypeError) {
+      // fetch failed: no server answered
       authError.value = 'Cannot connect to ofc server. Is it running?'
+    } else {
+      // the server answered with an error, e.g. a floor that cannot start
+      floorError.value = err.message
     }
   }
 })
+// floorError is the server's answer when this tab's floor can't be shown.
+const floorError = ref('')
 </script>
 
 <template>
@@ -176,6 +225,16 @@ onMounted(async () => {
         </p>
       </div>
     </div>
+    <div v-else-if="floorError" class="flex items-center justify-center h-screen">
+      <div class="text-center max-w-md px-6">
+        <h2 class="text-xl font-semibold text-slate-200 mb-2">Cannot open this floor</h2>
+        <p class="text-slate-400 whitespace-pre-wrap">{{ floorError }}</p>
+        <p v-if="manageable" class="text-sm mt-4 space-x-4">
+          <a :href="blueprintHref(floorId)" v-if="floorId" class="text-slate-400 hover:text-slate-200 underline">Edit its blueprint</a>
+          <a :href="floorsHref" class="text-slate-400 hover:text-slate-200 underline">All floors</a>
+        </p>
+      </div>
+    </div>
     <template v-else>
     <Header
       :floorName="floorName"
@@ -184,10 +243,14 @@ onMounted(async () => {
       :messages="messages"
       :hasFurniture="furniture.length > 0"
       :sidebarOpen="sidebarOpen"
-      :sessionsHref="picking ? '' : sessionsHref"
+      :sessionsHref="picking || pickingFloor || editingBlueprint ? '' : sessionsHref"
+      :floorsHref="manageable && !pickingFloor ? floorsHref : ''"
+      :blueprintHref="manageable && !pickingFloor && !editingBlueprint ? blueprintHref(floorId) : ''"
       @toggle-sidebar="sidebarOpen = !sidebarOpen"
     />
-    <SessionPicker v-if="picking" :sessions="sessions" :user="sessionsUser" :hrefFor="sessionHref" />
+    <FloorPicker v-if="pickingFloor" :hrefFor="floorHref" :editHrefFor="blueprintHref" />
+    <BlueprintEditor v-else-if="editingBlueprint" :floorId="floorId" :floorHref="floorHref(floorId)" />
+    <SessionPicker v-else-if="picking" :sessions="sessions" :user="sessionsUser" :hrefFor="sessionHref" />
     <div v-else class="flex flex-1 min-h-0 relative">
       <!-- Mobile backdrop -->
       <div

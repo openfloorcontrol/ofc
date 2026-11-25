@@ -1,6 +1,7 @@
 import { Marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { getToken } from './useAuth.js'
+import { floorApi } from './useFloor.js'
 
 let tokenCache = null
 
@@ -17,9 +18,9 @@ ensureToken()
 /**
  * Shared markdown renderer with image URL rewriting.
  *
- * Rewrites image src URLs in markdown to /api/v1/file/<path>:
+ * Rewrites image src URLs in markdown to the floor's file endpoint:
  * - Absolute URLs (http/https/data:) → pass through
- * - Everything else → /api/v1/file/<href>?token=...
+ * - Everything else → /api/v1/floors/<floor>/file/<href>?token=...
  *
  * The backend handles path resolution:
  * - ":furniture/path" → serve via furniture MCP
@@ -36,7 +37,7 @@ export function useMarkdown() {
 
     const token = tokenCache || ''
     const tokenParam = token ? `?token=${encodeURIComponent(token)}` : ''
-    return `/api/v1/file/${href}${tokenParam}`
+    return floorApi(`/file/${href}${tokenParam}`)
   }
 
   const md = new Marked({

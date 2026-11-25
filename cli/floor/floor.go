@@ -9,7 +9,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"io/fs"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -44,8 +43,10 @@ type Frame struct {
 }
 
 // Floor is the live DOM of agents and furniture for one or more Sessions.
-// It owns the runtime agent set, furniture instances, sandbox, ACP subprocesses,
-// and the API server — everything that's shared across conversations.
+// It owns the runtime agent set, furniture instances, sandbox and ACP
+// subprocesses — everything that's shared across conversations. It is
+// served by an APIServer and persists to a SessionStore, both owned by
+// the caller and possibly shared with other floors.
 // Per-conversation state (chat log, agent memory, rooms) lives in Session.
 //
 // The Blueprint reference is the immutable template loaded from YAML.
@@ -53,6 +54,7 @@ type Frame struct {
 // Furniture, etc. — not the Blueprint. Blueprint loading is simply a sequence
 // of mutations applied during Start().
 type Floor struct {
+	id        string               // see ID; immutable
 	Blueprint *blueprint.Blueprint // immutable template (the loaded YAML)
 
 	// Live, mutable runtime state. Mutations modify these (under mu);
@@ -107,10 +109,6 @@ type Floor struct {
 	// Read via DefaultSession() / DefaultSessionID().
 	defaultSessionUUID string
 
-	ListenAddr   string // API server listen address (default "127.0.0.1:0", a free loopback port)
-	WebMode      bool   // print the tokenized web UI URL, serve WebUI
-	WebUI        fs.FS  // static web UI files; nil if the binary was built without them
-	ExternalURL  string // override base URL in printed web UI link (for reverse proxies)
 	DebugFunc    func(string)
 	LogWriter    io.Writer
 	StderrWriter io.Writer // where ACP subprocess stderr goes
@@ -159,7 +157,19 @@ func NewFloor(bp *blueprint.Blueprint) *Floor {
 // when resuming a stored session — the caller resolves the UUID from
 // --session / on-disk state and passes it in.
 func NewFloorWithSession(bp *blueprint.Blueprint, sessionID string) *Floor {
+	return newFloor(bp, bp.Name, sessionID)
+}
+
+// NewFloorWithID is like NewFloor but identifies the floor by id instead
+// of its blueprint's name. Used when several floors are made from one
+// blueprint.
+func NewFloorWithID(bp *blueprint.Blueprint, id string) *Floor {
+	return newFloor(bp, id, uuid.NewString())
+}
+
+func newFloor(bp *blueprint.Blueprint, id, sessionID string) *Floor {
 	f := &Floor{
+		id:                 id,
 		Blueprint:          bp,
 		Furniture:          make(map[string]furniture.Furniture),
 		acpSubprocesses:    make(map[acpKey]*acpEntry),
@@ -184,10 +194,11 @@ func NewFloorWithSession(bp *blueprint.Blueprint, sessionID string) *Floor {
 	return f
 }
 
-// ID identifies the floor: its blueprint's name. It appears in API URLs
-// and scopes which stored sessions belong to this floor.
+// ID identifies the floor: its blueprint's name, unless it was made with
+// NewFloorWithID. It appears in API URLs and scopes which stored sessions
+// belong to this floor.
 func (f *Floor) ID() string {
-	return f.Blueprint.Name
+	return f.id
 }
 
 // DefaultSession returns the session created with the floor — the one
@@ -315,56 +326,22 @@ func joinAgentIDs(ids []string, exclude string) string {
 	return strings.Join(others, ", ")
 }
 
-// Start initializes API server, sandbox, then applies the blueprint as a
-// sequence of mutations (AddFurniture, AddAgent). Same primitives that
+// Start adds the floor to its API server, then applies the blueprint as
+// a sequence of mutations (AddFurniture, AddAgent). Same primitives that
 // future runtime mutations will use.
 //
-// The caller must assign f.APIServer (e.g. via api.New() from the
-// top-level api/ package) before calling Start. If running in web mode
-// (WebMode), the caller is also responsible for setting an auth
-// token on the server beforehand — floor itself doesn't import api/
-// and so can't construct one.
+// The caller assigns f.APIServer, already running (e.g. api.New() from
+// the top-level api/ package, started), before calling Start. If Start
+// fails, the caller still calls Stop to release what was set up.
 func (f *Floor) Start(renderInfo func(string)) error {
-	if f.APIServer == nil {
-		return fmt.Errorf("Floor.Start: APIServer is nil — assign one (e.g. api.New()) before calling Start")
+	if f.APIServer == nil || f.APIServer.BaseURL() == "" {
+		return fmt.Errorf("Floor.Start: assign a running APIServer (e.g. api.New(), started) before calling Start")
 	}
 
-	f.APIServer.RegisterFloorAPI(f)
-
-	// Serve the web UI if enabled
-	if f.WebMode {
-		if f.WebUI != nil {
-			f.APIServer.ServeStaticWeb(f.WebUI)
-			renderInfo("Web UI static files registered")
-		} else {
-			renderInfo("Warning: web UI not built into this binary (run `make web` before building); only the API is served")
-		}
+	if err := f.APIServer.AddFloor(f); err != nil {
+		return err
 	}
-
-	// Start API server. Routes can be added after Start() — both
-	// AddFurniture (MCP routes) and the static handler register against
-	// the running server. Echo serves whatever routes are registered
-	// when a request comes in.
-	listenAddr := f.ListenAddr
-	if listenAddr == "" {
-		listenAddr = "127.0.0.1:0"
-	}
-	if err := f.APIServer.Start(listenAddr); err != nil {
-		return fmt.Errorf("failed to start API server: %w", err)
-	}
-	renderInfo(fmt.Sprintf("API server at %s", f.APIServer.BaseURL()))
-	if f.WebMode {
-		baseURL := f.APIServer.BaseURL()
-		if f.ExternalURL != "" {
-			baseURL = strings.TrimSuffix(f.ExternalURL, "/")
-		}
-		token := f.APIServer.AuthToken()
-		if token != "" {
-			renderInfo(fmt.Sprintf("Web UI at %s?token=%s", baseURL, token))
-		} else {
-			renderInfo(fmt.Sprintf("Web UI at %s", baseURL))
-		}
-	}
+	renderInfo(fmt.Sprintf("Floor API at %s/api/v1/floors/%s", f.APIServer.BaseURL(), f.ID()))
 
 	// Apply the infrastructure-dependent parts of the blueprint via
 	// mutations. LLM agents are already applied by NewFloor; here we
@@ -404,15 +381,16 @@ func (f *Floor) Start(renderInfo func(string)) error {
 	return nil
 }
 
-// Stop tears down ACP sessions, API server, furniture (sandboxes included), and
-// closes the store if it implements io.Closer (e.g. JSONLStore).
+// Stop takes the floor off its API server and tears down its ACP
+// subprocesses, furniture (sandboxes included) and sessions. The API
+// server and the store belong to the caller, who stops and closes them.
 func (f *Floor) Stop() {
 	if f.stopReaper != nil {
 		close(f.stopReaper)
 	}
 	f.closeACPSubprocesses(func(acpKey) bool { return true })
 	if f.APIServer != nil {
-		f.APIServer.Stop()
+		f.APIServer.RemoveFloor(f.ID())
 	}
 	for _, fur := range f.Furniture {
 		if closer, ok := fur.(io.Closer); ok {
@@ -421,9 +399,6 @@ func (f *Floor) Stop() {
 	}
 	for _, sess := range f.Sessions {
 		sess.Close()
-	}
-	if closer, ok := f.Store.(io.Closer); ok {
-		closer.Close()
 	}
 }
 

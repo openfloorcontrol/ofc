@@ -45,6 +45,9 @@ import (
 //
 // Blobs (attachment bytes) are files beside the log:
 // <dir>/<sessionID>.blobs/<sha256>.
+//
+// <dir>/schema_version counts the format migrations applied to the
+// directory (see jsonl_migrate.go).
 type JSONLStore struct {
 	mu     sync.Mutex
 	dir    string
@@ -53,10 +56,14 @@ type JSONLStore struct {
 	files  map[string]*os.File // append handles, opened on first write
 }
 
-// NewJSONL opens a store over dir, creating the directory if needed.
+// NewJSONL opens a store over dir, creating the directory if needed and
+// migrating its files to the current format.
 func NewJSONL(dir string) (*JSONLStore, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create sessions dir %s: %w", dir, err)
+	}
+	if err := migrateJSONL(dir); err != nil {
+		return nil, err
 	}
 	return &JSONLStore{
 		dir:    dir,

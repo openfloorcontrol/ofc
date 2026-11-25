@@ -36,7 +36,9 @@ func startServer(t *testing.T, token string) (*floor.Floor, string) {
 	srv := api.New()
 	srv.SetAuthToken(token)
 	f.APIServer = srv
-	srv.RegisterFloorAPI(f)
+	if err := srv.AddFloor(f); err != nil {
+		t.Fatal(err)
+	}
 	if err := srv.Start(":0"); err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +70,7 @@ func waitFor[T floor.ChatEvent](t *testing.T, events <-chan floor.TaggedEvent) [
 func TestRemoteSessionNewAndAttach(t *testing.T) {
 	_, base := startServer(t, "secret")
 
-	client, err := frontend.NewRemoteSession(base, "secret", "")
+	client, err := frontend.NewRemoteSession(base, "secret", "", "")
 	if err != nil {
 		t.Fatalf("new remote session: %v", err)
 	}
@@ -90,7 +92,7 @@ func TestRemoteSessionNewAndAttach(t *testing.T) {
 	client.Close()
 
 	// A second client attaches to the same session and sees its history.
-	attached, err := frontend.NewRemoteSession(base, "secret", client.ID())
+	attached, err := frontend.NewRemoteSession(base, "secret", "remote-test", client.ID())
 	if err != nil {
 		t.Fatalf("attach: %v", err)
 	}
@@ -104,7 +106,7 @@ func TestRemoteSessionNewAndAttach(t *testing.T) {
 // over the event stream and in the history.
 func TestRemoteSessionAttachImage(t *testing.T) {
 	_, base := startServer(t, "secret")
-	client, err := frontend.NewRemoteSession(base, "secret", "")
+	client, err := frontend.NewRemoteSession(base, "secret", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +134,7 @@ func TestRemoteSessionAttachImage(t *testing.T) {
 		t.Error("the user's message came over the stream without its attachment")
 	}
 
-	again, err := frontend.NewRemoteSession(base, "secret", client.ID())
+	again, err := frontend.NewRemoteSession(base, "secret", "remote-test", client.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +146,7 @@ func TestRemoteSessionAttachImage(t *testing.T) {
 
 func TestRemoteSessionNeedsToken(t *testing.T) {
 	_, base := startServer(t, "secret")
-	if _, err := frontend.NewRemoteSession(base, "wrong", ""); err == nil {
+	if _, err := frontend.NewRemoteSession(base, "wrong", "", ""); err == nil {
 		t.Error("expected an error with a wrong token")
 	}
 }

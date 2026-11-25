@@ -51,6 +51,9 @@ type EventFilter struct {
 // The sessionID is the store key, not a field on the meta itself —
 // SetMeta and GetMeta take it as a separate argument.
 type SessionMeta struct {
+	// Floor is the ID of the floor the session belongs to (Floor.ID).
+	// Floors list and open only their own sessions.
+	Floor         string    `json:"floor"`
 	CWD           string    `json:"cwd"`
 	BlueprintPath string    `json:"blueprint_path"`
 	BlueprintName string    `json:"blueprint_name"`

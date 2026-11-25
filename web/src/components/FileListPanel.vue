@@ -1,6 +1,7 @@
 <script setup>
 import { ref, watch, onMounted, onUnmounted } from 'vue'
 import { getToken } from '../composables/useAuth.js'
+import { floorApi } from '../composables/useFloor.js'
 
 const props = defineProps({
   furnitureName: { type: String, required: true },
@@ -20,7 +21,7 @@ function fileUrl(name) {
   const path = rootPath.value ? rootPath.value + '/' + name : name
   const token = tokenRef.value
   const tokenParam = token ? `?token=${encodeURIComponent(token)}` : ''
-  return `/api/v1/file/:${props.furnitureName}/${path}${tokenParam}`
+  return floorApi(`/file/:${props.furnitureName}/${path}${tokenParam}`)
 }
 
 const tokenRef = ref('')

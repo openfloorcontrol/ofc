@@ -20,7 +20,17 @@ type sessionLoop struct {
 	started     atomic.Bool
 	subMu       sync.Mutex
 	subscribers []*sessionSubscriber
-	stopped     bool // after /quit: keep forwarding events, dispatch nothing
+	stopped     bool         // after /quit: keep forwarding events, dispatch nothing
+	turns       atomic.Int32 // agent turns running
+}
+
+// Busy reports whether someone is subscribed to the session or one of
+// its agents is taking a turn.
+func (s *Session) Busy() bool {
+	s.loop.subMu.Lock()
+	subscribed := len(s.loop.subscribers) > 0
+	s.loop.subMu.Unlock()
+	return subscribed || s.loop.turns.Load() > 0
 }
 
 // Subscribe returns a channel of every event in the session: room events
@@ -165,7 +175,9 @@ func (s *Session) act(roomID string, view *Session, d Decision) {
 		turn := NewAgentTurn(view, view.MainRoom, s.Floor, d.AgentID)
 		// Agent.Run posts its result (message, pass, or error) to the room,
 		// which comes back through the loop and drives the next decision.
+		s.loop.turns.Add(1)
 		go func() {
+			defer s.loop.turns.Add(-1)
 			agent.Run(context.Background(), turn)
 			s.Floor.acpTurnDone(s.id, d.AgentID)
 		}()

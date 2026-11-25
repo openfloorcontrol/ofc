@@ -18,7 +18,7 @@ func TestCreateAndListSessions(t *testing.T) {
 	f.SessionMetaTemplate = &floor.SessionMeta{BlueprintName: "test"}
 	base := startTestAPI(t, f)
 
-	resp, err := http.Post(base+"/api/v1/sessions", "application/json", nil)
+	resp, err := http.Post(base+"/api/v1/floors/test/sessions", "application/json", nil)
 	if err != nil {
 		t.Fatalf("POST /sessions: %v", err)
 	}
@@ -29,14 +29,14 @@ func TestCreateAndListSessions(t *testing.T) {
 		t.Fatalf("create: status %d, id %q", resp.StatusCode, created.ID)
 	}
 
-	resp, err = http.Post(base+"/api/v1/sessions/"+created.ID+"/messages", "application/json",
+	resp, err = http.Post(base+"/api/v1/floors/test/sessions/"+created.ID+"/messages", "application/json",
 		strings.NewReader(`{"from": "@test", "content": "hi"}`))
 	if err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("post to new session: %v, %v", err, resp.Status)
 	}
 	resp.Body.Close()
 
-	resp, err = http.Get(base + "/api/v1/sessions")
+	resp, err = http.Get(base + "/api/v1/floors/test/sessions")
 	if err != nil {
 		t.Fatalf("GET /sessions: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestSessionsAreSeparatedByUser(t *testing.T) {
 	}
 	create := func(user string) string {
 		t.Helper()
-		resp := do("POST", "/api/v1/sessions", user, "")
+		resp := do("POST", "/api/v1/floors/test/sessions", user, "")
 		defer resp.Body.Close()
 		var created struct{ ID string }
 		json.NewDecoder(resp.Body).Decode(&created)
@@ -87,7 +87,7 @@ func TestSessionsAreSeparatedByUser(t *testing.T) {
 	}
 	list := func(user string) (string, map[string]string) {
 		t.Helper()
-		resp := do("GET", "/api/v1/sessions", user, "")
+		resp := do("GET", "/api/v1/floors/test/sessions", user, "")
 		defer resp.Body.Close()
 		var l struct {
 			User     string `json:"user"`
@@ -124,13 +124,13 @@ func TestSessionsAreSeparatedByUser(t *testing.T) {
 		{"alice", nobody, http.StatusOK},
 		{"", bob, http.StatusOK},
 	} {
-		resp := do("GET", "/api/v1/sessions/"+c.id+"/messages", c.user, "")
+		resp := do("GET", "/api/v1/floors/test/sessions/"+c.id+"/messages", c.user, "")
 		resp.Body.Close()
 		if resp.StatusCode != c.status {
 			t.Errorf("%q reads %s: status %d, want %d", c.user, c.id[:8], resp.StatusCode, c.status)
 		}
 	}
-	resp := do("POST", "/api/v1/sessions/"+bob+"/messages", "alice", `{"content": "hi"}`)
+	resp := do("POST", "/api/v1/floors/test/sessions/"+bob+"/messages", "alice", `{"content": "hi"}`)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("alice posts to bob's session: status %d, want 404", resp.StatusCode)
@@ -180,7 +180,7 @@ func TestUnknownSessionIs404(t *testing.T) {
 	f := newTestFloor(&blueprint.Blueprint{Name: "test"}, nil)
 	base := startTestAPI(t, f)
 
-	resp, err := http.Get(base + "/api/v1/sessions/no-such-session/messages")
+	resp, err := http.Get(base + "/api/v1/floors/test/sessions/no-such-session/messages")
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
@@ -192,10 +192,10 @@ func TestUnknownSessionIs404(t *testing.T) {
 
 func TestSessionOfOtherFloorRejected(t *testing.T) {
 	f := newTestFloor(&blueprint.Blueprint{Name: "test"}, nil)
-	f.Store.SetMeta("theirs", floor.SessionMeta{BlueprintName: "other"})
+	f.Store.SetMeta("theirs", floor.SessionMeta{Floor: "other", BlueprintName: "test"})
 	base := startTestAPI(t, f)
 
-	resp, err := http.Get(base + "/api/v1/sessions/theirs/messages")
+	resp, err := http.Get(base + "/api/v1/floors/test/sessions/theirs/messages")
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}

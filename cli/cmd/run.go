@@ -28,21 +28,69 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// attachAPIServer constructs and attaches an api.Server to the floor.
-// In web mode it requires a Bearer token: --token if set (stable across
-// restarts, for clients like `ofc run --remote`), otherwise a random
-// one. Called before f.Start.
+// attachAPIServer starts an API server and attaches it to the floor:
+// with --web the web server (see startWebServer), otherwise one on a
+// free loopback port. Called before f.Start; stopFloor stops it.
 func attachAPIServer(f *floor.Floor) {
-	srv := api.New()
+	var srv *api.Server
 	if useWeb {
-		token := apiToken
-		if token == "" {
-			token = api.GenerateToken()
+		srv = startWebServer(api.New())
+	} else {
+		srv = api.New()
+		srv.RegisterHealth(health())
+		if err := srv.Start("127.0.0.1:0"); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
 		}
-		srv.SetAuthToken(token)
 	}
-	srv.RegisterHealth(api.Health{Version: deployVersion, OFC: fmt.Sprintf("%s (commit %s)", Version, Commit)})
 	f.APIServer = srv
+}
+
+// startWebServer starts srv (from api.New) with the web UI on
+// --bind:--port and prints the UI's URL. It requires a Bearer token:
+// --token if set (stable across restarts, for clients like `ofc run
+// --remote`), otherwise a random one.
+func startWebServer(srv *api.Server) *api.Server {
+	token := apiToken
+	if token == "" {
+		token = api.GenerateToken()
+	}
+	srv.SetAuthToken(token)
+	srv.RegisterHealth(health())
+	if ui := webui.FS(); ui != nil {
+		srv.ServeStaticWeb(ui)
+	} else {
+		fmt.Println("Warning: web UI not built into this binary (run `make web` before building); only the API is served")
+	}
+	if err := srv.Start(net.JoinHostPort(bindAddr, strconv.Itoa(webPort))); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Web UI at %s?token=%s\n", webBaseURL(srv), token)
+	return srv
+}
+
+// webBaseURL is where browsers reach srv: --hostname if set, else its
+// listen address.
+func webBaseURL(srv *api.Server) string {
+	if webHostname != "" {
+		return strings.TrimSuffix(webHostname, "/")
+	}
+	return srv.BaseURL()
+}
+
+func health() api.Health {
+	return api.Health{Version: deployVersion, OFC: fmt.Sprintf("%s (commit %s)", Version, Commit)}
+}
+
+// stopFloor stops the floor, then what this invocation owns besides it:
+// its API server and its session store.
+func stopFloor(f *floor.Floor) {
+	f.Stop()
+	f.APIServer.(*api.Server).Stop()
+	if closer, ok := f.Store.(io.Closer); ok {
+		closer.Close()
+	}
 }
 
 var (
@@ -141,7 +189,7 @@ func runCLI(bp *blueprint.Blueprint, initialPrompt frontend.Prompt) {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	defer f.Stop()
+	defer stopFloor(f)
 
 	if err := fe.RunLoop(client, initialPrompt); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -171,9 +219,10 @@ func runRemote(initialPrompt frontend.Prompt) {
 }
 
 // openRemoteSession connects to the server named by --remote. The URL
-// may carry ?token= and ?session= (as printed by `ofc run --web`); the
-// token otherwise comes from --token, the session from --session.
-// Without a session, a new one is started.
+// may carry ?token=, ?floor= and ?session= (as printed by `ofc run
+// --web`); the token otherwise comes from --token, the session from
+// --session. Without a floor, the server's only floor is used; without
+// a session, a new one is started.
 func openRemoteSession() (frontend.SessionClient, error) {
 	u, err := url.Parse(remoteURL)
 	if err != nil || u.Scheme == "" || u.Host == "" {
@@ -189,7 +238,7 @@ func openRemoteSession() (frontend.SessionClient, error) {
 		sid = sessionID
 	}
 	base := u.Scheme + "://" + u.Host + strings.TrimSuffix(u.Path, "/")
-	return frontend.NewRemoteSession(base, token, sid)
+	return frontend.NewRemoteSession(base, token, q.Get("floor"), sid)
 }
 
 // startLocalSession starts the floor and its default session, subscribed
@@ -221,26 +270,19 @@ func runWeb(bp *blueprint.Blueprint) {
 	if debug {
 		f.DebugFunc = func(msg string) { fmt.Fprintf(os.Stderr, "[debug] %s\n", msg) }
 	}
-	f.ListenAddr = net.JoinHostPort(bindAddr, strconv.Itoa(webPort))
-	f.WebMode = true
-	f.WebUI = webui.FS()
-	f.ExternalURL = webHostname
-	attachAPIServer(f)
+	srv := startWebServer(api.New())
+	f.APIServer = srv
 
 	if err := f.Start(func(msg string) { fmt.Println(msg) }); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	defer f.Stop()
+	defer stopFloor(f)
 
 	if resuming {
 		sess := f.DefaultSession()
 		sess.Start()
-		base := f.APIServer.BaseURL()
-		if webHostname != "" {
-			base = strings.TrimSuffix(webHostname, "/")
-		}
-		fmt.Printf("Resumed session at %s?token=%s&session=%s\n", base, f.APIServer.AuthToken(), sess.ID())
+		fmt.Printf("Resumed session at %s?token=%s&session=%s\n", webBaseURL(srv), srv.AuthToken(), sess.ID())
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -266,6 +308,7 @@ func runTUI(bp *blueprint.Blueprint, initialPrompt string) {
 	}
 	f.StderrWriter = stderrWriter
 	attachAPIServer(f)
+	defer stopFloor(f)
 	if debug {
 		f.DefaultSession().Controller.DebugFunc = func(msg string) {
 			fe.Render(floor.SystemInfo{Text: "[debug] " + msg})
@@ -325,7 +368,7 @@ func runJSON(bp *blueprint.Blueprint, initialPrompt frontend.Prompt) {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	defer f.Stop()
+	defer stopFloor(f)
 
 	if err := fe.RunLoop(client, initialPrompt); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -377,31 +420,39 @@ func resolveSessionID() (sid string, resuming bool) {
 func newFloorWithStore(bp *blueprint.Blueprint) (f *floor.Floor, resuming bool) {
 	sid, resuming := resolveSessionID()
 	f = floor.NewFloorWithSession(bp, sid)
-	f.AgentFactory = agents.New
-	if bp.FloorControl.Model != "" {
-		f.Addresser = floorcontrol.New(bp.FloorControl)
-	}
-	f.ACPIdleTimeout = acpIdleTimeout
-	oauthDir, err := defaultOAuthDir()
-	if err != nil {
+	if err := configureFloor(f); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
-	}
-	f.OAuthDir = oauthDir
-	if err := applyOAuthCallback(f); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-	if interactive() {
-		f.OAuthConsent = func(name, authURL string) {
-			fmt.Fprintf(os.Stderr, "\n%s needs authorization. Open this URL to continue:\n  %s\n\n", name, authURL)
-		}
 	}
 	if err := applySessionStore(f, bp, resuming); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 	return f, resuming
+}
+
+// configureFloor gives a floor what every command's floors get from the
+// flags: agents, floor control, ACP idle timeout and OAuth.
+func configureFloor(f *floor.Floor) error {
+	f.AgentFactory = agents.New
+	if f.Blueprint.FloorControl.Model != "" {
+		f.Addresser = floorcontrol.New(f.Blueprint.FloorControl)
+	}
+	f.ACPIdleTimeout = acpIdleTimeout
+	oauthDir, err := defaultOAuthDir()
+	if err != nil {
+		return err
+	}
+	f.OAuthDir = oauthDir
+	if err := applyOAuthCallback(f); err != nil {
+		return err
+	}
+	if interactive() {
+		f.OAuthConsent = func(name, authURL string) {
+			fmt.Fprintf(os.Stderr, "\n%s needs authorization. Open this URL to continue:\n  %s\n\n", name, authURL)
+		}
+	}
+	return nil
 }
 
 // applySessionStore picks the session-store backend for this
@@ -418,7 +469,7 @@ func applySessionStore(f *floor.Floor, bp *blueprint.Blueprint, resuming bool) e
 	sid := f.DefaultSessionID()
 
 	// Meta is for hygiene, not correctness: failing to build it is a warning.
-	meta, metaErr := makeSessionMeta(bp, blueprintFile)
+	meta, metaErr := makeSessionMeta(f.ID(), bp, blueprintFile)
 	if metaErr != nil {
 		fmt.Fprintf(os.Stderr, "[warning] could not record session meta: %v\n", metaErr)
 	} else {
@@ -450,12 +501,13 @@ func applySessionStore(f *floor.Floor, bp *blueprint.Blueprint, resuming bool) e
 	return nil
 }
 
-// makeSessionMeta builds a SessionMeta for the current invocation. The
+// makeSessionMeta builds a SessionMeta for the current invocation on
+// floor floorID. The
 // blueprint hash is sha256 of the on-disk file contents (captures any
 // change — prompts, agent set, furniture config). User is $USER, the
 // owner of this invocation's own session; sessions created over the web
 // API get the gateway's user instead (Floor.CreateSession).
-func makeSessionMeta(bp *blueprint.Blueprint, bpPath string) (floor.SessionMeta, error) {
+func makeSessionMeta(floorID string, bp *blueprint.Blueprint, bpPath string) (floor.SessionMeta, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		cwd = "" // not fatal
@@ -469,6 +521,7 @@ func makeSessionMeta(bp *blueprint.Blueprint, bpPath string) (floor.SessionMeta,
 		return floor.SessionMeta{}, fmt.Errorf("hash blueprint: %w", err)
 	}
 	return floor.SessionMeta{
+		Floor:         floorID,
 		CWD:           cwd,
 		BlueprintPath: absPath,
 		BlueprintName: bp.Name,

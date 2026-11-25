@@ -140,7 +140,11 @@ func TestAddAgentACPRequiresStart(t *testing.T) {
 
 func TestSetBlueprintMeta(t *testing.T) {
 	f := NewFloor(mutationTestBlueprint())
+	id := f.ID()
 	f.SetBlueprintMeta("renamed", "new description")
+	if f.ID() != id {
+		t.Errorf("renaming the blueprint changed the floor ID to %q", f.ID())
+	}
 	if f.Blueprint.Name != "renamed" {
 		t.Errorf("expected name 'renamed', got %q", f.Blueprint.Name)
 	}
