@@ -1,0 +1,24 @@
+# A floor without a model, for trying ofc by hand: @fake is the
+# deterministic ACP agent the tests use (cli/acp/fakeagent). Build it
+# first with `make fakeagent`.
+#
+# @fake answers every message with one line: its pid, how many prompts
+# its session has seen, and the prompt text. A message can make it act:
+#
+#   mcp=tasks.add_task{"title":"x"}   call a tool of its furniture
+#   sleep=3000                        take 3 seconds to answer
+#
+# ofc run -f examples/fake/blueprint.yaml "hi mcp=tasks.list_tasks"
+name: fake
+description: "@fake, a deterministic ACP agent, and a task board"
+
+furniture:
+  - name: tasks
+    type: taskboard
+
+agents:
+  - id: "@fake"
+    type: acp
+    command: ../../cli/fakeagent      # relative to this directory
+    activation: always
+    furniture: [tasks]

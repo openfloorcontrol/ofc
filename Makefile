@@ -4,7 +4,7 @@ DATE    := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 PKG     := github.com/openfloorcontrol/ofc/cmd
 LDFLAGS := -X $(PKG).Version=$(VERSION) -X $(PKG).Commit=$(COMMIT) -X $(PKG).Date=$(DATE)
 
-.PHONY: build install test web release-check release-snapshot release
+.PHONY: build install test web fakeagent release-check release-snapshot release
 
 build: web
 	cd cli && go build -ldflags "$(LDFLAGS)" -o ofc .
@@ -17,6 +17,11 @@ test:
 
 web:
 	cd web && { [ -d node_modules ] || npm ci; } && npm run build
+
+# The deterministic ACP agent the tests use, for trying floors without a
+# model: examples/fake runs it from cli/fakeagent.
+fakeagent:
+	cd cli && go build -o fakeagent ./acp/fakeagent
 
 # Releasing (GoReleaser builds archives, the GitHub release, and the
 # Homebrew cask in openfloorcontrol/homebrew-tap):
