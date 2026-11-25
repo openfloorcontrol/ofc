@@ -17,12 +17,12 @@ Flags: `--debug` (debug output), `--log` (write ofc.log), `--tui` (Bubble Tea UI
 ```
 cli/                          # Go module (github.com/openfloorcontrol/ofc)
   main.go                     # Entry point
-  cmd/                        # Cobra CLI commands (run, sessions, init, version, eval)
-  blueprint/                  # YAML blueprint schema + loader
+  cmd/                        # Cobra CLI commands (run, auth, sessions, floor-control eval, check, eval, init, version)
+  blueprint/                  # YAML blueprint schema + loader; models.go resolves model refs (blueprint models:, else mf registry; vision flag)
   floor/                      # Core engine — types, interfaces, runtime
     floor.go                  # Floor: live DOM (agents, furniture, sandbox, ACP pool, sessions, store, APIServer)
     session.go                # Session: one conversation thread (rooms + AgentContexts + Controller); implements SessionView
-    session_loop.go           # Session.Start: turn-taking loop (Decide → dispatch); Subscribe for frontends
+    session_loop.go           # Session.Start: turn-taking loop (Observe → Addresser in a goroutine → AddressDecided → Next → dispatch); Subscribe for frontends
     floor_sessions.go         # CreateSession / Session(id) (resumes from store) / ListSessions; floor ID = blueprint name
     room.go                   # Room: messages + event channel + subscribers; #main + sub-rooms
     controller.go             # Controller: pure-logic turn-taking (Observe → Request → Next, no I/O; Decide = all three with mentions)
@@ -32,6 +32,7 @@ cli/                          # Go module (github.com/openfloorcontrol/ofc)
     turn.go                   # agentTurn impl — one constructed per dispatch
     agent_context.go          # AgentContext: per-agent reader over the store (Entries/Delta/MarkSent)
     chat.go                   # ChatMessage, ChatEvent variants
+    attachment.go             # Image attachments: Attachment, blob IDs (sha256), Session.AttachImage
     events.go                 # Event variants (stream), TaggedEvent
     events_json.go            # EventJSON: ChatEvent → JSON (used by api/ and frontend/json)
     store.go                  # SessionStore interface, StoredEvent, EventFilter, SessionMeta, MessagePostedEvent
@@ -66,6 +67,8 @@ cli/                          # Go module (github.com/openfloorcontrol/ofc)
   sandbox/                    # Docker container management for sandboxed execution
   eval/                       # LLM-as-judge evaluation (used by `ofc eval` + ofctest)
   ofctest/                    # Test helpers: RunFloor + assertions
+  webui/                      # go:embed of the built web UI (dist/ from web/, `make build`)
+web/                          # Web UI source (Vue + Vite)
 examples/                     # Blueprint examples
   taskboard-acp/              # ACP agent (Claude Code) + taskboard + filesystem MCP
   everything/                 # External MCP test server demo
@@ -94,7 +97,9 @@ Sandbox, ACPSubprocess, Debug).
 ```
 User Input → Room.PostUserInput() → ChatEvent → Session loop (Session.Start)
                                                       ↓
-                                              Controller.Decide(room, event) → Decision
+                                              Controller.Observe → Addresser (goroutine)
+                                                      ↓ AddressDecided
+                                              Controller.Next(room, address) → Decision
                                                       ↓
                                               Agent.Run(ctx, AgentTurn) — goroutine
                                                       ↓
@@ -107,7 +112,7 @@ Session loop → Session.Subscribe() → frontends (CLI/TUI/JSON) render
 
 **Session** (`floor/session.go`) is one conversation thread on a Floor — owns `Rooms`, `AgentContexts`, and its `Controller`. `Session.Start` runs the turn-taking loop; frontends only subscribe and post input. Implements `SessionView` so Room and AgentContext consume it through an interface, not a back-pointer.
 
-**Controller** (`floor/controller.go`) is the turn-taking heart — a pure function: event in, Decision out. No I/O, no goroutines. Consumes an `AgentRegistry` (one-method interface, Floor satisfies it) so it's testable without a Floor.
+**Controller** (`floor/controller.go`) is the turn-taking heart — pure logic over the call stack and turn state: event in (`Observe`), address in (`Next`), Decision out. No I/O, no goroutines; whom a message addresses comes from the exchangeable `Addresser` (see Turn-Taking Protocol). Consumes an `AgentRegistry` (one-method interface, Floor satisfies it) so it's testable without a Floor.
 
 **Agents** run as goroutines and consume `floor.AgentTurn` — a small capability handle constructed per dispatch. The turn binds the agent to its target room and gives scoped access to context (Entries/Delta), emission (Stream/Status/Reply), and resources (Furniture, Sandbox, ACPSubprocess). Agent impls never see `*Floor` or `*Session`.
 
@@ -167,8 +172,14 @@ models:                                # the blueprint's own models
   local:
     endpoint: http://localhost:11434/v1
     model: some-model
+    vision: true                       # takes images
 defaults:
   model: local                         # a name from models:, else an mf address
+floor_control:                         # optional: a small model decides who is addressed
+  model: groq/qwen38
+  default_agent: "@planner"            # takes user messages that address nobody
+  followup_agent: "@planner"           # may add to another agent's answer
+  max_agent_turns: 6
 furniture:
   - name: tasks
     type: taskboard                    # built-in
@@ -186,6 +197,7 @@ agents:
     type: acp                          # ACP agent (Claude Code)
     command: claude-code-acp           # subprocess to spawn
     activation: mention                # only wakes when @mentioned
+    turn_prompt: "Speaks when asked to code."   # for floor_control.model
     furniture: [tasks, fs]             # can access task board + filesystem
     prompt: |
       You are @coder...
@@ -195,7 +207,7 @@ agents:
 
 - `FURNITURE.md` — Furniture architecture (proxy principle, two agent paths, MCP transport)
 - `BLUEPRINT.md` — Blueprint YAML reference
-- `TESTING.md` — Testing guide (`--json`, `ofc eval`, `ofctest` package)
+- `TESTING.md` — Testing guide (`--json`, `ofc eval`, `ofctest` package, live ACP checks, `ofc floor-control eval`)
 - `ROADMAP.md` — Project roadmap
 - `BUILDING-BLOCKS.md` — Research notes on ACP, MCP, KAOS protocol stack
 - `history/PROTOCOL.md` — Early protocol specification (historical)
