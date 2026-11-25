@@ -1,0 +1,24 @@
+# No model needed: @fake is the deterministic ACP agent the tests use.
+# Build it first with `make fakeagent` (from the repository root).
+#
+# @fake answers every message with its pid, how many prompts its session
+# has seen, and the prompt. A message can make it act:
+#
+#   mcp=tasks.add_task{"title":"x"}   call a tool of its furniture
+#   sleep=3000                        take 3 seconds to answer
+name: fake
+description: "@fake, a deterministic agent without a model, and a task board"
+
+furniture:
+  - name: tasks
+    type: taskboard
+
+agents:
+  - id: "@fake"
+    type: acp
+    # Relative to the blueprint's directory: templates/fake/ here, and
+    # floors/<id>/ in a floor made from it — both four levels below the
+    # repository root.
+    command: ../../../../cli/fakeagent
+    activation: always
+    furniture: [tasks]

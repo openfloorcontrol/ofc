@@ -220,7 +220,7 @@ On a server with several floors, `--remote` and the web UI name one with `?floor
 
 ### Many floors: `ofc building`
 
-`ofc run --web` serves one blueprint. `ofc building <dir>` serves a directory of floors made from templates:
+`ofc run --web` serves one blueprint. `ofc building <dir>` serves a directory of floors made from templates (try `ofc building examples/building`, see its [README](examples/building/README.md)):
 
 ```
 my-building/

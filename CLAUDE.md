@@ -83,6 +83,7 @@ examples/                     # Blueprint examples
   acp-test/                   # ACP agent with sandbox
   chaindepth/                 # Delegation chain depth test
   fake/                       # No model: the test ACP agent (`make fakeagent`) + taskboard, for checks by hand
+  building/                   # `ofc building examples/building`: templates fake, taskboard, assistant (persona.md); floors/ + sessions/ gitignored
 ```
 
 **Package boundary cheat-sheet.** `floor/` owns the engine and defines the
